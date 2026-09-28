@@ -21,19 +21,32 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/** What the queue UI needs: the current track and everything after it, without copying 7000 entries. */
+/**
+ * What the queue UI needs, without copying 7000 entries. Entries are addressed by offset from the
+ * current track (negative = already played) and identified by a stable id for edits.
+ */
 data class QueueSnapshot(
     private val paths: List<String>,
     private val order: List<Int>,
-    /** Index in [order] of the current track. */
-    private val current: Int,
+    /** Index in [order] of the current track = number of already played entries. */
+    val history: Int,
     private val repeatAll: Boolean,
+    /** Bumped when cached tags change, so rows reload them. */
+    val revision: Int = 0,
 ) {
-    /** Current track + upcoming ones (the whole queue again under repeat-all). */
-    val size: Int get() = if (order.isEmpty()) 0 else if (repeatAll) order.size else order.size - current
+    /** Current track + upcoming ones (the whole queue again, wrapping, under repeat-all). */
+    val size: Int get() = if (order.isEmpty()) 0 else if (repeatAll) order.size else order.size - history
 
-    /** Path at [offset] from the current track (0 = current). */
-    fun pathAt(offset: Int): String = paths[order[(current + offset) % order.size]]
+    /** Everything in queue order: played, current, upcoming (no wrapping). */
+    val total: Int get() = order.size
+
+    val currentId: Int? get() = order.getOrNull(history)
+
+    fun idAt(offset: Int): Int = order[Math.floorMod(history + offset, order.size)]
+
+    fun pathAt(offset: Int): String = paths[idAt(offset)]
+
+    fun pathOf(id: Int): String = paths[id]
 
     companion object {
         val EMPTY = QueueSnapshot(emptyList(), emptyList(), 0, false)
@@ -107,6 +120,16 @@ class PlayQueue(private val tracks: TrackDao, private val fetcher: MetadataFetch
 
     fun cachedInfo(path: String): TrackEntity? = infoCache.get(path)
 
+    private var revision = 0
+
+    /** Reloads a file's tags after an edit; queue rows and Now Playing pick them up via [state]. */
+    fun invalidate(path: String) = launchLocked {
+        infoCache.remove(path)
+        tracks.get(path)?.let { infoCache.put(path, it) }
+        revision++
+        publish()
+    }
+
     /**
      * Replaces the queue. [shuffle]: true / false to set it, null to keep the current mode
      * (the start track plays first either way).
@@ -132,44 +155,81 @@ class PlayQueue(private val tracks: TrackDao, private val fetcher: MetadataFetch
         publish()
     }
 
-    /** Appends to the end of the queue. Returns its position as shown in the queue (current = 1). */
-    fun add(file: AudioFile): Int {
-        if (player == null) return 0
+    /** Appends to the end of the queue. Returns the first one's position as shown in the queue (current = 1). */
+    fun add(files: List<AudioFile>): Int {
+        if (player == null || files.isEmpty()) return 0
         val position = _state.value.size + 1
         launchLocked {
-            if (order.isEmpty()) return@launchLocked playNow(file)
+            if (order.isEmpty()) return@launchLocked playNow(files)
             normalizeCurrent()
-            paths = paths + file.path
-            order = order + paths.lastIndex
+            val first = paths.size
+            paths = paths + files.map { it.path }
+            order = order + (first until paths.size)
             rebuildAroundCurrent()
         }
         return position
     }
 
-    /** Inserts right after the current track. */
-    fun playNext(file: AudioFile) = launchLocked {
-        if (order.isEmpty()) return@launchLocked playNow(file)
+    /** Inserts right after the current track, in the given order. */
+    fun playNext(files: List<AudioFile>) = launchLocked {
+        if (files.isEmpty()) return@launchLocked
+        if (order.isEmpty()) return@launchLocked playNow(files)
         normalizeCurrent()
-        paths = paths + file.path
-        order = order.toMutableList().apply { add(current.toInt() + 1, paths.lastIndex) }
+        val first = paths.size
+        paths = paths + files.map { it.path }
+        order = order.toMutableList().apply { addAll(current.toInt() + 1, (first until paths.size).toList()) }
         rebuildAroundCurrent()
     }
 
-    /** Removes the entry at [offset] from the current track (0 = current; ignored). */
-    fun remove(offset: Int) = launchLocked {
-        if (offset <= 0 || order.isEmpty()) return@launchLocked
+    /** Removes the given entries; the current track always stays. */
+    fun remove(ids: Set<Int>) = launchLocked {
+        val keep = currentId() ?: return@launchLocked
+        if (ids.none { it != keep }) return@launchLocked
         normalizeCurrent()
-        val at = ((current + offset) % order.size).toInt()
-        order = order.toMutableList().apply { removeAt(at) }
-        if (at < current) current--
+        order = order.filter { it == keep || it !in ids }
+        current = order.indexOf(keep).toLong()
         rebuildAroundCurrent()
     }
 
-    /** Jumps to the entry at [offset] from the current track. */
-    fun skipTo(offset: Int) = launchLocked {
+    /** Leaves only the current track. */
+    fun clear() = launchLocked {
+        val keep = currentId() ?: return@launchLocked
+        order = listOf(keep)
+        current = 0
+        rebuildAroundCurrent()
+    }
+
+    /** Moves [id] in front of [beforeId] (null = to the end). The current track doesn't move. */
+    fun move(id: Int, beforeId: Int?) = launchLocked {
+        val keep = currentId() ?: return@launchLocked
+        if (id == keep || id == beforeId || id !in order) return@launchLocked
+        normalizeCurrent()
+        val next = order.toMutableList().apply { remove(id) }
+        val at = beforeId?.let { next.indexOf(it) }?.takeIf { it >= 0 } ?: next.size
+        next.add(at, id)
+        order = next
+        current = order.indexOf(keep).toLong()
+        rebuildAroundCurrent()
+    }
+
+    /** Moves [id] right after the current track. */
+    fun playNext(id: Int) = launchLocked {
+        val keep = currentId() ?: return@launchLocked
+        if (id == keep || id !in order) return@launchLocked
+        normalizeCurrent()
+        val next = order.toMutableList().apply { remove(id) }
+        next.add(next.indexOf(keep) + 1, id)
+        order = next
+        current = order.indexOf(keep).toLong()
+        rebuildAroundCurrent()
+    }
+
+    /** Jumps to the entry [id] (played or upcoming). */
+    fun skipTo(id: Int) = launchLocked {
         val p = player ?: return@launchLocked
-        if (offset == 0 || order.isEmpty()) return@launchLocked
-        current += offset
+        val position = order.indexOf(id).takeIf { it >= 0 } ?: return@launchLocked
+        if (id == currentId()) return@launchLocked
+        current = position.toLong()
         val positions = windowAround(current)
         val items = buildItems(positions)
         window.clear()
@@ -179,14 +239,17 @@ class PlayQueue(private val tracks: TrackDao, private val fetcher: MetadataFetch
         publish()
     }
 
-    private suspend fun playNow(file: AudioFile) {
+    private fun currentId(): Int? = order.getOrNull(Math.floorMod(current, order.size.coerceAtLeast(1).toLong()).toInt())
+
+    private suspend fun playNow(files: List<AudioFile>) {
         val p = player ?: return
-        paths = listOf(file.path)
-        order = listOf(0)
+        paths = files.map { it.path }
+        order = paths.indices.toList()
         current = 0
+        val positions = windowAround(0)
         window.clear()
-        window.add(0)
-        p.setMediaItems(buildItems(listOf(0L)), 0, 0L)
+        window.addAll(positions)
+        p.setMediaItems(buildItems(positions), 0, 0L)
         p.prepare()
         p.play()
         publish()
@@ -288,7 +351,7 @@ class PlayQueue(private val tracks: TrackDao, private val fetcher: MetadataFetch
         _state.value = if (order.isEmpty()) {
             QueueSnapshot.EMPTY
         } else {
-            QueueSnapshot(paths, order, (current % order.size).toInt(), repeatAll())
+            QueueSnapshot(paths, order, (current % order.size).toInt(), repeatAll(), revision)
         }
     }
 

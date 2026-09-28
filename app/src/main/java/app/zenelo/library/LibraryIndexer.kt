@@ -35,9 +35,10 @@ class LibraryIndexer(db: ZeneloDatabase) {
 
     /**
      * Walks every storage root (skipping hidden folders and the top-level `Android` folder), indexes
-     * new/changed files and drops rows for files that are gone.
+     * new/changed files (those under [first], the home folder, before the rest) and drops rows for
+     * files that are gone.
      */
-    suspend fun indexAll(roots: List<File>) = withContext(Dispatchers.IO) {
+    suspend fun indexAll(roots: List<File>, first: File? = null) = withContext(Dispatchers.IO) {
         val found = HashMap<String, Pair<Long, Long>>()
         roots.forEach { walk(it, found) }
         ensureActive()
@@ -46,6 +47,8 @@ class LibraryIndexer(db: ZeneloDatabase) {
         val changed = found.filter { (path, stamp) ->
             stamps[path]?.let { it.modified != stamp.first || it.size != stamp.second } ?: true
         }.keys.map(::File)
+            // The home folder first: its folder counts are what the user sees first.
+            .sortedBy { first == null || !it.path.startsWith(first.path + "/") }
         val removed = stamps.keys.filter { path -> path !in found && roots.any { path.startsWith(it.path + "/") } }
         removed.chunked(QUERY_CHUNK).forEach { tracks.delete(it) }
         readAndStore(changed)

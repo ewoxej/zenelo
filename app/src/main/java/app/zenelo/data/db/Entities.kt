@@ -52,7 +52,8 @@ data class PlaylistWithCount(
 
 /**
  * Measured loudness (EBU R128) for files without ReplayGain tags.
- * `fileModified` invalidates the entry when the file changes.
+ * `fileModified` invalidates the entry when the file changes. `integratedLufs` below -100 marks a
+ * file that couldn't be measured (e.g. DSD), so it isn't retried until it changes.
  */
 @Entity(tableName = "loudness")
 data class LoudnessEntity(
@@ -118,3 +119,17 @@ data class LyricsEntity(
 }
 
 data class LibraryStats(val tracks: Int, val withArtwork: Int)
+
+data class DirStats(val dir: String, val tracks: Int, val durationMs: Long)
+
+/**
+ * A write to a file that was playing when it was requested: applied when the track stops playing.
+ * [tagsJson]: edited text tags (see `PendingWrites`), [coverFile]: image to embed. Either may be null.
+ */
+@Entity(tableName = "pending_writes")
+data class PendingWriteEntity(
+    @PrimaryKey val path: String,
+    val tagsJson: String?,
+    val coverFile: String?,
+    val createdAt: Long = System.currentTimeMillis(),
+)

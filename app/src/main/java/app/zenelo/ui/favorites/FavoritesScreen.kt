@@ -42,6 +42,7 @@ import app.zenelo.ui.components.ListRow
 import app.zenelo.ui.components.PlayFab
 import app.zenelo.ui.components.ScreenTitle
 import app.zenelo.ui.components.SearchField
+import app.zenelo.ui.components.TrackThumb
 import app.zenelo.ui.components.appContainer
 import app.zenelo.ui.theme.ZeneloColors
 import kotlinx.coroutines.launch
@@ -95,7 +96,7 @@ fun FavoritesScreen(currentMediaId: String?, isPlaying: Boolean, onOpenFolder: (
                         leading = {
                             when (favorite.kind) {
                                 // TODO: cover thumbnails once tags / cover lookup land.
-                                FavoriteKind.TRACK -> Box(Modifier.size(36.dp).clip(RoundedCornerShape(6.dp)).background(ZeneloColors.Card))
+                                FavoriteKind.TRACK -> TrackThumb(favorite.path, isCurrent)
                                 FavoriteKind.ALBUM -> IconTile(Icons.Outlined.Album, ZeneloColors.Mustard, ZeneloColors.MustardTint)
                                 FavoriteKind.FOLDER -> IconTile(Icons.Outlined.Folder, ZeneloColors.Mustard, ZeneloColors.MustardTint)
                             }

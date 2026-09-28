@@ -15,10 +15,11 @@ import androidx.room.RoomDatabase
         TrackEntity::class,
         CoverEntity::class,
         LyricsEntity::class,
+        PendingWriteEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
-    autoMigrations = [AutoMigration(from = 1, to = 2)],
+    autoMigrations = [AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3)],
 )
 abstract class ZeneloDatabase : RoomDatabase() {
     abstract fun favorites(): FavoriteDao
@@ -27,6 +28,7 @@ abstract class ZeneloDatabase : RoomDatabase() {
     abstract fun tracks(): TrackDao
     abstract fun covers(): CoverDao
     abstract fun lyrics(): LyricsDao
+    abstract fun pendingWrites(): PendingWriteDao
 
     companion object {
         fun create(context: Context): ZeneloDatabase =

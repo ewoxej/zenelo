@@ -8,10 +8,10 @@ import app.zenelo.data.db.ZeneloDatabase
 import app.zenelo.data.settings.SettingsRepository
 import app.zenelo.online.CoverCandidate
 import app.zenelo.online.CoverSources
+import app.zenelo.online.FoundLyrics
 import app.zenelo.online.Http
 import app.zenelo.online.LrcLib
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -22,8 +22,8 @@ import java.util.concurrent.ConcurrentHashMap
  * Covers and lyrics for tracks: local sources first, then the internet (Wi-Fi only, if enabled).
  *
  * Covers: embedded → folder image → cached download → Deezer / iTunes / MusicBrainz. Downloaded
- * covers are written into files lacking art. The playing file is never rewritten under the player:
- * its embed waits in [pendingEmbeds] until the track changes.
+ * covers are written into files lacking art, through [PendingWrites] (the playing file waits for
+ * its track to end).
  *
  * Lyrics: sibling .lrc → tags (seeded by the indexer) → cached → LRCLIB.
  */
@@ -34,14 +34,11 @@ class MetadataFetcher(
     private val coverSources: CoverSources,
     private val lrcLib: LrcLib,
     private val settings: SettingsRepository,
-    private val indexer: LibraryIndexer,
-    private val nowPlaying: StateFlow<String?>,
+    private val pendingWrites: PendingWrites,
 ) {
-    private val tracks = db.tracks()
     private val covers = db.covers()
     private val lyrics = db.lyrics()
     private val coverDir = File(context.filesDir, "covers").apply { mkdirs() }
-    private val pendingEmbeds = ConcurrentHashMap<String, File>()
 
     suspend fun onlineAllowed(): Boolean = settings.settings.first().onlineFetch && http.onWifi()
 
@@ -85,8 +82,7 @@ class MetadataFetcher(
             if (cached.file == null && !expired(cached.fetchedAt)) return@withContext null
         }
         if (!allowNetwork || !onlineAllowed()) return@withContext null
-        val (artist, album) = searchTerms(track) ?: return@withContext null
-        val found = coverSources.auto(artist, album)
+        val found = findCoverOnline(track)
         if (found == null) {
             // Only remember misses we're sure about: a dropped connection shouldn't block retries.
             if (http.onWifi()) covers.upsert(CoverEntity(key, null, null, now()))
@@ -95,33 +91,39 @@ class MetadataFetcher(
         saveCover(key, found.second, found.first.source)
     }
 
-    /** Writes [cover] into the tracks (only those without art unless [replace]). Returns files written. */
-    suspend fun embed(targets: List<TrackEntity>, cover: File, replace: Boolean): Int = withContext(Dispatchers.IO) {
-        if (!settings.settings.first().embedCovers) return@withContext 0
-        val image = cover.readBytes()
-        var written = 0
-        for (track in targets) {
-            if ((!replace && track.hasArtwork) || !TagReader.canEmbed(track.path)) continue
-            if (track.path == nowPlaying.value) {
-                pendingEmbeds[track.path] = cover
-                continue
+    /**
+     * Tags first; then artist / album / title guessed from the file name by the user's patterns
+     * (for missing or wrong tags). Without an album the cover is found through the song.
+     */
+    private suspend fun findCoverOnline(track: TrackEntity): Pair<CoverCandidate, ByteArray>? {
+        val tagArtist = track.albumArtist ?: track.artist
+        if (tagArtist != null && track.album != null) coverSources.auto(tagArtist, track.album)?.let { return it }
+        val guess = guess(track)
+        if (guess?.artist != null) {
+            if (guess.album != null && !(Text.matches(guess.artist, tagArtist) && Text.matches(guess.album, track.album))) {
+                coverSources.auto(guess.artist, guess.album)?.let { return it }
             }
-            if (TagReader.embedArtwork(File(track.path), image)) {
-                written++
-                indexer.indexOne(track.path)
-            }
+            if (guess.title != null) coverSources.autoBySong(guess.artist, guess.title)?.let { return it }
         }
-        written
+        if (tagArtist != null && track.album == null && track.title != null) {
+            coverSources.autoBySong(tagArtist, track.title)?.let { return it }
+        }
+        return null
     }
 
-    /** Called on track change: writes covers that were waiting for their file to stop playing. */
-    suspend fun flushPendingEmbeds() {
-        val playing = nowPlaying.value
-        for ((path, cover) in pendingEmbeds.entries.toList()) {
-            if (path == playing) continue
-            pendingEmbeds.remove(path)
-            val track = tracks.get(path) ?: continue
-            embed(listOf(track), cover, replace = true)
+    /** Artist / album / title from the file path, by the patterns in settings. */
+    suspend fun guess(track: TrackEntity): PathGuess? =
+        FilenamePattern.guess(settings.settings.first().filenamePatterns, track.path)
+
+    /**
+     * Writes [cover] into the tracks (only those without art unless [replace]). The playing file
+     * gets it when its track ends, but shows it at once (see [PendingWrites]).
+     * Returns how many files were (or will be) updated.
+     */
+    suspend fun embed(targets: List<TrackEntity>, cover: File, replace: Boolean): Int = withContext(Dispatchers.IO) {
+        if (!settings.settings.first().embedCovers) return@withContext 0
+        targets.count { track ->
+            (replace || !track.hasArtwork) && pendingWrites.embedCover(track.path, cover) != PendingWrites.Result.FAILED
         }
     }
 
@@ -140,8 +142,7 @@ class MetadataFetcher(
         val first = targets.firstOrNull() ?: return@withContext null
         val image = coverSources.download(candidate) ?: return@withContext null
         val file = saveCover(coverKey(first), image, candidate.source)
-        val written = embed(targets, file, replace = true)
-        Applied(file, written + targets.count { pendingEmbeds.containsKey(it.path) })
+        Applied(file, embed(targets, file, replace = true))
     }
 
     suspend fun lyricsFor(track: TrackEntity, allowNetwork: Boolean): LyricsEntity? = withContext(Dispatchers.IO) {
@@ -157,20 +158,25 @@ class MetadataFetcher(
         val cached = lyrics.get(track.path)
         if (cached != null && (!cached.isEmpty || !expired(cached.fetchedAt))) return@withContext cached
         if (!allowNetwork || !onlineAllowed()) return@withContext cached
-        val title = track.title ?: return@withContext cached
-        val artist = track.artist ?: track.albumArtist ?: return@withContext cached
-        val found = lrcLib.find(title, artist, track.album, (track.durationMs / 1000).toInt()) ?: return@withContext cached
+        val seconds = (track.durationMs / 1000).toInt()
+        // Tags first, then the file name patterns (missing or wrong tags).
+        val attempts = buildList {
+            val artist = track.artist ?: track.albumArtist
+            if (track.title != null && artist != null) add(Triple(track.title, artist, track.album))
+            guess(track)?.let { g -> if (g.title != null && g.artist != null) add(Triple(g.title, g.artist, g.album)) }
+        }.distinct()
+        if (attempts.isEmpty()) return@withContext cached
+        var result: FoundLyrics? = null
+        for ((title, artist, album) in attempts) {
+            val found = lrcLib.find(title, artist, album, seconds) ?: return@withContext cached // offline: retry later
+            result = found
+            if (found.synced != null || found.plain != null || found.instrumental) break
+        }
+        val found = result ?: return@withContext cached
         LyricsEntity(track.path, found.synced, found.plain, found.instrumental, SOURCE_LRCLIB, now()).also { lyrics.upsert(it) }
     }
 
     fun coverKey(track: TrackEntity): String = track.albumKey ?: "track:${track.path}"
-
-    /** Search terms for a track: album artist (or artist) and album. */
-    fun searchTerms(track: TrackEntity): Pair<String, String>? {
-        val artist = track.albumArtist ?: track.artist ?: return null
-        val album = track.album ?: return null
-        return artist to album
-    }
 
     private suspend fun saveCover(key: String, image: ByteArray, source: String): File {
         val file = File(coverDir, sha1(key) + ".jpg")

@@ -2,6 +2,7 @@ package app.zenelo.ui.browser
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
@@ -20,16 +21,22 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.outlined.Deselect
+import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.MusicNote
-import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SortByAlpha
+import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.ui.graphics.Color
+import app.zenelo.data.settings.BrowserSort
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -62,15 +69,23 @@ import app.zenelo.ui.components.IconTile
 import app.zenelo.ui.components.ListRow
 import app.zenelo.ui.components.PlayFab
 import app.zenelo.ui.components.SearchField
+import app.zenelo.ui.components.SelectionMark
+import app.zenelo.data.settings.SelectionMarkerSide
 import app.zenelo.ui.components.SectionHeader
 import app.zenelo.ui.components.SwipeableRow
+import app.zenelo.ui.components.TrackThumb
+import app.zenelo.ui.components.listSwipeOptions
 import app.zenelo.ui.components.ZeneloSnackbar
 import app.zenelo.ui.components.accent
 import app.zenelo.ui.components.CoverPickerDialog
+import app.zenelo.ui.components.TagEditorDialog
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.DriveFileRenameOutline
 import app.zenelo.ui.components.formatTotal
 import app.zenelo.ui.components.trackSubtitle
 import app.zenelo.ui.components.icon
 import app.zenelo.ui.theme.ZeneloColors
+import java.io.File
 
 /** [isActive]: this tab is the one on screen (tabs stay composed while swiping between them). */
 @Composable
@@ -81,9 +96,24 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
     var snackbarIcon by remember { mutableStateOf<ImageVector?>(null) }
     var pendingConfirm by remember { mutableStateOf<BrowserEvent.Confirm?>(null) }
     var coverPickerFor by remember { mutableStateOf<String?>(null) }
+    var tagEditorFor by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
 
-    BackHandler(enabled = isActive && (state.searching || state.canGoUp)) {
-        if (state.searching) viewModel.setSearching(false) else viewModel.goUp()
+    // Multi-select of folders and files (long-press a row), like in the queue: paths of either.
+    // Cleared when the folder changes.
+    var selecting by remember(state.dir) { mutableStateOf(false) }
+    var selected by remember(state.dir) { mutableStateOf(emptySet<String>()) }
+    var confirmDeleteSelected by remember { mutableStateOf(false) }
+    fun exitSelection() {
+        selecting = false
+        selected = emptySet()
+    }
+
+    BackHandler(enabled = isActive && (selecting || state.searching || state.canGoUp)) {
+        when {
+            selecting -> exitSelection()
+            state.searching -> viewModel.setSearching(false)
+            else -> viewModel.goUp()
+        }
     }
 
     LaunchedEffect(viewModel) {
@@ -114,31 +144,74 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
         onDispose { viewModel.saveScrollPosition(dir, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) }
     }
 
-    val folders = remember(state.folders, state.query, state.sortDescending) { state.visibleFolders }
-    val files = remember(state.files, state.query, state.sortDescending) { state.visibleFiles }
+    val swipeOptions = remember(settings.swipes) { listSwipeOptions(settings.swipes) }
+    val markLeft = settings.selectionMarker == SelectionMarkerSide.LEFT
+    fun toggle(path: String) {
+        selected = if (path in selected) selected - path else selected + path
+        // Deselecting the last one closes selection mode.
+        if (selected.isEmpty()) selecting = false
+    }
+    fun startSelection(path: String) {
+        selecting = true
+        selected = selected + path
+    }
+    val sort = settings.browserSort
+    val folders = remember(state.folders, state.query, sort, state.folderModified) { state.visibleFolders(sort) }
+    val files = remember(state.files, state.query, sort) { state.visibleFiles(sort) }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            TopBar(state, viewModel)
+            if (selecting) {
+                val chosenFolders = folders.filter { it.path in selected }
+                val chosenFiles = files.filter { it.path in selected }
+                val all = folders.size + files.size
+                SelectionBar(
+                    count = selected.size,
+                    allSelected = all > 0 && selected.size == all,
+                    canDelete = chosenFolders.isEmpty(),
+                    onClose = ::exitSelection,
+                    onSelectAll = {
+                        if (selected.size == all) exitSelection() else selected = (folders.map { it.path } + files.map { it.path }).toSet()
+                    },
+                    onPlay = { shuffle ->
+                        viewModel.playSelection(chosenFolders, chosenFiles, shuffle)
+                        exitSelection()
+                    },
+                    onAction = { action ->
+                        if (action == SwipeAction.DELETE_FILE) {
+                            confirmDeleteSelected = true
+                        } else {
+                            viewModel.onSelection(chosenFolders, chosenFiles, action)
+                            exitSelection()
+                        }
+                    },
+                )
+                // Same height as the normal top bar, so the list doesn't jump under the finger.
+                Breadcrumb(state, viewModel)
+            } else {
+                TopBar(state, sort, viewModel)
+            }
             LazyColumn(Modifier.weight(1f), state = listState, contentPadding = PaddingValues(bottom = 80.dp)) {
                 if (folders.isNotEmpty()) {
                     item(key = "h-folders") { SectionHeader("Folders · ${folders.size}") }
                     items(folders, key = { it.absolutePath }) { folder ->
-                        ListRow(
-                            title = folder.name,
-                            subtitle = state.folderInfo[folder.absolutePath],
-                            onClick = { viewModel.open(folder) },
-                            onLongClick = { viewModel.toggleFolderFavorite(folder) },
-                            leading = { IconTile(Icons.Outlined.Folder, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
-                            trailing = {
-                                Icon(
-                                    Icons.Rounded.ChevronRight,
-                                    null,
-                                    tint = ZeneloColors.TextMuted,
-                                    modifier = Modifier.padding(horizontal = 12.dp).size(20.dp),
-                                )
-                            },
-                        )
+                        // Same swipe actions as tracks, applied to everything in the folder.
+                        SwipeableRow(
+                            options = swipeOptions,
+                            onSwipe = { slot -> settings.swipes[slot]?.let { viewModel.onFolderSwipe(folder, it) } },
+                            enabled = !selecting,
+                        ) {
+                            FolderRow(
+                                folder = folder,
+                                label = state.folderLabel(folder),
+                                viewModel = viewModel,
+                                selecting = selecting,
+                                selected = folder.path in selected,
+                                markLeft = markLeft,
+                                onClick = { if (selecting) toggle(folder.path) else viewModel.open(folder) },
+                                onLongClick = { startSelection(folder.path) },
+                            )
+                        }
                     }
                 }
                 if (files.isNotEmpty()) {
@@ -147,14 +220,23 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
                         SectionHeader(listOfNotNull("Files", "${files.size}", total.takeIf { it > 0 }?.let(::formatTotal)).joinToString(" · "))
                     }
                     items(files, key = { it.path }) { file ->
-                        SwipeableRow(actions = settings.swipes, onAction = { viewModel.onSwipe(file, it) }) {
+                        SwipeableRow(
+                            options = swipeOptions,
+                            onSwipe = { slot -> settings.swipes[slot]?.let { viewModel.onSwipe(file, it) } },
+                            enabled = !selecting,
+                        ) {
                             TrackRow(
                                 file = file,
                                 info = state.tracks[file.path],
                                 isCurrent = file.path == currentMediaId,
-                                onClick = { viewModel.playFrom(file) },
+                                selecting = selecting,
+                                selected = file.path in selected,
+                                markLeft = markLeft,
+                                onClick = { if (selecting) toggle(file.path) else viewModel.playFrom(file) },
+                                onLongClick = { startSelection(file.path) },
                                 onAction = { viewModel.onSwipe(file, it) },
                                 onDownloadCover = { coverPickerFor = file.path },
+                                onEditTags = { fromName -> tagEditorFor = file.path to fromName },
                             )
                         }
                     }
@@ -166,7 +248,7 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
         }
 
         // Hidden while something plays. Tap: play the folder. Long-press: shuffle it.
-        if (files.isNotEmpty() && !isPlaying && snackbar.currentSnackbarData == null) {
+        if (files.isNotEmpty() && !isPlaying && !selecting && snackbar.currentSnackbarData == null) {
             PlayFab(
                 onClick = { viewModel.playFolder(shuffle = false) },
                 onLongClick = { viewModel.playFolder(shuffle = true) },
@@ -176,8 +258,31 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter)) { ZeneloSnackbar(it, snackbarIcon) }
     }
 
+    tagEditorFor?.let { (path, fromName) ->
+        TagEditorDialog(path, fromName, onDismiss = { tagEditorFor = null }, onDone = viewModel::showMessage)
+    }
+
     coverPickerFor?.let { path ->
         CoverPickerDialog(path, onDismiss = { coverPickerFor = null }, onDone = viewModel::showMessage)
+    }
+
+    if (confirmDeleteSelected) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteSelected = false },
+            containerColor = ZeneloColors.Card,
+            title = { Text("Delete ${selected.size} file${if (selected.size == 1) "" else "s"}?") },
+            text = { Text("They'll be removed from the device.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.onSelection(emptyList(), files.filter { it.path in selected }, SwipeAction.DELETE_FILE)
+                        confirmDeleteSelected = false
+                        exitSelection()
+                    },
+                ) { Text("Delete", color = ZeneloColors.Danger) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDeleteSelected = false }) { Text("Cancel") } },
+        )
     }
 
     pendingConfirm?.let { confirm ->
@@ -203,7 +308,7 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun TopBar(state: BrowserState, viewModel: BrowserViewModel) {
+private fun TopBar(state: BrowserState, sort: BrowserSort, viewModel: BrowserViewModel) {
     Column(Modifier.padding(top = 4.dp)) {
         Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
             if (state.canGoUp) {
@@ -235,14 +340,7 @@ private fun TopBar(state: BrowserState, viewModel: BrowserViewModel) {
                     modifier = Modifier.weight(1f),
                 )
                 IconButton(onClick = { viewModel.setSearching(true) }) { Icon(Icons.Rounded.Search, "Search", Modifier.size(22.dp)) }
-                IconButton(onClick = viewModel::toggleSort) {
-                    Icon(
-                        Icons.Rounded.SortByAlpha,
-                        "Sort",
-                        tint = if (state.sortDescending) ZeneloColors.Mustard else ZeneloColors.TextPrimary,
-                        modifier = Modifier.size(22.dp),
-                    )
-                }
+                SortButton(sort, viewModel::setSort)
             }
         }
         Breadcrumb(state, viewModel)
@@ -314,49 +412,218 @@ private fun TrackRow(
     file: AudioFile,
     info: TrackEntity?,
     isCurrent: Boolean,
+    selecting: Boolean,
+    selected: Boolean,
+    markLeft: Boolean,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
     onAction: (SwipeAction) -> Unit,
     onDownloadCover: () -> Unit,
+    onEditTags: (fromFileName: Boolean) -> Unit,
 ) {
-    var menu by remember { mutableStateOf(false) }
     ListRow(
         title = file.name,
         subtitle = trackSubtitle(file, info),
         titleColor = if (isCurrent) ZeneloColors.Celadon else ZeneloColors.TextPrimary,
+        modifier = if (selected) Modifier.background(ZeneloColors.MustardTint) else Modifier,
         onClick = onClick,
-        leading = {
-            if (isCurrent) {
-                IconTile(Icons.Rounded.GraphicEq, ZeneloColors.Celadon, ZeneloColors.CeladonTint)
-            } else {
-                IconTile(Icons.Outlined.MusicNote, ZeneloColors.TextSecondary)
-            }
-        },
+        onLongClick = onLongClick,
+        leading = { SelectableLeading(selecting && markLeft, selected) { TrackThumb(file.path, isCurrent) } },
         trailing = {
-            Box {
-                IconButton(onClick = { menu = true }, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Rounded.MoreVert, "More", tint = ZeneloColors.TextMuted, modifier = Modifier.size(20.dp))
-                }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    SwipeAction.entries.filter { it != SwipeAction.NONE }.forEach { action ->
-                        DropdownMenuItem(
-                            text = { Text(action.label) },
-                            leadingIcon = { Icon(action.icon, null, tint = action.accent) },
-                            onClick = {
-                                menu = false
-                                onAction(action)
-                            },
-                        )
-                    }
-                    DropdownMenuItem(
-                        text = { Text("Download cover…") },
-                        leadingIcon = { Icon(Icons.Outlined.Image, null, tint = ZeneloColors.Celadon) },
-                        onClick = {
-                            menu = false
-                            onDownloadCover()
-                        },
-                    )
-                }
+            if (selecting) {
+                if (!markLeft) SelectionMark(selected, Modifier.padding(horizontal = 10.dp))
+            } else {
+                TrackMenu(onAction, onDownloadCover, onEditTags)
             }
         },
     )
+}
+
+/** The ⋮ button of a track row and its menu. */
+@Composable
+private fun TrackMenu(
+    onAction: (SwipeAction) -> Unit,
+    onDownloadCover: () -> Unit,
+    onEditTags: (fromFileName: Boolean) -> Unit,
+) {
+    var menu by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { menu = true }, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Rounded.MoreVert, "More", tint = ZeneloColors.TextMuted, modifier = Modifier.size(20.dp))
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            SwipeAction.entries.filter { it != SwipeAction.NONE }.forEach { action ->
+                DropdownMenuItem(
+                    text = { Text(action.label) },
+                    leadingIcon = { Icon(action.icon, null, tint = action.accent) },
+                    onClick = {
+                        menu = false
+                        onAction(action)
+                    },
+                )
+            }
+            DropdownMenuItem(
+                text = { Text("Edit tags…") },
+                leadingIcon = { Icon(Icons.Outlined.Edit, null, tint = ZeneloColors.Celadon) },
+                onClick = {
+                    menu = false
+                    onEditTags(false)
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("Tags from file name…") },
+                leadingIcon = { Icon(Icons.Outlined.DriveFileRenameOutline, null, tint = ZeneloColors.Celadon) },
+                onClick = {
+                    menu = false
+                    onEditTags(true)
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("Download cover…") },
+                leadingIcon = { Icon(Icons.Outlined.Image, null, tint = ZeneloColors.Celadon) },
+                onClick = {
+                    menu = false
+                    onDownloadCover()
+                },
+            )
+        }
+    }
+}
+
+/** Replaces the top bar while files are selected: count, select all, and actions for all of them. */
+@Composable
+private fun SelectionBar(
+    count: Int,
+    allSelected: Boolean,
+    canDelete: Boolean,
+    onClose: () -> Unit,
+    onSelectAll: () -> Unit,
+    onPlay: (shuffle: Boolean) -> Unit,
+    onAction: (SwipeAction) -> Unit,
+) {
+    var menu by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth().padding(top = 4.dp).height(48.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onClose, modifier = Modifier.size(40.dp)) { Icon(Icons.Rounded.Close, "Cancel selection", Modifier.size(20.dp)) }
+        Text("$count", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f).padding(start = 4.dp))
+        IconButton(onClick = onSelectAll, modifier = Modifier.size(40.dp)) {
+            Icon(
+                if (allSelected) Icons.Outlined.Deselect else Icons.Outlined.SelectAll,
+                if (allSelected) "Deselect all" else "Select all",
+                tint = ZeneloColors.TextSecondary,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        for (action in listOf(SwipeAction.PLAY_NEXT, SwipeAction.ADD_TO_QUEUE, SwipeAction.FAVORITE)) {
+            IconButton(onClick = { onAction(action) }, enabled = count > 0, modifier = Modifier.size(40.dp)) {
+                Icon(action.icon, action.label, tint = action.accent, modifier = Modifier.size(22.dp))
+            }
+        }
+        Box {
+            IconButton(onClick = { menu = true }, enabled = count > 0, modifier = Modifier.size(40.dp)) {
+                Icon(Icons.Rounded.MoreVert, "More", tint = ZeneloColors.TextSecondary, modifier = Modifier.size(22.dp))
+            }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                FolderMenuItem("Play", Icons.Rounded.PlayArrow, ZeneloColors.Mustard) { menu = false; onPlay(false) }
+                FolderMenuItem("Shuffle", Icons.Rounded.Shuffle, ZeneloColors.Celadon) { menu = false; onPlay(true) }
+                // Folders can't be deleted from here.
+                if (canDelete) {
+                    val delete = SwipeAction.DELETE_FILE
+                    FolderMenuItem(delete.label, delete.icon, delete.accent) { menu = false; onAction(delete) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SortButton(sort: BrowserSort, onSelect: (BrowserSort) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) {
+            Icon(
+                if (sort == BrowserSort.DATE_NEWEST || sort == BrowserSort.DATE_OLDEST) Icons.Rounded.Schedule else Icons.Rounded.SortByAlpha,
+                "Sort",
+                tint = if (sort == BrowserSort.NAME_ASC) ZeneloColors.TextPrimary else ZeneloColors.Mustard,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            BrowserSort.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.label, color = if (option == sort) ZeneloColors.Mustard else ZeneloColors.TextPrimary) },
+                    onClick = {
+                        open = false
+                        onSelect(option)
+                    },
+                )
+            }
+        }
+    }
+}
+
+/** Folder row: tap opens it, ⋮ shows its actions (play, shuffle, queue, favorite), long-press selects. */
+@Composable
+private fun FolderRow(
+    folder: File,
+    label: String?,
+    viewModel: BrowserViewModel,
+    selecting: Boolean,
+    selected: Boolean,
+    markLeft: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    ListRow(
+        title = folder.name,
+        subtitle = label,
+        modifier = if (selected) Modifier.background(ZeneloColors.MustardTint) else Modifier,
+        onClick = onClick,
+        onLongClick = onLongClick,
+        leading = {
+            SelectableLeading(selecting && markLeft, selected) {
+                IconTile(Icons.Outlined.Folder, ZeneloColors.Mustard, ZeneloColors.MustardTint)
+            }
+        },
+        trailing = {
+            if (selecting) {
+                if (!markLeft) SelectionMark(selected, Modifier.padding(horizontal = 10.dp))
+            } else {
+                FolderMenu(folder, viewModel)
+            }
+        },
+    )
+}
+
+@Composable
+private fun FolderMenu(folder: File, viewModel: BrowserViewModel) {
+    var menu by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { menu = true }, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Rounded.MoreVert, "More", tint = ZeneloColors.TextMuted, modifier = Modifier.size(20.dp))
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            FolderMenuItem("Play", Icons.Rounded.PlayArrow, ZeneloColors.Mustard) { menu = false; viewModel.playSubtree(folder, shuffle = false) }
+            FolderMenuItem("Shuffle", Icons.Rounded.Shuffle, ZeneloColors.Celadon) { menu = false; viewModel.playSubtree(folder, shuffle = true) }
+            FolderMenuItem("Play next", SwipeAction.PLAY_NEXT.icon, SwipeAction.PLAY_NEXT.accent) { menu = false; viewModel.queueSubtree(folder, next = true) }
+            FolderMenuItem("Add to queue", SwipeAction.ADD_TO_QUEUE.icon, SwipeAction.ADD_TO_QUEUE.accent) { menu = false; viewModel.queueSubtree(folder, next = false) }
+            FolderMenuItem("Favorite", SwipeAction.FAVORITE.icon, SwipeAction.FAVORITE.accent) { menu = false; viewModel.toggleFolderFavorite(folder) }
+        }
+    }
+}
+
+/** A row's icon / thumbnail, with the selection mark in front of it when the mark sits on the left. */
+@Composable
+private fun SelectableLeading(showMark: Boolean, selected: Boolean, content: @Composable () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (showMark) SelectionMark(selected, Modifier.padding(end = 12.dp))
+        content()
+    }
+}
+
+@Composable
+private fun FolderMenuItem(label: String, icon: ImageVector, tint: Color, onClick: () -> Unit) {
+    DropdownMenuItem(text = { Text(label) }, leadingIcon = { Icon(icon, null, tint = tint) }, onClick = onClick)
 }

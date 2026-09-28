@@ -31,8 +31,8 @@ import app.zenelo.player.audio.NormalizationAudioProcessor
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
@@ -95,7 +95,18 @@ class PlaybackService : MediaSessionService() {
         if (!player.playWhenReady || player.mediaItemCount == 0) stopSelf()
     }
 
+    /**
+     * Tag edits / covers that waited for a file to stop playing. Runs in the app scope so a quick
+     * skip (which cancels the per-track job) can't cut a file write short.
+     */
+    private fun flushPendingWrites() {
+        container.appScope.launch { container.pendingWrites.flush() }
+    }
+
     override fun onDestroy() {
+        // Nothing plays any more: every waiting write can go to its file.
+        container.nowPlaying.value = null
+        flushPendingWrites()
         container.queue.detach()
         session?.run {
             player.release()
@@ -123,11 +134,12 @@ class PlaybackService : MediaSessionService() {
     private fun onTrackChanged(item: MediaItem?) {
         val path = item?.mediaId
         container.nowPlaying.value = path
+        flushPendingWrites()
         metadataJob?.cancel()
         metadataJob = scope.launch {
-            container.metadata.flushPendingEmbeds()
             val track = path?.let { container.db.tracks().get(it) ?: container.indexer.indexOne(it) }
             normalization.gainDb = if (track == null) 0f else gainFor(track)
+            measureUpcoming()
             if (track == null) return@launch
             if (!track.hasArtwork && item.mediaMetadata.artworkUri == null) {
                 // Shown by the UI only: replacing the playing item would make ExoPlayer re-buffer.
@@ -146,20 +158,32 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    /** ReplayGain tags first (album gain in album mode), then our own loudness measurement. */
+    /** ReplayGain tags first, then our own measurement; 0 dB until the track has been measured. */
     private suspend fun gainFor(track: TrackEntity): Float {
         val mode = container.settings.settings.first().normalization
         if (mode == NormalizationMode.OFF) return 0f
-        val tagged = if (mode == NormalizationMode.ALBUM) track.albumGainDb ?: track.trackGainDb else track.trackGainDb
-        if (tagged != null) return tagged.coerceIn(-MAX_GAIN_DB, MAX_GAIN_DB)
-        val measured = container.db.loudness().get(track.path)
-            ?.takeIf { it.fileModified == File(track.path).lastModified() }
-            ?: return 0f
-        return (TARGET_LUFS - measured.integratedLufs).coerceIn(-MAX_GAIN_DB, MAX_GAIN_DB)
+        val gain = container.loudness.gainFor(track, album = mode == NormalizationMode.ALBUM, targetLufs = TARGET_LUFS) ?: 0f
+        return gain.coerceIn(-MAX_GAIN_DB, MAX_GAIN_DB)
+    }
+
+    /** Measures the next queued tracks while this one plays, so their gain is known when they start. */
+    private fun measureUpcoming() {
+        val queue = container.queue.state.value
+        val upcoming = (1..2).filter { it < queue.size }.map { queue.pathAt(it) }
+        if (upcoming.isEmpty()) return
+        scope.launch(Dispatchers.IO) { upcoming.forEach { container.loudness.ensureMeasured(it) } }
     }
 
     private inner class PlayerListener : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = onTrackChanged(mediaItem)
+
+        // The last track of the queue finished: its file is free, write what waited for it.
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_ENDED) {
+                container.nowPlaying.value = null
+                flushPendingWrites()
+            }
+        }
     }
 
     private inner class SessionCallback : MediaSession.Callback {

@@ -28,7 +28,48 @@ enum class SwipeSlot(val label: String, val default: SwipeAction) {
     LEFT_LONG("SWIPE LEFT · LONG", SwipeAction.REMOVE_FROM_LIST),
 }
 
+/** Left swipes on queue rows (right swipes belong to the lyrics / cover / queue pager). */
+enum class QueueSwipeAction(val label: String) {
+    NONE("Nothing"),
+    REMOVE("Remove from queue"),
+    PLAY_NEXT("Play next"),
+    MOVE_TO_END("Move to end"),
+    FAVORITE("Add to favorites"),
+}
+
+enum class QueueSwipeSlot(val label: String, val slot: SwipeSlot, val default: QueueSwipeAction) {
+    LEFT_SHORT("SWIPE LEFT · SHORT", SwipeSlot.LEFT_SHORT, QueueSwipeAction.REMOVE),
+    LEFT_LONG("SWIPE LEFT · LONG", SwipeSlot.LEFT_LONG, QueueSwipeAction.PLAY_NEXT),
+}
+
 enum class NormalizationMode { OFF, TRACK, ALBUM }
+
+/** Where a downward swipe collapses Now Playing: a share of the screen height from the top. */
+enum class PullDownArea(val label: String, val fraction: Float) {
+    TOP_BAR("Top bar only", 0f),
+    TOP_THIRD("Top third", 1f / 3),
+    TOP_HALF("Top half", 0.5f),
+    WHOLE_SCREEN("Whole screen", 1f),
+}
+
+/** Which side of a row the selection check mark sits on (file list and queue). */
+enum class SelectionMarkerSide(val label: String) {
+    LEFT("Left"),
+    RIGHT("Right"),
+}
+
+enum class BrowserSort(val label: String) {
+    NAME_ASC("Name A–Z"),
+    NAME_DESC("Name Z–A"),
+    DATE_NEWEST("Date added · newest"),
+    DATE_OLDEST("Date added · oldest"),
+}
+
+/** Default file name patterns for covers / lyrics lookups when tags are missing or wrong. */
+val DEFAULT_FILENAME_PATTERNS = listOf(
+    "[%number%[.] ][- ]%artist% - %title%",
+    "%artist%/%album%/[%number%[.] ][- ]%title%",
+)
 
 data class ZeneloSettings(
     val homeFolder: String? = null,
@@ -43,6 +84,14 @@ data class ZeneloSettings(
     val embedCovers: Boolean = true,
     /** Optional Last.fm API key: adds Last.fm as a cover source. Key-less sources are used either way. */
     val lastFmApiKey: String? = null,
+    /** Show already played tracks above the current one in the queue. */
+    val queueHistory: Boolean = true,
+    val queueSwipes: Map<QueueSwipeSlot, QueueSwipeAction> = QueueSwipeSlot.entries.associateWith { it.default },
+    /** Tried in order when tags don't find covers / lyrics. See [app.zenelo.library.FilenamePattern]. */
+    val filenamePatterns: List<String> = DEFAULT_FILENAME_PATTERNS,
+    val browserSort: BrowserSort = BrowserSort.NAME_ASC,
+    val pullDownArea: PullDownArea = PullDownArea.TOP_THIRD,
+    val selectionMarker: SelectionMarkerSide = SelectionMarkerSide.RIGHT,
 )
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
@@ -67,6 +116,20 @@ class SettingsRepository(context: Context) {
 
     suspend fun setEmbedCovers(value: Boolean) = store.edit { it[EMBED_COVERS] = value }
 
+    suspend fun setBrowserSort(sort: BrowserSort) = store.edit { it[BROWSER_SORT] = sort.name }
+
+    suspend fun setPullDownArea(area: PullDownArea) = store.edit { it[PULL_DOWN_AREA] = area.name }
+
+    suspend fun setSelectionMarker(side: SelectionMarkerSide) = store.edit { it[SELECTION_MARKER] = side.name }
+
+    suspend fun setQueueHistory(value: Boolean) = store.edit { it[QUEUE_HISTORY] = value }
+
+    suspend fun setQueueSwipe(slot: QueueSwipeSlot, action: QueueSwipeAction) =
+        store.edit { it[queueSlotKey(slot)] = action.name }
+
+    suspend fun setFilenamePatterns(patterns: List<String>) =
+        store.edit { it[FILENAME_PATTERNS] = patterns.map(String::trim).filter(String::isNotEmpty).joinToString("\n") }
+
     suspend fun setLastFmApiKey(value: String?) = store.edit {
         if (value.isNullOrBlank()) it.remove(LASTFM_KEY) else it[LASTFM_KEY] = value.trim()
     }
@@ -82,6 +145,14 @@ class SettingsRepository(context: Context) {
         onlineFetch = this[ONLINE_FETCH] ?: true,
         embedCovers = this[EMBED_COVERS] ?: true,
         lastFmApiKey = this[LASTFM_KEY],
+        queueHistory = this[QUEUE_HISTORY] ?: true,
+        queueSwipes = QueueSwipeSlot.entries.associateWith { slot ->
+            this[queueSlotKey(slot)]?.let { enumOrNull<QueueSwipeAction>(it) } ?: slot.default
+        },
+        browserSort = this[BROWSER_SORT]?.let { enumOrNull<BrowserSort>(it) } ?: BrowserSort.NAME_ASC,
+        pullDownArea = this[PULL_DOWN_AREA]?.let { enumOrNull<PullDownArea>(it) } ?: PullDownArea.TOP_THIRD,
+        selectionMarker = this[SELECTION_MARKER]?.let { enumOrNull<SelectionMarkerSide>(it) } ?: SelectionMarkerSide.RIGHT,
+        filenamePatterns = this[FILENAME_PATTERNS]?.split('\n')?.filter(String::isNotBlank) ?: DEFAULT_FILENAME_PATTERNS,
     )
 
     private companion object {
@@ -92,6 +163,13 @@ class SettingsRepository(context: Context) {
         val ONLINE_FETCH = booleanPreferencesKey("online_fetch")
         val EMBED_COVERS = booleanPreferencesKey("embed_covers")
         val LASTFM_KEY = stringPreferencesKey("lastfm_api_key")
+        val QUEUE_HISTORY = booleanPreferencesKey("queue_history")
+        val FILENAME_PATTERNS = stringPreferencesKey("filename_patterns")
+        val BROWSER_SORT = stringPreferencesKey("browser_sort")
+        val PULL_DOWN_AREA = stringPreferencesKey("pull_down_area")
+        val SELECTION_MARKER = stringPreferencesKey("selection_marker")
+
+        fun queueSlotKey(slot: QueueSwipeSlot) = stringPreferencesKey("queue_swipe_${slot.name.lowercase()}")
 
         fun slotKey(slot: SwipeSlot) = stringPreferencesKey("swipe_${slot.name.lowercase()}")
 

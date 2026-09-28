@@ -9,8 +9,10 @@ import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.RemoveCircleOutline
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.rounded.Block
+import androidx.compose.material.icons.rounded.VerticalAlignBottom
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import app.zenelo.data.settings.QueueSwipeAction
 import app.zenelo.data.settings.SwipeAction
 import app.zenelo.ui.theme.ZeneloColors
 
@@ -33,4 +35,21 @@ val SwipeAction.accent: Color
         SwipeAction.ADD_TO_QUEUE, SwipeAction.PLAY_NEXT, SwipeAction.ADD_TO_PLAYLIST -> ZeneloColors.Mustard
         SwipeAction.FAVORITE -> ZeneloColors.Info
         SwipeAction.REMOVE_FROM_LIST, SwipeAction.DELETE_FILE -> ZeneloColors.Danger
+    }
+
+val QueueSwipeAction.icon: ImageVector
+    get() = when (this) {
+        QueueSwipeAction.NONE -> Icons.Rounded.Block
+        QueueSwipeAction.REMOVE -> Icons.Outlined.RemoveCircleOutline
+        QueueSwipeAction.PLAY_NEXT -> Icons.AutoMirrored.Rounded.PlaylistPlay
+        QueueSwipeAction.MOVE_TO_END -> Icons.Rounded.VerticalAlignBottom
+        QueueSwipeAction.FAVORITE -> Icons.Outlined.FavoriteBorder
+    }
+
+val QueueSwipeAction.accent: Color
+    get() = when (this) {
+        QueueSwipeAction.NONE -> ZeneloColors.TextMuted
+        QueueSwipeAction.REMOVE -> ZeneloColors.Danger
+        QueueSwipeAction.PLAY_NEXT, QueueSwipeAction.MOVE_TO_END -> ZeneloColors.Mustard
+        QueueSwipeAction.FAVORITE -> ZeneloColors.Info
     }

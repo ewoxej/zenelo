@@ -15,6 +15,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.guava.await
 import kotlinx.coroutines.isActive
@@ -76,7 +77,8 @@ class PlayerController(
             c.addListener(listener)
             refresh()
             coverJob?.cancel()
-            coverJob = scope.launch { coverOverride.collect { refresh() } }
+            // Cover found mid-track, or tags edited: refresh what Now Playing shows.
+            coverJob = scope.launch { combine(coverOverride, queue.state) { _, _ -> }.collect { refresh() } }
             startTicker()
         }
     }
@@ -101,15 +103,25 @@ class PlayerController(
         queue.play(files, start, shuffle)
     }
 
-    /** Returns the track's position in the queue as shown (current track = 1). */
-    fun addToQueue(file: AudioFile): Int = queue.add(file)
+    /** Returns the (first) track's position in the queue as shown (current track = 1). */
+    fun addToQueue(file: AudioFile): Int = queue.add(listOf(file))
 
-    fun playNext(file: AudioFile) = queue.playNext(file)
+    fun addToQueue(files: List<AudioFile>): Int = queue.add(files)
 
-    /** [offset] from the current track, as in the queue list. */
-    fun removeFromQueue(offset: Int) = queue.remove(offset)
+    fun playNext(file: AudioFile) = queue.playNext(listOf(file))
 
-    fun skipTo(offset: Int) = queue.skipTo(offset)
+    fun playNext(files: List<AudioFile>) = queue.playNext(files)
+
+    // Queue edits address entries by the stable ids from [PlayQueue.state].
+    fun removeFromQueue(ids: Set<Int>) = queue.remove(ids)
+
+    fun clearQueue() = queue.clear()
+
+    fun moveInQueue(id: Int, beforeId: Int?) = queue.move(id, beforeId)
+
+    fun playNextInQueue(id: Int) = queue.playNext(id)
+
+    fun skipTo(id: Int) = queue.skipTo(id)
 
     fun togglePlay() = controller?.run { if (isPlaying) pause() else play() }
 
@@ -144,12 +156,14 @@ class PlayerController(
         val metadata = c.mediaMetadata
         val item = c.currentMediaItem
         _position.value = c.currentPosition
+        // Our tag index wins over the player's copy: it's what a tag edit just updated.
+        val info = item?.mediaId?.let(queue::cachedInfo)
         _state.value = PlayerUiState(
             connected = true,
             mediaId = item?.mediaId,
-            title = (metadata.title ?: metadata.displayTitle)?.toString(),
-            artist = metadata.artist?.toString(),
-            album = metadata.albumTitle?.toString(),
+            title = info?.title ?: (metadata.title ?: metadata.displayTitle)?.toString(),
+            artist = info?.artist ?: metadata.artist?.toString(),
+            album = info?.album ?: metadata.albumTitle?.toString(),
             artwork = metadata.artworkData,
             artworkFile = coverOverride.value?.takeIf { it.first == item?.mediaId }?.second
                 ?: metadata.artworkUri?.takeIf { it.scheme == "file" }?.path,

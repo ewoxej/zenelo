@@ -108,6 +108,52 @@ object TagReader {
         }.getOrDefault(false)
     }
 
+    /** User-editable text tags; empty string = no value. */
+    data class EditableTags(
+        val title: String = "",
+        val artist: String = "",
+        val album: String = "",
+        val albumArtist: String = "",
+        val trackNumber: String = "",
+        val year: String = "",
+        val genre: String = "",
+    )
+
+    private val editableKeys = listOf(
+        FieldKey.TITLE to EditableTags::title,
+        FieldKey.ARTIST to EditableTags::artist,
+        FieldKey.ALBUM to EditableTags::album,
+        FieldKey.ALBUM_ARTIST to EditableTags::albumArtist,
+        FieldKey.TRACK to EditableTags::trackNumber,
+        FieldKey.YEAR to EditableTags::year,
+        FieldKey.GENRE to EditableTags::genre,
+    )
+
+    fun readEditable(file: File): EditableTags? = runCatching {
+        val tag = AudioFileIO.read(file).tag
+        EditableTags(
+            title = tag.field(FieldKey.TITLE).orEmpty(),
+            artist = tag.field(FieldKey.ARTIST).orEmpty(),
+            album = tag.field(FieldKey.ALBUM).orEmpty(),
+            albumArtist = tag.field(FieldKey.ALBUM_ARTIST).orEmpty(),
+            trackNumber = tag.field(FieldKey.TRACK).orEmpty(),
+            year = tag.field(FieldKey.YEAR).orEmpty(),
+            genre = tag.field(FieldKey.GENRE).orEmpty(),
+        )
+    }.getOrNull()
+
+    /** Writes the text tags (empty fields are removed). Returns false if the format can't be written. */
+    fun writeEditable(file: File, tags: EditableTags): Boolean = runCatching {
+        val audio = AudioFileIO.read(file)
+        val tag = audio.tagOrCreateAndSetDefault
+        for ((key, getter) in editableKeys) {
+            val value = getter.get(tags).trim()
+            if (value.isEmpty()) runCatching { tag.deleteField(key) } else tag.setField(key, value)
+        }
+        audio.commit()
+        AudioFileIO.read(file).tag.field(FieldKey.TITLE).orEmpty() == tags.title.trim()
+    }.getOrDefault(false)
+
     /**
      * Downscales very large covers before storing / embedding: 1200px is plenty for a 4.7" screen
      * and keeps files from growing by megabytes.

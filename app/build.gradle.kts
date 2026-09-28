@@ -5,6 +5,15 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+// Release version from CI (`-PversionName=1.2.3`); versionCode follows it (1.2.3 → 10203) so it only grows.
+val releaseVersion = (findProperty("versionName") as String?)?.removePrefix("v")
+val releaseVersionCode = releaseVersion?.split('.')?.map { it.toInt() }?.let { (major, minor, patch) ->
+    major * 10000 + minor * 100 + patch
+}
+
+// Release key from the environment (CI secrets); without it the release build is signed with the debug key.
+val releaseKeystore = System.getenv("ZENELO_KEYSTORE")?.let(::file)?.takeIf { it.exists() }
+
 android {
     namespace = "app.zenelo"
     compileSdk = 35
@@ -14,15 +23,26 @@ android {
         // FiiO JM21 ships Android 13.
         minSdk = 33
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = releaseVersionCode ?: 1
+        versionName = releaseVersion ?: "0.1.0"
+    }
+
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = releaseKeystore
+                storePassword = System.getenv("ZENELO_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ZENELO_KEY_ALIAS")
+                keyPassword = System.getenv("ZENELO_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
-            // Sideload-only for now: sign with the debug key so the release build installs directly.
+            // Sideload-only: the real key in CI, the debug key locally so the release build installs directly.
             // Compose is several times faster in release (R8 + no debug instrumentation).
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -76,6 +96,9 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.work.runtime)
     implementation(libs.coil.compose)
+    implementation(libs.reorderable)
+
+    testImplementation(libs.junit)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.guava)
 }

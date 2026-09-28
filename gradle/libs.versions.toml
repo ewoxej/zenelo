@@ -15,6 +15,8 @@ jaudiotagger = "3.0.1"
 okhttp = "4.12.0"
 work = "2.10.0"
 coil = "2.7.0"
+reorderable = "2.4.3"
+junit = "4.13.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -47,6 +49,8 @@ jaudiotagger = { group = "net.jthink", name = "jaudiotagger", version.ref = "jau
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 work-runtime = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
+reorderable = { group = "sh.calvin.reorderable", name = "reorderable", version.ref = "reorderable" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

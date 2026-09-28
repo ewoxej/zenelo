@@ -73,6 +73,15 @@ interface LoudnessDao {
     @Query("SELECT * FROM loudness WHERE path = :path")
     suspend fun get(path: String): LoudnessEntity?
 
+    /** Measurements of an album's tracks in one folder (for album gain without tags). */
+    @Query(
+        """
+        SELECT l.* FROM loudness l JOIN tracks t ON t.path = l.path
+        WHERE t.dir = :dir AND t.albumKey IS :albumKey AND l.fileModified = t.modified AND l.integratedLufs > -100
+        """,
+    )
+    suspend fun forAlbum(dir: String, albumKey: String?): List<LoudnessEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entity: LoudnessEntity)
 }
@@ -110,6 +119,24 @@ interface TrackDao {
     )
     suspend fun needingLyrics(retryBefore: Long): List<TrackEntity>
 
+    /** Tracks without ReplayGain tags whose loudness hasn't been measured for their current version. */
+    @Query(
+        """
+        SELECT t.* FROM tracks t LEFT JOIN loudness l ON l.path = t.path
+        WHERE t.trackGainDb IS NULL AND (l.path IS NULL OR l.fileModified != t.modified)
+        """,
+    )
+    suspend fun needingLoudness(): List<TrackEntity>
+
+    /** Track count and duration per folder, for every folder under a path range (see [DirStats]). */
+    @Query(
+        """
+        SELECT dir, COUNT(*) AS tracks, COALESCE(SUM(durationMs), 0) AS durationMs FROM tracks
+        WHERE path >= :from AND path < :to GROUP BY dir
+        """,
+    )
+    fun observeDirStats(from: String, to: String): Flow<List<DirStats>>
+
     @Query("SELECT COUNT(*) AS tracks, COALESCE(SUM(hasArtwork), 0) AS withArtwork FROM tracks")
     fun observeStats(): Flow<LibraryStats>
 
@@ -130,6 +157,21 @@ interface CoverDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(cover: CoverEntity)
+}
+
+@Dao
+interface PendingWriteDao {
+    @Query("SELECT * FROM pending_writes WHERE path = :path")
+    suspend fun get(path: String): PendingWriteEntity?
+
+    @Query("SELECT * FROM pending_writes")
+    suspend fun all(): List<PendingWriteEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(write: PendingWriteEntity)
+
+    @Query("DELETE FROM pending_writes WHERE path = :path")
+    suspend fun delete(path: String)
 }
 
 @Dao

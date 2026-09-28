@@ -89,10 +89,11 @@ fun CoverPickerDialog(path: String, onDismiss: () -> Unit, onDone: (String) -> U
         track = t
         if (t != null) {
             albumTracks = container.db.tracks().albumTracksInDir(t.dir, t.albumKey).ifEmpty { listOf(t) }
-            // Without tags, guess from the folder layout: .../Artist/Album/track.
+            // Without tags: the file name patterns from settings, then the folder layout .../Artist/Album/.
             val dir = File(t.dir)
-            artist = t.albumArtist ?: t.artist ?: dir.parentFile?.name.orEmpty()
-            album = t.album ?: dir.name
+            val guess = fetcher.guess(t)
+            artist = t.albumArtist ?: t.artist ?: guess?.artist ?: dir.parentFile?.name.orEmpty()
+            album = t.album ?: guess?.album ?: dir.name
         }
         search()
     }

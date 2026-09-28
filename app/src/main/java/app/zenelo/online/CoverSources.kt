@@ -41,6 +41,37 @@ class CoverSources(private val http: Http, private val lastFmKey: suspend () -> 
         return null
     }
 
+    /** For tracks without a known album: finds the album through the song (Deezer, then iTunes). */
+    suspend fun autoBySong(artist: String, title: String): Pair<CoverCandidate, ByteArray>? {
+        val deezerUrl = "https://api.deezer.com/search/track".toHttpUrl().newBuilder()
+            .addQueryParameter("q", "artist:\"${artist.clean()}\" track:\"${title.clean()}\"")
+            .addQueryParameter("limit", "6")
+            .build()
+        val deezer = http.getObject(deezerUrl)?.optJSONArray("data")?.objects().orEmpty().mapNotNull { o ->
+            val album = o.optJSONObject("album") ?: return@mapNotNull null
+            val xl = album.optString("cover_xl").takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            Triple(o.optJSONObject("artist")?.optString("name").orEmpty(), o.optString("title"), CoverCandidate("Deezer", "", album.optString("title"), album.optString("cover_medium", xl), listOf(xl)))
+        }
+        val itunesUrl = "https://itunes.apple.com/search".toHttpUrl().newBuilder()
+            .addQueryParameter("term", "$artist $title")
+            .addQueryParameter("entity", "song")
+            .addQueryParameter("limit", "6")
+            .build()
+        val itunes = http.getObject(itunesUrl)?.optJSONArray("results")?.objects().orEmpty().mapNotNull { o ->
+            val art = o.optString("artworkUrl100").takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            Triple(
+                o.optString("artistName"),
+                o.optString("trackName"),
+                CoverCandidate("iTunes", "", o.optString("collectionName"), art.replace("100x100bb", "300x300bb"), listOf(art.replace("100x100bb", "1200x1200bb"))),
+            )
+        }
+        for ((foundArtist, foundTitle, candidate) in deezer + itunes) {
+            if (!Text.matches(foundArtist, artist) || !Text.matches(foundTitle, title)) continue
+            download(candidate)?.let { return candidate.copy(artist = foundArtist) to it }
+        }
+        return null
+    }
+
     suspend fun download(candidate: CoverCandidate): ByteArray? =
         candidate.fullUrls.firstNotNullOfOrNull { http.getBytes(it)?.takeIf { bytes -> bytes.size > 1000 } }
 

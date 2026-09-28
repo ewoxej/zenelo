@@ -59,7 +59,15 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.zenelo.data.settings.NormalizationMode
+import app.zenelo.data.settings.DEFAULT_FILENAME_PATTERNS
+import app.zenelo.data.settings.QueueSwipeAction
+import app.zenelo.data.settings.QueueSwipeSlot
+import app.zenelo.data.settings.PullDownArea
+import app.zenelo.data.settings.SelectionMarkerSide
 import app.zenelo.data.settings.SwipeAction
+import app.zenelo.library.FilenamePattern
+import androidx.compose.ui.graphics.Color
+import androidx.compose.material.icons.outlined.TextFields
 import app.zenelo.data.settings.SwipeSlot
 import app.zenelo.data.settings.ZeneloSettings
 import app.zenelo.ui.components.IconTile
@@ -100,6 +108,24 @@ fun SettingsScreen(onOpenSwipeSettings: () -> Unit) {
             trailing = { Icon(Icons.Rounded.ChevronRight, null, tint = ZeneloColors.TextMuted, modifier = Modifier.padding(12.dp).size(20.dp)) },
         )
 
+        SwitchRow(
+            title = "Show played tracks in queue",
+            subtitle = "Above the current track, dimmed",
+            checked = settings.queueHistory,
+        ) { scope.launch { repo.setQueueHistory(it) } }
+        ChoiceRow(
+            title = "Swipe down to close player",
+            current = settings.pullDownArea,
+            choices = PullDownArea.entries,
+            label = { it.label },
+        ) { scope.launch { repo.setPullDownArea(it) } }
+        ChoiceRow(
+            title = "Selection mark",
+            current = settings.selectionMarker,
+            choices = SelectionMarkerSide.entries,
+            label = { it.label },
+        ) { scope.launch { repo.setSelectionMarker(it) } }
+
         SectionHeader("Volume normalization")
         Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             NormalizationMode.entries.forEach { mode ->
@@ -137,6 +163,19 @@ fun SettingsScreen(onOpenSwipeSettings: () -> Unit) {
             subtitle = "Only files without a cover, or when you pick one",
             checked = settings.embedCovers,
         ) { scope.launch { repo.setEmbedCovers(it) } }
+        var editingPatterns by remember { mutableStateOf(false) }
+        ListRow(
+            title = "File name patterns",
+            subtitle = "When tags are missing or wrong · ${settings.filenamePatterns.size} patterns",
+            onClick = { editingPatterns = true },
+            leading = { IconTile(Icons.Outlined.TextFields, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+        )
+        if (editingPatterns) {
+            PatternsDialog(settings.filenamePatterns, onDismiss = { editingPatterns = false }) { patterns ->
+                scope.launch { repo.setFilenamePatterns(patterns) }
+                editingPatterns = false
+            }
+        }
         var editingKey by remember { mutableStateOf(false) }
         ListRow(
             title = "Last.fm API key",
@@ -172,6 +211,35 @@ private fun SwitchRow(title: String, subtitle: String, checked: Boolean, onChang
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = ZeneloColors.TextMuted)
         }
         Switch(checked = checked, onCheckedChange = onChange, colors = zeneloSwitchColors())
+    }
+}
+
+/** Title + current value; tapping opens the choices. */
+@Composable
+private fun <T> ChoiceRow(title: String, current: T, choices: List<T>, label: (T) -> String, onSelect: (T) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            Modifier.fillMaxWidth().clickable { open = true }.padding(horizontal = 20.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.bodyLarge)
+                Text(label(current), style = MaterialTheme.typography.bodySmall, color = ZeneloColors.Mustard)
+            }
+            Icon(Icons.Rounded.UnfoldMore, null, tint = ZeneloColors.TextMuted, modifier = Modifier.size(18.dp))
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            choices.forEach { choice ->
+                DropdownMenuItem(
+                    text = { Text(label(choice), color = if (choice == current) ZeneloColors.Mustard else ZeneloColors.TextPrimary) },
+                    onClick = {
+                        open = false
+                        onSelect(choice)
+                    },
+                )
+            }
+        }
     }
 }
 
@@ -249,6 +317,17 @@ fun SwipeSettingsScreen(onBack: () -> Unit) {
                 SwipeSlotCard(slot, settings.swipes.getValue(slot)) { action -> scope.launch { repo.setSwipe(slot, action) } }
             }
         }
+        SectionHeader("Queue · left swipes only", Modifier.padding(top = 8.dp))
+        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            QueueSwipeSlot.entries.forEach { slot ->
+                SlotCard(
+                    label = slot.label,
+                    directionIcon = slot.slot.directionIcon,
+                    current = settings.queueSwipes.getValue(slot).let { SlotChoice(it.label, it.icon, it.accent) },
+                    choices = QueueSwipeAction.entries.map { SlotChoice(it.label, it.icon, it.accent) },
+                ) { index -> scope.launch { repo.setQueueSwipe(slot, QueueSwipeAction.entries[index]) } }
+            }
+        }
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -280,8 +359,26 @@ private val SwipeSlot.directionIcon: ImageVector
         SwipeSlot.LEFT_LONG -> Icons.Rounded.KeyboardDoubleArrowLeft
     }
 
+private data class SlotChoice(val label: String, val icon: ImageVector, val accent: Color)
+
 @Composable
 private fun SwipeSlotCard(slot: SwipeSlot, current: SwipeAction, onSelect: (SwipeAction) -> Unit) {
+    SlotCard(
+        label = slot.label,
+        directionIcon = slot.directionIcon,
+        current = SlotChoice(current.label, current.icon, current.accent),
+        choices = SwipeAction.entries.map { SlotChoice(it.label, it.icon, it.accent) },
+    ) { index -> onSelect(SwipeAction.entries[index]) }
+}
+
+@Composable
+private fun SlotCard(
+    label: String,
+    directionIcon: ImageVector,
+    current: SlotChoice,
+    choices: List<SlotChoice>,
+    onSelect: (Int) -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         Column(
@@ -293,9 +390,9 @@ private fun SwipeSlotCard(slot: SwipeSlot, current: SwipeAction, onSelect: (Swip
                 .padding(horizontal = 14.dp, vertical = 12.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(slot.directionIcon, null, tint = ZeneloColors.TextMuted, modifier = Modifier.size(14.dp))
+                Icon(directionIcon, null, tint = ZeneloColors.TextMuted, modifier = Modifier.size(14.dp))
                 Spacer(Modifier.width(8.dp))
-                Text(slot.label, style = MaterialTheme.typography.labelSmall, color = ZeneloColors.TextMuted)
+                Text(label, style = MaterialTheme.typography.labelSmall, color = ZeneloColors.TextMuted)
             }
             Spacer(Modifier.height(10.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -306,12 +403,12 @@ private fun SwipeSlotCard(slot: SwipeSlot, current: SwipeAction, onSelect: (Swip
             }
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            SwipeAction.entries.forEach { action ->
+            choices.forEachIndexed { index, choice ->
                 DropdownMenuItem(
-                    text = { Text(action.label, color = if (action == current) ZeneloColors.Mustard else ZeneloColors.TextPrimary) },
-                    leadingIcon = { Icon(action.icon, null, tint = action.accent) },
+                    text = { Text(choice.label, color = if (choice == current) ZeneloColors.Mustard else ZeneloColors.TextPrimary) },
+                    leadingIcon = { Icon(choice.icon, null, tint = choice.accent) },
                     onClick = {
-                        onSelect(action)
+                        onSelect(index)
                         expanded = false
                     },
                 )

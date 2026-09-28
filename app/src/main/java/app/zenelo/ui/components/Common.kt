@@ -3,7 +3,12 @@ package app.zenelo.ui.components
 import android.graphics.BitmapFactory
 import android.util.LruCache
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.horizontalDrag
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -22,11 +27,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Circle
+import androidx.compose.material.icons.outlined.MusicNote
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Album
+import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Slider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarData
 import androidx.compose.material3.Text
@@ -39,12 +46,15 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.compositeOver
@@ -54,6 +64,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.zenelo.ZeneloApp
 import app.zenelo.ui.theme.ZeneloColors
 import kotlinx.coroutines.Dispatchers
@@ -106,6 +117,31 @@ fun IconTile(
     }
 }
 
+/**
+ * Leading cover for a track row: the cached thumbnail, or a note icon until one loads (or if there
+ * is none). The playing track gets a waveform over its cover.
+ */
+@Composable
+fun TrackThumb(path: String, isCurrent: Boolean = false) {
+    val thumbnails = appContainer().thumbnails
+    // Revision: a cover was just picked / written somewhere; re-read this row's thumbnail.
+    val revision by thumbnails.revision.collectAsStateWithLifecycle()
+    val bitmap by produceState(thumbnails.peek(path), path, revision) { value = thumbnails.peek(path) ?: thumbnails.load(path) }
+    val image = bitmap
+    if (image == null) {
+        if (isCurrent) IconTile(Icons.Rounded.GraphicEq, ZeneloColors.Celadon, ZeneloColors.CeladonTint)
+        else IconTile(Icons.Outlined.MusicNote, ZeneloColors.TextSecondary)
+        return
+    }
+    Box(Modifier.size(36.dp).clip(RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) {
+        Image(image.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        if (isCurrent) {
+            Box(Modifier.fillMaxSize().background(ZeneloColors.Background.copy(alpha = 0.55f)))
+            Icon(Icons.Rounded.GraphicEq, null, tint = ZeneloColors.Celadon, modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
 /** Two-line list row: leading slot, title, mono subtitle, trailing slot. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -130,7 +166,7 @@ fun ListRow(
         leading()
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, color = titleColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = titleColor, maxLines = 1, modifier = Modifier.marquee())
             if (!subtitle.isNullOrEmpty()) {
                 Text(
                     subtitle,
@@ -143,6 +179,17 @@ fun ListRow(
         }
         trailing()
     }
+}
+
+/** Check mark of a row in selection mode; the side is a setting ([app.zenelo.data.settings.SelectionMarkerSide]). */
+@Composable
+fun SelectionMark(selected: Boolean, modifier: Modifier = Modifier) {
+    Icon(
+        if (selected) Icons.Rounded.CheckCircle else Icons.Outlined.Circle,
+        if (selected) "Selected" else "Not selected",
+        tint = if (selected) ZeneloColors.Mustard else ZeneloColors.TextMuted,
+        modifier = modifier.size(20.dp),
+    )
 }
 
 /** Mustard round play button in the bottom-right corner. Long-press for the alternate action. */
@@ -284,8 +331,10 @@ fun SearchField(query: String, onQueryChange: (String) -> Unit, placeholder: Str
     }
 }
 
-/** Thin design slider: 3dp track, mustard fill, small white round thumb. */
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Thin design slider: 3dp track, mustard fill, 12dp white thumb, drawn on one canvas so the thumb
+ * sits exactly on the track's centre line. Tap or drag to seek.
+ */
 @Composable
 fun ZeneloSlider(
     value: Float,
@@ -295,25 +344,46 @@ fun ZeneloSlider(
     onValueChangeFinished: (() -> Unit)? = null,
 ) {
     val span = (valueRange.endInclusive - valueRange.start).takeIf { it > 0f } ?: 1f
-    Slider(
-        value = value,
-        onValueChange = onValueChange,
-        onValueChangeFinished = onValueChangeFinished,
-        valueRange = valueRange,
-        modifier = modifier.height(24.dp),
-        thumb = { Box(Modifier.size(12.dp).clip(CircleShape).background(ZeneloColors.TextPrimary)) },
-        track = {
-            Box(Modifier.fillMaxWidth().height(3.dp).clip(CircleShape).background(ZeneloColors.Card)) {
-                Box(
-                    Modifier
-                        .fillMaxWidth(((value - valueRange.start) / span).coerceIn(0f, 1f))
-                        .height(3.dp)
-                        .background(ZeneloColors.Mustard),
-                )
-            }
-        },
-    )
+    val fraction = ((value - valueRange.start) / span).coerceIn(0f, 1f)
+    val onChange by rememberUpdatedState(onValueChange)
+    val onFinished by rememberUpdatedState(onValueChangeFinished)
+    val radius = 6.dp
+
+    Canvas(
+        modifier
+            .fillMaxWidth()
+            .height(24.dp)
+            .pointerInput(valueRange) {
+                fun valueAt(x: Float): Float {
+                    val r = radius.toPx()
+                    val f = ((x - r) / (size.width - 2 * r)).coerceIn(0f, 1f)
+                    return valueRange.start + f * span
+                }
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    down.consume()
+                    onChange(valueAt(down.position.x))
+                    horizontalDrag(down.id) { change ->
+                        change.consume()
+                        onChange(valueAt(change.position.x))
+                    }
+                    onFinished?.invoke()
+                }
+            },
+    ) {
+        val r = radius.toPx()
+        val y = size.height / 2
+        val stroke = 3.dp.toPx()
+        val x = r + (size.width - 2 * r) * fraction
+        drawLine(ZeneloColors.Card, Offset(r, y), Offset(size.width - r, y), stroke, StrokeCap.Round)
+        drawLine(ZeneloColors.Mustard, Offset(r, y), Offset(x, y), stroke, StrokeCap.Round)
+        drawCircle(ZeneloColors.TextPrimary, r, Offset(x, y))
+    }
 }
+
+/** Scrolls single-line text that doesn't fit, in a loop with a short pause. Short text stays still. */
+@OptIn(ExperimentalFoundationApi::class)
+fun Modifier.marquee(): Modifier = basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 1500, repeatDelayMillis = 1500)
 
 /** Vertical gap helper used between stacked blocks. */
 @Composable

@@ -25,16 +25,24 @@ data class StorageRoot(val name: String, val dir: File, val removable: Boolean) 
     val shortName: String get() = if (removable) "SD" else "Internal"
 }
 
-data class AudioFile(val path: String, val name: String, val extension: String, val sizeBytes: Long) {
+/** [modified]: file mtime, used as "date added" for sorting (0 when unknown). */
+data class AudioFile(val path: String, val name: String, val extension: String, val sizeBytes: Long, val modified: Long = 0L) {
     val title: String get() = name.substringBeforeLast('.')
 
     companion object {
-        fun of(file: File) = AudioFile(file.absolutePath, file.name, file.extension.lowercase(), file.length())
+        fun of(file: File) = AudioFile(file.absolutePath, file.name, file.extension.lowercase(), file.length(), file.lastModified())
     }
 }
 
 /** `stamp` is the directory's mtime at scan time; it changes when entries are added or removed. */
-data class DirListing(val dir: File, val stamp: Long, val folders: List<File>, val files: List<AudioFile>)
+data class DirListing(
+    val dir: File,
+    val stamp: Long,
+    val folders: List<File>,
+    val files: List<AudioFile>,
+    /** Folder mtimes by path, for sorting by date. */
+    val folderModified: Map<String, Long> = emptyMap(),
+)
 
 /**
  * Direct file-system access (the app holds MANAGE_EXTERNAL_STORAGE).
@@ -65,6 +73,18 @@ class FileSystemBrowser(private val context: Context) {
             ?: scan(dir, stamp).also { cache.put(dir.absolutePath, it) }
     }
 
+    /** Every audio file under [dir], folder by folder in name order (files before subfolders). */
+    suspend fun listRecursive(dir: File): List<AudioFile> {
+        val out = ArrayList<AudioFile>()
+        suspend fun walk(d: File) {
+            val listing = list(d)
+            out += listing.files
+            listing.folders.forEach { walk(it) }
+        }
+        walk(dir)
+        return out
+    }
+
     /** Warms the cache for folders the user is likely to open next. */
     suspend fun prefetch(dirs: List<File>) = withContext(Dispatchers.IO) {
         for (dir in dirs.take(PREFETCH_LIMIT)) {
@@ -75,6 +95,7 @@ class FileSystemBrowser(private val context: Context) {
 
     private fun scan(dir: File, stamp: Long): DirListing {
         val folders = ArrayList<Pair<File, List<String>>>()
+        val folderModified = HashMap<String, Long>()
         val files = ArrayList<Pair<AudioFile, List<String>>>()
         try {
             Files.newDirectoryStream(dir.toPath()).use { stream ->
@@ -88,11 +109,14 @@ class FileSystemBrowser(private val context: Context) {
                         continue
                     }
                     when {
-                        attrs.isDirectory -> folders += path.toFile() to NaturalOrder.key(name)
+                        attrs.isDirectory -> {
+                            folders += path.toFile() to NaturalOrder.key(name)
+                            folderModified[path.toString()] = attrs.lastModifiedTime().toMillis()
+                        }
                         attrs.isRegularFile -> {
                             val ext = name.substringAfterLast('.', "").lowercase()
                             if (ext in AudioFormats.extensions) {
-                                files += AudioFile(path.toString(), name, ext, attrs.size()) to NaturalOrder.key(name)
+                                files += AudioFile(path.toString(), name, ext, attrs.size(), attrs.lastModifiedTime().toMillis()) to NaturalOrder.key(name)
                             }
                         }
                     }
@@ -106,6 +130,7 @@ class FileSystemBrowser(private val context: Context) {
             stamp = stamp,
             folders = folders.sortedWith { a, b -> NaturalOrder.compare(a.second, b.second) }.map { it.first },
             files = files.sortedWith { a, b -> NaturalOrder.compare(a.second, b.second) }.map { it.first },
+            folderModified = folderModified,
         )
     }
 

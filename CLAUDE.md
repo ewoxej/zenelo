@@ -16,6 +16,14 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player.
   applied by `NormalizationAudioProcessor` (target −18 LUFS).
 - Manual DI via `AppContainer` in `ZeneloApp`. Settings in DataStore, favorites/playlists/loudness in Room.
 - Swipes: `SwipeableRow` with short/long threshold per direction → four configurable `SwipeSlot`s.
+  A direction without options isn't captured (queue rows: left only, right goes to the pager).
+  In pointer code read `positionChange()` before `consume()` — a consumed change reports zero.
+- Queue UI edits entries by stable id (index into the queue's paths), not by position.
+- Loudness: `LoudnessAnalyzer` (BS.1770, unit-tested against the reference sine; matches ffmpeg
+  ebur128) measures files without ReplayGain tags in `LoudnessWorker` and for the next queued tracks.
+- Tag edits go through `TagWriter` (deferred for the playing file, like cover embeds).
+- File name patterns (`FilenamePattern`, unit-tested; `[...]` = optional part) are the fallback for cover / lyrics lookups
+  when tags are missing or find nothing.
 - Tags: jaudiotagger in Android mode (`TagReader`). Its `setImageFromData` throws on Android, so FLAC
   pictures go through `FlacTag.createArtworkField`; Ogg/Opus covers are never embedded.
 - Library index: `tracks` table, filled by `LibraryIndexer` (WorkManager `IndexWorker` on app start,
@@ -24,8 +32,24 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player.
   cached → Deezer/iTunes/MusicBrainz (+ Last.fm if the user set an API key). Downloaded covers are
   embedded into files without art. Lyrics: sibling .lrc → tags → LRCLIB. Background `FetchWorker`
   on unmetered network.
-- Never rewrite the playing file and never `replaceMediaItem` the playing item (ExoPlayer re-buffers):
-  covers found mid-track go to `AppContainer.coverOverride` (UI only); the embed waits for track change.
+- Never `replaceMediaItem` the playing item (ExoPlayer re-buffers): covers found mid-track go to
+  `AppContainer.coverOverride` (UI only).
+- All tag / cover writes go through `PendingWrites`. The playing file is written when its track
+  ends (transition, queue end, service stop, or next app start); the request is stored in the
+  `pending_writes` table. Meanwhile the edit shows everywhere at once: the `tracks` row is updated
+  in place (old mtime, so indexing won't read the old tags back), `PlayQueue.invalidate` refreshes
+  the queue / Now Playing, `Thumbnails.override` + `coverOverride` the covers.
+- Now Playing is not a nav destination but a `PlayerSheet` over the scaffold (ZeneloRoot). Collapsed,
+  the sheet's top is the mini player, resting above the tab bar (tab bar drawn over the sheet; the
+  Scaffold's bottomBar only reserves their measured height). Dragging moves the sheet under the
+  finger, crossfades mini player → Now Playing and slides the tab bar away. Now Playing is composed
+  only while any of it shows; the mini player stays composed while a finger is down (removing it
+  would cancel the drag it started). Outside the Scaffold → provide LocalContentColor yourself.
+- Multi-select (browser: folders + files, queue): long-press selects; the check mark side is a
+  setting (`SelectionMarkerSide`). Queue drag handles swallow their down event so holding one
+  still doesn't long-press the row.
+- Reorderable lists (queue, patterns): keep ONE state object for the list for the composable's
+  lifetime — the reorder library keeps its first onMove lambda, so re-created state breaks drags.
 - Queue: `PlayQueue` owns the full queue; ExoPlayer only holds a window (10 back, current, ~30
   ahead) that slides on each transition. Never put a whole folder into the player: with 7000 items
   every timeline update re-sends everything through the media session and stalls the main thread.
@@ -34,11 +58,9 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player.
 
 ## Roadmap (not done yet)
 1. FFmpeg decoder dependency (verify DSD support in Jellyfin's prebuilt, else build from source).
-2. R128 analyzer (WorkManager) → `LoudnessDao` for files without ReplayGain tags.
-3. Pending cover embeds for the playing track live in memory; persist them so a process kill doesn't drop them.
-4. Crossfade (two ExoPlayers behind a forwarding Player), 0 = gapless.
-5. Playlist detail screen + "add to playlist" picker; queue reorder (sh.calvin.reorderable).
-6. Bundle IBM Plex fonts in `res/font`.
+2. Crossfade (two ExoPlayers behind a forwarding Player), 0 = gapless.
+3. Playlist detail screen + "add to playlist" picker.
+4. Bundle IBM Plex fonts in `res/font`.
 
 ## Build
 SDK: `/opt/homebrew/share/android-commandlinetools` (set in `local.properties`). JDK 17 from Homebrew:
@@ -47,6 +69,11 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ./gradl
 ```
 APK: `app/build/outputs/apk/debug/app-debug.apk`. Judge performance on `assembleRelease` (R8, signed
 with the debug key), not on debug — Compose debug builds are several times slower.
+
+Releases: GitHub Actions `Release` workflow (manual, input `version` → tag `v<version>`, APK attached to
+the GitHub release). It signs with the key from secrets (`KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`,
+`KEY_ALIAS`, `KEY_PASSWORD` → env `ZENELO_KEYSTORE*`); `-PversionName=1.2.3` sets versionCode 10203.
+Local builds without those env vars stay signed with the debug key.
 
 Emulator: AVD `zenelo_jm21` (720×1280 @ 320dpi ≈ the JM21's 360×640dp). Grant file access with
 `adb shell appops set app.zenelo MANAGE_EXTERNAL_STORAGE allow`.

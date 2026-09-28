@@ -19,23 +19,24 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitVerticalTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.verticalDrag
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.runtime.rememberUpdatedState
+import app.zenelo.data.settings.PullDownArea
+import app.zenelo.data.settings.SelectionMarkerSide
+import app.zenelo.ui.components.SelectionMark
+import kotlinx.coroutines.flow.map
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.Velocity
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -84,10 +85,32 @@ import app.zenelo.data.db.FavoriteKind
 import app.zenelo.player.PlayerController
 import app.zenelo.player.PlayerUiState
 import app.zenelo.data.db.TrackEntity
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.Circle
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Deselect
+import androidx.compose.material.icons.outlined.SelectAll
+import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.DragHandle
+import androidx.compose.ui.graphics.compositeOver
+import app.zenelo.data.settings.QueueSwipeAction
+import app.zenelo.data.settings.SwipeSlot
+import app.zenelo.data.settings.ZeneloSettings
+import app.zenelo.ui.components.SwipeOption
+import app.zenelo.ui.components.SwipeableRow
+import app.zenelo.ui.components.accent
+import app.zenelo.ui.components.icon
+import app.zenelo.ui.components.marquee
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 import app.zenelo.library.LyricLine
 import app.zenelo.library.Lrc
 import app.zenelo.ui.components.Artwork
 import app.zenelo.ui.components.CoverPickerDialog
+import app.zenelo.ui.components.TagEditorDialog
 import app.zenelo.ui.components.formatChip
 import app.zenelo.ui.theme.PlexSans
 import androidx.compose.foundation.layout.PaddingValues
@@ -113,7 +136,8 @@ private const val PAGE_QUEUE = 2
  * fixed below the pager on every page, as in the design.
  */
 @Composable
-fun NowPlayingScreen(onBack: () -> Unit, onOpenFolder: (File) -> Unit) {
+fun NowPlayingScreen(sheet: PlayerSheet, onOpenFolder: (File) -> Unit) {
+    val onBack = sheet::close
     val container = appContainer()
     val player = container.player
     val state by player.state.collectAsStateWithLifecycle()
@@ -128,46 +152,44 @@ fun NowPlayingScreen(onBack: () -> Unit, onOpenFolder: (File) -> Unit) {
     val trackFlow = remember(state.mediaId) { state.mediaId?.let(container.db.tracks()::observe) ?: flowOf(null) }
     val track by trackFlow.collectAsState(initial = null)
     var coverPicker by remember { mutableStateOf(false) }
+    var tagEditor by remember { mutableStateOf(false) }
     var coverMessage by remember { mutableStateOf<String?>(null) }
 
-    // Pull-down to collapse: fed by drags on non-scrolling areas and by overscroll of the lists.
-    var pull by remember { mutableFloatStateOf(0f) }
-    val threshold = with(LocalDensity.current) { 110.dp.toPx() }
-    val settle: (Float) -> Unit = { velocity ->
-        if (pull > threshold || velocity > 1800f) {
-            onBack()
-        } else {
-            scope.launch { animate(pull, 0f, animationSpec = tween(140)) { value, _ -> pull = value } }
-        }
-    }
-    val pullConnection = remember {
-        object : NestedScrollConnection {
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                // While pulled down, scrolling back up first undoes the pull.
-                if (available.y < 0 && pull > 0) {
-                    val used = maxOf(available.y, -pull)
-                    pull += used
-                    return Offset(0f, used)
+    // Pull-down to collapse, starting inside the area chosen in settings (top bar ... whole screen);
+    // the sheet follows the finger. Handled after the children: lists that scroll vertically and
+    // the seek bar keep their drags.
+    val areaFlow = remember { container.settings.settings.map { it.pullDownArea } }
+    val area by areaFlow.collectAsStateWithLifecycle(initialValue = PullDownArea.TOP_THIRD)
+    val density = LocalDensity.current
+    val threshold = with(density) { 90.dp.toPx() }
+    val topBarHeight = with(density) { 64.dp.toPx() }
+    val pullGesture = Modifier.pointerInput(area) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            val zone = maxOf(topBarHeight, size.height * area.fraction)
+            if (down.position.y > zone) return@awaitEachGesture
+            val tracker = VelocityTracker()
+            tracker.addPosition(down.uptimeMillis, down.position)
+            val start = awaitVerticalTouchSlopOrCancellation(down.id) { change, over ->
+                if (over > 0) {
+                    change.consume()
+                    sheet.dragStart()
+                    sheet.dragBy(over)
                 }
-                return Offset.Zero
+            } ?: return@awaitEachGesture
+            verticalDrag(start.id) { change ->
+                val dy = change.positionChange().y
+                change.consume()
+                tracker.addPosition(change.uptimeMillis, change.position)
+                sheet.dragBy(dy)
             }
-
-            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-                if (source == NestedScrollSource.UserInput && available.y > 0) {
-                    pull += available.y
-                    return Offset(0f, available.y)
-                }
-                return Offset.Zero
-            }
-
-            override suspend fun onPreFling(available: Velocity): Velocity {
-                if (pull <= 0f) return Velocity.Zero
-                settle(available.y)
-                return available
-            }
+            sheet.dragEnd(tracker.calculateVelocity().y, threshold)
         }
     }
 
+    if (tagEditor && state.mediaId != null) {
+        TagEditorDialog(state.mediaId!!, fromFileName = false, onDismiss = { tagEditor = false }, onDone = { coverMessage = it })
+    }
     if (coverPicker && state.mediaId != null) {
         CoverPickerDialog(state.mediaId!!, onDismiss = { coverPicker = false }, onDone = { coverMessage = it })
     }
@@ -181,15 +203,9 @@ fun NowPlayingScreen(onBack: () -> Unit, onOpenFolder: (File) -> Unit) {
     Column(
         Modifier
             .fillMaxSize()
-            .graphicsLayer { translationY = pull }
-            .nestedScroll(pullConnection)
-            .draggable(
-                state = rememberDraggableState { delta -> pull = (pull + delta).coerceAtLeast(0f) },
-                orientation = Orientation.Vertical,
-                onDragStopped = { velocity -> settle(velocity) },
-            ),
+            .then(pullGesture),
     ) {
-        TopBar(state, onBack, onOpenFolder, onDownloadCover = { coverPicker = true })
+        TopBar(state, onBack, onOpenFolder, onDownloadCover = { coverPicker = true }, onEditTags = { tagEditor = true })
         HorizontalPager(
             pager,
             Modifier.weight(1f),
@@ -222,11 +238,19 @@ fun NowPlayingScreen(onBack: () -> Unit, onOpenFolder: (File) -> Unit) {
 }
 
 @Composable
-private fun TopBar(state: PlayerUiState, onBack: () -> Unit, onOpenFolder: (File) -> Unit, onDownloadCover: () -> Unit) {
+private fun TopBar(
+    state: PlayerUiState,
+    onBack: () -> Unit,
+    onOpenFolder: (File) -> Unit,
+    onDownloadCover: () -> Unit,
+    onEditTags: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     var menu by remember { mutableStateOf(false) }
     val folder = state.mediaId?.let { File(it).parentFile }
     val roots = appContainer().fileBrowser.let { fs -> remember { fs.roots() } }
-    Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    // Taller than the icons need: it doubles as the pull-down handle.
+    Row(modifier.fillMaxWidth().padding(horizontal = 4.dp).height(64.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onBack) { Icon(Icons.Rounded.KeyboardArrowDown, "Close") }
         Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
             Text("PLAYING FROM FOLDER", style = MaterialTheme.typography.labelSmall, color = ZeneloColors.TextMuted)
@@ -252,6 +276,14 @@ private fun TopBar(state: PlayerUiState, onBack: () -> Unit, onOpenFolder: (File
                     onClick = {
                         menu = false
                         folder?.let(onOpenFolder)
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("Edit tags…") },
+                    enabled = state.mediaId != null,
+                    onClick = {
+                        menu = false
+                        onEditTags()
                     },
                 )
                 DropdownMenuItem(
@@ -347,56 +379,276 @@ private fun SyncedLyrics(lines: List<LyricLine>, player: PlayerController) {
     }
 }
 
+/**
+ * The queue: played tracks (optional, dimmed), the current one, then what's next in real play
+ * order. Rows are drawn by index from the queue snapshot, so a 7000-track queue costs nothing
+ * until scrolled. Drag the handle to reorder, long-press to select several, swipe left for the
+ * actions set in settings (right swipes stay with the page pager).
+ */
 @Composable
 private fun QueuePage(player: PlayerController) {
-    // TODO: drag to reorder (sh.calvin.reorderable).
-    // Current track first, then what plays next in real order (shuffle included). Rows are drawn
-    // by index from the queue snapshot, so a 7000-track queue costs nothing until scrolled.
+    val container = appContainer()
+    val scope = rememberCoroutineScope()
     val queue by player.queue.state.collectAsStateWithLifecycle()
-    LazyColumn(Modifier.fillMaxSize()) {
-        items(queue.size) { offset ->
-            val path = queue.pathAt(offset)
-            val info by produceState(player.queue.cachedInfo(path), path) { value = player.queue.info(path) }
-            val isCurrent = offset == 0
-            val accent = if (isCurrent) ZeneloColors.Celadon else null
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { player.skipTo(offset) }
-                    .heightIn(min = 46.dp)
-                    .padding(start = 20.dp, end = 8.dp, top = 3.dp, bottom = 3.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "%02d".format(offset + 1),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = accent ?: ZeneloColors.TextMuted,
-                    modifier = Modifier.width(34.dp),
+    val settingsFlow = remember { container.settings.settings }
+    val settings by settingsFlow.collectAsStateWithLifecycle(initialValue = ZeneloSettings())
+    val showHistory = settings.queueHistory
+
+    // Display offsets from the current track; with history there's no wrap-around.
+    val firstOffset = if (showHistory) -queue.history else 0
+    val count = if (showHistory) queue.total else queue.size
+    // Local copy so a drag can reorder rows live; the queue itself changes on drop. One state object
+    // for the page's lifetime: the reorder library keeps its first onMove lambda, so a state that is
+    // re-created on queue changes (every track change) would leave drags writing to a dead copy.
+    val idsState = remember { mutableStateOf(List(count) { queue.idAt(firstOffset + it) }) }
+    var ids by idsState
+    val currentId = queue.currentId
+    val liveCurrentId = rememberUpdatedState(currentId)
+    // While a row is being dragged, queue updates (track changes) mustn't reset the local order.
+    var reordering by remember { mutableStateOf(false) }
+    LaunchedEffect(queue, showHistory) {
+        if (!reordering) idsState.value = List(count) { queue.idAt(firstOffset + it) }
+    }
+
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = if (showHistory) (queue.history - 1).coerceAtLeast(0) else 0)
+    val reorderState = rememberReorderableLazyListState(listState) { from, to ->
+        val cur = liveCurrentId.value
+        if (from.key == cur || to.key == cur) return@rememberReorderableLazyListState
+        idsState.value = idsState.value.toMutableList().apply { add(to.index, removeAt(from.index)) }
+    }
+    // Follow the current track (one played row stays visible above it), unless the user is busy.
+    LaunchedEffect(currentId, showHistory) {
+        if (!reorderState.isAnyItemDragging) listState.animateScrollToItem((firstOffsetIndex(showHistory, queue.history) - 1).coerceAtLeast(0))
+    }
+    var selecting by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf(emptySet<Int>()) }
+    val swipeOptions = remember(settings.queueSwipes) {
+        settings.queueSwipes.filterValues { it != QueueSwipeAction.NONE }
+            .map { (slot, action) -> slot.slot to SwipeOption(action.label, action.icon, action.accent) }.toMap()
+    }
+
+    fun onSwipe(id: Int, slot: SwipeSlot) {
+        val action = settings.queueSwipes.entries.firstOrNull { it.key.slot == slot }?.value ?: return
+        when (action) {
+            QueueSwipeAction.NONE -> Unit
+            QueueSwipeAction.REMOVE -> player.removeFromQueue(setOf(id))
+            QueueSwipeAction.PLAY_NEXT -> player.playNextInQueue(id)
+            QueueSwipeAction.MOVE_TO_END -> player.moveInQueue(id, beforeId = null)
+            QueueSwipeAction.FAVORITE -> scope.launch {
+                val path = queue.pathOf(id)
+                val info = player.queue.info(path)
+                container.db.favorites().toggle(
+                    FavoriteEntity(path, FavoriteKind.TRACK, info?.title ?: File(path).nameWithoutExtension, info?.artist),
                 )
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        info?.title ?: path.substringAfterLast('/').substringBeforeLast('.'),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = accent ?: ZeneloColors.TextPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    info?.artist?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall, color = ZeneloColors.TextMuted, maxLines = 1)
+            }
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        QueueHeader(
+            upcoming = (queue.size - 1).coerceAtLeast(0),
+            selectedCount = selected.size,
+            selecting = selecting,
+            onSelectMode = { selecting = true },
+            allSelected = selected.isNotEmpty() && selected.size >= ids.count { it != currentId },
+            onSelectAll = {
+                val all = ids.filter { it != currentId }.toSet()
+                if (selected.containsAll(all)) {
+                    selected = emptySet()
+                    selecting = false
+                } else {
+                    selected = all
+                }
+            },
+            onClear = { player.clearQueue() },
+            onDeleteSelected = {
+                player.removeFromQueue(selected)
+                selected = emptySet()
+                selecting = false
+            },
+            onCancelSelection = {
+                selected = emptySet()
+                selecting = false
+            },
+        )
+        LazyColumn(Modifier.fillMaxSize(), state = listState) {
+            itemsIndexed(ids, key = { _, id -> id }) { index, id ->
+                val offset = index + firstOffset
+                val isCurrent = id == currentId
+                val played = offset < 0
+                ReorderableItem(reorderState, key = id) { dragging ->
+                    SwipeableRow(
+                        options = swipeOptions,
+                        onSwipe = { slot -> onSwipe(id, slot) },
+                        enabled = !isCurrent && !selecting,
+                    ) {
+                        QueueRow(
+                            path = queue.pathOf(id),
+                            revision = queue.revision,
+                            number = if (played) null else offset + 1,
+                            isCurrent = isCurrent,
+                            played = played,
+                            dragging = dragging,
+                            selected = id in selected,
+                            selecting = selecting,
+                            markLeft = settings.selectionMarker == SelectionMarkerSide.LEFT,
+                            onClick = {
+                                if (selecting) {
+                                    if (!isCurrent) selected = if (id in selected) selected - id else selected + id
+                                    // Deselecting the last one closes selection mode.
+                                    if (selected.isEmpty()) selecting = false
+                                } else {
+                                    player.skipTo(id)
+                                }
+                            },
+                            onLongClick = {
+                                if (!isCurrent) {
+                                    selecting = true
+                                    selected = selected + id
+                                }
+                            },
+                            handle = {
+                                if (!isCurrent && !selecting) {
+                                    Icon(
+                                        Icons.Rounded.DragHandle,
+                                        "Reorder",
+                                        tint = ZeneloColors.TextMuted,
+                                        modifier = Modifier
+                                            // Holding the handle still is a slow drag, not the row's long-press (select).
+                                            .pointerInput(Unit) { awaitEachGesture { awaitFirstDown(requireUnconsumed = false).consume() } }
+                                            .draggableHandle(
+                                                onDragStarted = { reordering = true },
+                                                onDragStopped = {
+                                                    val order = idsState.value
+                                                    val at = order.indexOf(id)
+                                                    // Dropped last in a wrapped (repeat-all) list = just before the current track.
+                                                    val before = order.getOrNull(at + 1)
+                                                        ?: liveCurrentId.value.takeIf { !showHistory && queue.size == queue.total && queue.history > 0 }
+                                                    player.moveInQueue(id, before)
+                                                    reordering = false
+                                                },
+                                            )
+                                            .padding(8.dp)
+                                            .size(24.dp),
+                                    )
+                                }
+                            },
+                        )
                     }
                 }
-                info?.durationMs?.takeIf { it > 0 }?.let {
-                    Text(formatDuration(it), style = MaterialTheme.typography.labelMedium, color = ZeneloColors.TextMuted)
-                }
-                IconButton(onClick = { player.removeFromQueue(offset) }, enabled = !isCurrent, modifier = Modifier.size(40.dp)) {
-                    Icon(
-                        Icons.Rounded.Close,
-                        "Remove",
-                        tint = if (isCurrent) ZeneloColors.Background else ZeneloColors.TextMuted,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
             }
+        }
+    }
+}
+
+private fun firstOffsetIndex(showHistory: Boolean, history: Int) = if (showHistory) history else 0
+
+@Composable
+private fun QueueHeader(
+    upcoming: Int,
+    selectedCount: Int,
+    selecting: Boolean,
+    onSelectMode: () -> Unit,
+    allSelected: Boolean,
+    onSelectAll: () -> Unit,
+    onClear: () -> Unit,
+    onDeleteSelected: () -> Unit,
+    onCancelSelection: () -> Unit,
+) {
+    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 4.dp).height(40.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (selecting) {
+            IconButton(onClick = onCancelSelection) { Icon(Icons.Rounded.Close, "Cancel selection", Modifier.size(20.dp)) }
+            Text("$selectedCount selected", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            IconButton(onClick = onSelectAll) {
+                Icon(
+                    if (allSelected) Icons.Outlined.Deselect else Icons.Outlined.SelectAll,
+                    if (allSelected) "Deselect all" else "Select all",
+                    tint = ZeneloColors.TextSecondary,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+            IconButton(onClick = onDeleteSelected, enabled = selectedCount > 0) {
+                Icon(Icons.Outlined.DeleteOutline, "Remove selected", tint = ZeneloColors.Danger, modifier = Modifier.size(22.dp))
+            }
+        } else {
+            Text("UP NEXT · $upcoming", style = MaterialTheme.typography.labelSmall, color = ZeneloColors.TextMuted, modifier = Modifier.weight(1f))
+            IconButton(onClick = onSelectMode, enabled = upcoming > 0) {
+                Icon(Icons.Outlined.Checklist, "Select", tint = ZeneloColors.TextSecondary, modifier = Modifier.size(20.dp))
+            }
+            IconButton(onClick = onClear, enabled = upcoming > 0) {
+                Icon(Icons.Outlined.Delete, "Clear queue", tint = ZeneloColors.TextSecondary, modifier = Modifier.size(22.dp))
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun QueueRow(
+    path: String,
+    revision: Int,
+    number: Int?,
+    isCurrent: Boolean,
+    played: Boolean,
+    dragging: Boolean,
+    selected: Boolean,
+    selecting: Boolean,
+    markLeft: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    handle: @Composable () -> Unit,
+) {
+    val queue = appContainer().queue
+    val info by produceState(queue.cachedInfo(path), path, revision) { value = queue.info(path) }
+    val accent = when {
+        isCurrent -> ZeneloColors.Celadon
+        played -> ZeneloColors.TextMuted
+        else -> null
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(
+                when {
+                    dragging -> ZeneloColors.Card
+                    selected -> ZeneloColors.MustardTint.compositeOver(ZeneloColors.Background)
+                    else -> ZeneloColors.Background
+                },
+            )
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .heightIn(min = 46.dp)
+            .padding(start = 20.dp, end = 4.dp, top = 3.dp, bottom = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // The playing track can't be selected: no mark on it.
+        val mark = selecting && !isCurrent
+        if (mark && markLeft) {
+            SelectionMark(selected, Modifier.padding(end = 14.dp))
+        } else {
+            Text(
+                number?.let { "%02d".format(it) } ?: "·",
+                style = MaterialTheme.typography.labelMedium,
+                color = accent ?: ZeneloColors.TextMuted,
+                modifier = Modifier.width(34.dp),
+            )
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                info?.title ?: path.substringAfterLast('/').substringBeforeLast('.'),
+                style = MaterialTheme.typography.bodyLarge,
+                color = accent ?: ZeneloColors.TextPrimary,
+                maxLines = 1,
+                modifier = Modifier.marquee(),
+            )
+            info?.artist?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = ZeneloColors.TextMuted, maxLines = 1)
+            }
+        }
+        info?.durationMs?.takeIf { it > 0 }?.let {
+            Text(formatDuration(it), style = MaterialTheme.typography.labelMedium, color = ZeneloColors.TextMuted, modifier = Modifier.padding(start = 8.dp))
+        }
+        Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+            if (mark && !markLeft) SelectionMark(selected) else handle()
         }
     }
 }
@@ -430,7 +682,7 @@ private fun TrackTitle(state: PlayerUiState, isFavorite: Boolean, onToggleFavori
                 state.title ?: "Nothing playing",
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.marquee(),
             )
             Text(
                 listOfNotNull(state.artist, state.album).joinToString(" · "),

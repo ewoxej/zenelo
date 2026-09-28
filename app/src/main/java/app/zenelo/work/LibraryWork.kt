@@ -12,9 +12,11 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import app.zenelo.ZeneloApp
+import app.zenelo.data.settings.NormalizationMode
 import app.zenelo.library.MetadataFetcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
@@ -22,6 +24,7 @@ import java.util.concurrent.TimeUnit
  * 1. [IndexWorker] reads tags of new/changed files (no network).
  * 2. [FetchWorker] downloads missing covers (one lookup per album, then embeds them) and lyrics.
  *    Runs only on an unmetered network, and re-checks Wi-Fi itself.
+ * 3. [LoudnessWorker] measures loudness of tracks without ReplayGain tags (battery not low).
  *
  * Both are idempotent: when WorkManager stops them (10 min cap) the next run continues where
  * this one left off.
@@ -30,6 +33,10 @@ object LibraryWork {
     private const val INDEX = "library-index"
     private const val FETCH = "library-fetch"
     private const val FETCH_PERIODIC = "library-fetch-periodic"
+
+    private const val LOUDNESS_PERIODIC = "library-loudness-periodic"
+
+    private val batteryOk = Constraints.Builder().setRequiresBatteryNotLow(true).build()
 
     private val wifi = Constraints.Builder()
         .setRequiredNetworkType(NetworkType.UNMETERED)
@@ -40,12 +47,17 @@ object LibraryWork {
     fun schedule(context: Context) {
         val wm = WorkManager.getInstance(context)
         wm.beginUniqueWork(INDEX, ExistingWorkPolicy.KEEP, OneTimeWorkRequestBuilder<IndexWorker>().build())
-            .then(OneTimeWorkRequestBuilder<FetchWorker>().setConstraints(wifi).build())
+            .then(listOf(fetchRequest(), loudnessRequest()))
             .enqueue()
         wm.enqueueUniquePeriodicWork(
             FETCH_PERIODIC,
             ExistingPeriodicWorkPolicy.KEEP,
             PeriodicWorkRequestBuilder<FetchWorker>(12, TimeUnit.HOURS).setConstraints(wifi).build(),
+        )
+        wm.enqueueUniquePeriodicWork(
+            LOUDNESS_PERIODIC,
+            ExistingPeriodicWorkPolicy.KEEP,
+            PeriodicWorkRequestBuilder<LoudnessWorker>(12, TimeUnit.HOURS).setConstraints(batteryOk).build(),
         )
     }
 
@@ -53,9 +65,13 @@ object LibraryWork {
     fun scanNow(context: Context) {
         WorkManager.getInstance(context)
             .beginUniqueWork(INDEX, ExistingWorkPolicy.REPLACE, OneTimeWorkRequestBuilder<IndexWorker>().build())
-            .then(OneTimeWorkRequestBuilder<FetchWorker>().setConstraints(wifi).build())
+            .then(listOf(fetchRequest(), loudnessRequest()))
             .enqueue()
     }
+
+    private fun fetchRequest() = OneTimeWorkRequestBuilder<FetchWorker>().setConstraints(wifi).build()
+
+    private fun loudnessRequest() = OneTimeWorkRequestBuilder<LoudnessWorker>().setConstraints(batteryOk).build()
 
     fun observeRunning(context: Context) =
         WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(INDEX)
@@ -65,7 +81,8 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
     override suspend fun doWork(): Result {
         if (!Environment.isExternalStorageManager()) return Result.success()
         val container = (applicationContext as ZeneloApp).container
-        container.indexer.indexAll(container.fileBrowser.roots().map { it.dir })
+        val home = container.settings.settings.first().homeFolder?.let(::File)
+        container.indexer.indexAll(container.fileBrowser.roots().map { it.dir }, first = home)
         return Result.success()
     }
 }
@@ -89,9 +106,21 @@ class FetchWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         val retryBefore = System.currentTimeMillis() - MetadataFetcher.RETRY_AFTER_MS
         for (track in container.db.tracks().needingLyrics(retryBefore)) {
             if (isStopped || !fetcher.onlineAllowed()) return Result.success()
-            if (track.title == null) continue
             fetcher.lyricsFor(track, allowNetwork = true)
             delay(300)
+        }
+        return Result.success()
+    }
+}
+
+class LoudnessWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+    override suspend fun doWork(): Result {
+        if (!Environment.isExternalStorageManager()) return Result.success()
+        val container = (applicationContext as ZeneloApp).container
+        if (container.settings.settings.first().normalization == NormalizationMode.OFF) return Result.success()
+        for (track in container.db.tracks().needingLoudness()) {
+            if (isStopped) break
+            container.loudness.ensureMeasured(track)
         }
         return Result.success()
     }
