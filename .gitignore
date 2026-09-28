@@ -1,0 +1,28 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build/
+/app/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+.kotlin/
+
+# Build outputs
+*.apk
+*.aab
+*.ap_
+*.dex
+/app/release/
+/app/debug/
+
+# Signing (never commit keystores)
+*.jks
+*.keystore
+
+# Logs / OS / editors
+*.log
+.vscode/
+Thumbs.db

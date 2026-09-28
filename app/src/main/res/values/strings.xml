@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Zenelo</string>
+    <string name="action_favorite">Favorite</string>
+    <string name="action_shuffle">Shuffle</string>
+</resources>
