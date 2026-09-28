@@ -70,7 +70,7 @@ class AppContainer(context: Context) {
     )
     val thumbnails = Thumbnails(context, db.tracks(), metadata)
     val loudness = LoudnessRepository(db)
-    val queue = PlayQueue(db.tracks(), metadata)
+    val queue = PlayQueue(db.tracks(), metadata, File(context.filesDir, "queue.txt"))
     val tagWriter = TagWriter(pendingWrites)
     val player = PlayerController(context, queue, coverOverride)
 

@@ -52,7 +52,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.work.WorkInfo
 import app.zenelo.data.db.LibraryStats
 import app.zenelo.work.LibraryWork
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -285,15 +284,21 @@ private fun LibraryStatus() {
     val stats by statsFlow.collectAsStateWithLifecycle(initialValue = LibraryStats(0, 0))
     val workFlow = remember { LibraryWork.observeRunning(context) }
     val work by workFlow.collectAsStateWithLifecycle(initialValue = emptyList())
-    val scanning = work.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
+    val stage = LibraryWork.stageOf(work)
+    val summary = "${stats.tracks} tracks · ${stats.withArtwork} with covers"
 
     ListRow(
         title = "Scan library now",
-        subtitle = "${stats.tracks} tracks · ${stats.withArtwork} with covers",
+        subtitle = when (stage) {
+            null -> summary
+            is LibraryWork.Stage.Scanning -> if (stage.total > 0) "Reading tags · ${stage.done} / ${stage.total}" else "Looking for new files…"
+            LibraryWork.Stage.Fetching -> "Downloading covers & lyrics…"
+            LibraryWork.Stage.Measuring -> "Measuring loudness…"
+        },
         onClick = { LibraryWork.scanNow(context) },
         leading = { IconTile(Icons.Outlined.Refresh, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
         trailing = {
-            if (scanning) {
+            if (stage != null) {
                 CircularProgressIndicator(color = ZeneloColors.Mustard, strokeWidth = 2.dp, modifier = Modifier.padding(12.dp).size(18.dp))
             }
         },

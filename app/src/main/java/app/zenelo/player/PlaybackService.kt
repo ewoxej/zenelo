@@ -35,6 +35,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
@@ -59,6 +60,10 @@ class PlaybackService : MediaSessionService() {
     private var currentIsFavorite = false
     private var favoriteJob: Job? = null
     private var metadataJob: Job? = null
+    private var positionJob: Job? = null
+
+    private fun savePosition(now: Boolean = false) =
+        container.queue.savePosition(player.currentMediaItem?.mediaId, player.currentPosition, now)
 
     override fun onCreate() {
         super.onCreate()
@@ -75,6 +80,14 @@ class PlaybackService : MediaSessionService() {
             .build()
         player.addListener(PlayerListener())
         container.queue.attach(player)
+        // Last session's queue, paused where it was.
+        container.queue.restore()
+        positionJob = scope.launch {
+            while (true) {
+                delay(POSITION_SAVE_MS)
+                if (player.isPlaying) savePosition()
+            }
+        }
 
         session = MediaSession.Builder(this, player)
             .setCallback(SessionCallback())
@@ -104,6 +117,8 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        positionJob?.cancel()
+        savePosition(now = true)
         // Nothing plays any more: every waiting write can go to its file.
         container.nowPlaying.value = null
         flushPendingWrites()
@@ -123,9 +138,10 @@ class PlaybackService : MediaSessionService() {
             .setIconResId(if (currentIsFavorite) R.drawable.ic_notif_heart_filled else R.drawable.ic_notif_heart)
             .setSessionCommand(CMD_FAVORITE)
             .build()
+        val shuffleOn = player.shuffleModeEnabled
         val shuffle = CommandButton.Builder()
             .setDisplayName(getString(R.string.action_shuffle))
-            .setIconResId(R.drawable.ic_notif_shuffle)
+            .setIconResId(if (shuffleOn) R.drawable.ic_notif_shuffle_on else R.drawable.ic_notif_shuffle)
             .setSessionCommand(CMD_SHUFFLE)
             .build()
         session?.setCustomLayout(listOf(favorite, shuffle))
@@ -176,6 +192,17 @@ class PlaybackService : MediaSessionService() {
 
     private inner class PlayerListener : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = onTrackChanged(mediaItem)
+
+        // The notification's shuffle button shows the mode, whoever changed it.
+        override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) = updateCustomLayout()
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (!isPlaying) savePosition()
+        }
+
+        override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+            if (reason == Player.DISCONTINUITY_REASON_SEEK && !player.isPlaying) savePosition()
+        }
 
         // The last track of the queue finished: its file is free, write what waited for it.
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -249,6 +276,9 @@ class PlaybackService : MediaSessionService() {
         /** ReplayGain 2.0 reference level. */
         const val TARGET_LUFS = -18f
         const val MAX_GAIN_DB = 12f
+
+        /** How often the position is saved while playing (a kill loses at most this much). */
+        const val POSITION_SAVE_MS = 10_000L
     }
 }
 

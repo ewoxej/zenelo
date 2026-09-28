@@ -246,7 +246,21 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
 
     private fun visibleFiles() = _state.value.visibleFiles(settings.value.browserSort)
 
-    fun playFolder(shuffle: Boolean) = player.playFiles(visibleFiles(), shuffle = if (shuffle) true else null)
+    /**
+     * The play button. Paused on a track of this folder: carries on from there. Otherwise plays the
+     * folder from the top ([shuffle]: shuffled).
+     */
+    fun playFolder(shuffle: Boolean) {
+        val current = player.state.value.mediaId
+        val dir = _state.value.dir
+        if (!shuffle && current != null && dir != null && File(current).parentFile == dir) {
+            player.play()
+        } else {
+            player.playFiles(visibleFiles(), shuffle = if (shuffle) true else null)
+        }
+    }
+
+    fun stop() = player.stop()
 
     fun playFrom(file: AudioFile) {
         val files = visibleFiles()

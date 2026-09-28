@@ -13,7 +13,11 @@ import app.zenelo.library.AudioFile
 import app.zenelo.library.MetadataFetcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -65,12 +69,19 @@ data class QueueSnapshot(
  *   plays the window as laid out.
  * - repeat-all: positions are "virtual" (they keep counting past the end and wrap modulo the queue
  *   size), so the window just continues from the start; the player never reaches its own end.
+ *
+ * The queue (with its shuffle order, the current track, shuffle and repeat) is saved to [stateFile]
+ * after every change, the playback position next to it; [restore] brings it back, paused, when
+ * the service starts.
  */
 @OptIn(UnstableApi::class)
-class PlayQueue(private val tracks: TrackDao, private val fetcher: MetadataFetcher) {
+class PlayQueue(private val tracks: TrackDao, private val fetcher: MetadataFetcher, private val stateFile: File) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
+    private val positionFile = File(stateFile.path + ".position")
+    private var saveJob: Job? = null
     private var player: ExoPlayer? = null
 
     private var paths: List<String> = emptyList()
@@ -155,6 +166,37 @@ class PlayQueue(private val tracks: TrackDao, private val fetcher: MetadataFetch
         publish()
     }
 
+    /**
+     * Brings back the saved queue, paused at the saved position (service start). Does nothing if
+     * the player already has items or nothing was saved.
+     */
+    fun restore() = launchLocked {
+        val p = player ?: return@launchLocked
+        if (p.mediaItemCount > 0 || order.isNotEmpty()) return@launchLocked
+        val saved = withContext(Dispatchers.IO) { SavedQueue.read(stateFile, positionFile) } ?: return@launchLocked
+        paths = saved.paths
+        order = saved.order
+        current = saved.current.toLong()
+        // Flags first: the window depends on repeat, and matching [shuffled] keeps the order as saved.
+        shuffled = saved.shuffle
+        p.shuffleModeEnabled = saved.shuffle
+        p.repeatMode = saved.repeatMode
+        val positions = windowAround(current)
+        val items = buildItems(positions)
+        window.clear()
+        window.addAll(positions)
+        p.setMediaItems(items, positions.indexOf(current), saved.positionMs)
+        p.prepare()
+        publish()
+    }
+
+    /** Remembers where playback is in the current track; [now] writes on the calling thread (service shutdown). */
+    fun savePosition(path: String?, positionMs: Long, now: Boolean = false) {
+        if (path == null) return
+        val write = { runCatching { SavedQueue.writePosition(positionFile, path, positionMs) } }
+        if (now) write() else io.launch { write() }
+    }
+
     /** Appends to the end of the queue. Returns the first one's position as shown in the queue (current = 1). */
     fun add(files: List<AudioFile>): Int {
         if (player == null || files.isEmpty()) return 0
@@ -189,6 +231,23 @@ class PlayQueue(private val tracks: TrackDao, private val fetcher: MetadataFetch
         order = order.filter { it == keep || it !in ids }
         current = order.indexOf(keep).toLong()
         rebuildAroundCurrent()
+    }
+
+    /** Stops playback and empties the queue (nothing to restore next launch either). */
+    fun stop() = launchLocked {
+        val p = player ?: return@launchLocked
+        p.stop()
+        p.clearMediaItems()
+        paths = emptyList()
+        order = emptyList()
+        current = 0
+        window.clear()
+        saveJob?.cancel()
+        publish()
+        withContext(Dispatchers.IO) {
+            stateFile.delete()
+            positionFile.delete()
+        }
     }
 
     /** Leaves only the current track. */
@@ -352,6 +411,19 @@ class PlayQueue(private val tracks: TrackDao, private val fetcher: MetadataFetch
             QueueSnapshot.EMPTY
         } else {
             QueueSnapshot(paths, order, (current % order.size).toInt(), repeatAll(), revision)
+        }
+        scheduleSave()
+    }
+
+    /** Writes the queue shortly after it changes (a burst of edits is written once). */
+    private fun scheduleSave() {
+        // Never save an empty queue: that's the state before [restore] and would wipe the saved one.
+        if (order.isEmpty()) return
+        val snapshot = SavedQueue(paths, order, (current % order.size).toInt(), shuffled, player?.repeatMode ?: Player.REPEAT_MODE_OFF)
+        saveJob?.cancel()
+        saveJob = io.launch {
+            delay(500)
+            runCatching { snapshot.write(stateFile) }
         }
     }
 

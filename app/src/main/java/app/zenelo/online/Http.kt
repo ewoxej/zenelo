@@ -56,7 +56,7 @@ class Http(context: Context) {
 
     companion object {
         // TODO: MusicBrainz asks for contact info in the UA; add a project URL once there is one.
-        const val USER_AGENT = "Zenelo/0.1.0 (Android audio player)"
+        const val USER_AGENT = "Zenelo/1.0.0 (Android audio player)"
     }
 }
 

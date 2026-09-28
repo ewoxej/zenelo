@@ -10,7 +10,9 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.work.WorkInfo
 import androidx.work.WorkerParameters
+import androidx.work.workDataOf
 import app.zenelo.ZeneloApp
 import app.zenelo.data.settings.NormalizationMode
 import app.zenelo.library.MetadataFetcher
@@ -75,6 +77,32 @@ object LibraryWork {
 
     fun observeRunning(context: Context) =
         WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(INDEX)
+
+    /** What the library pass is doing right now, for settings; null when nothing runs. */
+    sealed interface Stage {
+        /** Reading tags: [done] of [total] new or changed files (0 / 0 while walking the folders). */
+        data class Scanning(val done: Int, val total: Int) : Stage
+        data object Fetching : Stage
+        data object Measuring : Stage
+    }
+
+    /**
+     * The running stage of the "library-index" chain. Covers / lyrics and loudness wait for Wi-Fi and
+     * battery and can take long: only a stage that actually runs counts, a waiting one isn't shown.
+     */
+    fun stageOf(infos: List<WorkInfo>): Stage? {
+        fun of(worker: Class<*>) = infos.firstOrNull { worker.name in it.tags }
+        val index = of(IndexWorker::class.java)
+        if (index != null && (index.state == WorkInfo.State.RUNNING || index.state == WorkInfo.State.ENQUEUED)) {
+            return Stage.Scanning(index.progress.getInt(PROGRESS_DONE, 0), index.progress.getInt(PROGRESS_TOTAL, 0))
+        }
+        if (of(FetchWorker::class.java)?.state == WorkInfo.State.RUNNING) return Stage.Fetching
+        if (of(LoudnessWorker::class.java)?.state == WorkInfo.State.RUNNING) return Stage.Measuring
+        return null
+    }
+
+    internal const val PROGRESS_DONE = "done"
+    internal const val PROGRESS_TOTAL = "total"
 }
 
 class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
@@ -82,7 +110,9 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         if (!Environment.isExternalStorageManager()) return Result.success()
         val container = (applicationContext as ZeneloApp).container
         val home = container.settings.settings.first().homeFolder?.let(::File)
-        container.indexer.indexAll(container.fileBrowser.roots().map { it.dir }, first = home)
+        container.indexer.indexAll(container.fileBrowser.roots().map { it.dir }, first = home) { done, total ->
+            setProgress(workDataOf(LibraryWork.PROGRESS_DONE to done, LibraryWork.PROGRESS_TOTAL to total))
+        }
         return Result.success()
     }
 }

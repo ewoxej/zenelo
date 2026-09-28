@@ -125,6 +125,11 @@ class PlayerController(
 
     fun togglePlay() = controller?.run { if (isPlaying) pause() else play() }
 
+    fun play() = controller?.play()
+
+    /** Stops and clears the queue. */
+    fun stop() = queue.stop()
+
     fun next() = controller?.seekToNext()
 
     fun previous() = controller?.seekToPrevious()

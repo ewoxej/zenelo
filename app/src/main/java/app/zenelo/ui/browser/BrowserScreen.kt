@@ -21,8 +21,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.outlined.Deselect
-import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Image
@@ -35,6 +33,7 @@ import androidx.compose.material.icons.rounded.SortByAlpha
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.ui.graphics.Color
 import app.zenelo.data.settings.BrowserSort
 import androidx.compose.material3.AlertDialog
@@ -70,6 +69,7 @@ import app.zenelo.ui.components.ListRow
 import app.zenelo.ui.components.PlayFab
 import app.zenelo.ui.components.SearchField
 import app.zenelo.ui.components.SelectionMark
+import app.zenelo.ui.components.SelectAllIcon
 import app.zenelo.data.settings.SelectionMarkerSide
 import app.zenelo.ui.components.SectionHeader
 import app.zenelo.ui.components.SwipeableRow
@@ -108,7 +108,10 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
         selected = emptySet()
     }
 
-    BackHandler(enabled = isActive && (selecting || state.searching || state.canGoUp)) {
+    // The home folder is where "up" stops: no back button there, and system back leaves the app.
+    val atHome = state.dir?.absolutePath == settings.homeFolder
+    val canGoUp = state.canGoUp && !atHome
+    BackHandler(enabled = isActive && (selecting || state.searching || canGoUp)) {
         when {
             selecting -> exitSelection()
             state.searching -> viewModel.setSearching(false)
@@ -189,7 +192,7 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
                 // Same height as the normal top bar, so the list doesn't jump under the finger.
                 Breadcrumb(state, viewModel)
             } else {
-                TopBar(state, sort, viewModel)
+                TopBar(state, canGoUp, sort, viewModel)
             }
             LazyColumn(Modifier.weight(1f), state = listState, contentPadding = PaddingValues(bottom = 80.dp)) {
                 if (folders.isNotEmpty()) {
@@ -247,13 +250,23 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
             }
         }
 
-        // Hidden while something plays. Tap: play the folder. Long-press: shuffle it.
-        if (files.isNotEmpty() && !isPlaying && !selecting && snackbar.currentSnackbarData == null) {
-            PlayFab(
-                onClick = { viewModel.playFolder(shuffle = false) },
-                onLongClick = { viewModel.playFolder(shuffle = true) },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
-            )
+        // Playing: stop (and clear the queue). Otherwise tap: play the folder (or resume it if
+        // paused on one of its tracks); long-press: shuffle it.
+        if (!selecting && snackbar.currentSnackbarData == null) {
+            if (isPlaying) {
+                PlayFab(
+                    onClick = viewModel::stop,
+                    icon = Icons.Rounded.Stop,
+                    description = "Stop",
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+                )
+            } else if (files.isNotEmpty()) {
+                PlayFab(
+                    onClick = { viewModel.playFolder(shuffle = false) },
+                    onLongClick = { viewModel.playFolder(shuffle = true) },
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+                )
+            }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter)) { ZeneloSnackbar(it, snackbarIcon) }
     }
@@ -308,10 +321,10 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun TopBar(state: BrowserState, sort: BrowserSort, viewModel: BrowserViewModel) {
+private fun TopBar(state: BrowserState, canGoUp: Boolean, sort: BrowserSort, viewModel: BrowserViewModel) {
     Column(Modifier.padding(top = 4.dp)) {
         Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (state.canGoUp) {
+            if (canGoUp) {
                 IconButton(onClick = viewModel::goUp, modifier = Modifier.size(40.dp)) {
                     Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Up", modifier = Modifier.size(20.dp))
                 }
@@ -509,12 +522,7 @@ private fun SelectionBar(
         IconButton(onClick = onClose, modifier = Modifier.size(40.dp)) { Icon(Icons.Rounded.Close, "Cancel selection", Modifier.size(20.dp)) }
         Text("$count", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f).padding(start = 4.dp))
         IconButton(onClick = onSelectAll, modifier = Modifier.size(40.dp)) {
-            Icon(
-                if (allSelected) Icons.Outlined.Deselect else Icons.Outlined.SelectAll,
-                if (allSelected) "Deselect all" else "Select all",
-                tint = ZeneloColors.TextSecondary,
-                modifier = Modifier.size(22.dp),
-            )
+            SelectAllIcon(allSelected)
         }
         for (action in listOf(SwipeAction.PLAY_NEXT, SwipeAction.ADD_TO_QUEUE, SwipeAction.FAVORITE)) {
             IconButton(onClick = { onAction(action) }, enabled = count > 0, modifier = Modifier.size(40.dp)) {

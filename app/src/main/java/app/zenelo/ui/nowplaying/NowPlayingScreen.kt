@@ -30,6 +30,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import app.zenelo.data.settings.PullDownArea
 import app.zenelo.data.settings.SelectionMarkerSide
 import app.zenelo.ui.components.SelectionMark
+import app.zenelo.ui.components.SelectAllIcon
 import kotlinx.coroutines.flow.map
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.pager.PagerDefaults
@@ -88,12 +89,8 @@ import app.zenelo.data.db.TrackEntity
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.outlined.Checklist
-import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Deselect
-import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.DeleteOutline
-import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DragHandle
 import androidx.compose.ui.graphics.compositeOver
 import app.zenelo.data.settings.QueueSwipeAction
@@ -332,6 +329,8 @@ private fun LyricsPage(state: PlayerUiState, player: PlayerController) {
             Text(
                 when {
                     lyrics?.instrumental == true -> "Instrumental"
+                    // Looked up (online, by tags and file name) and nothing was found.
+                    lyrics != null -> "Lyrics not found"
                     else -> "No lyrics yet\nThey download over Wi-Fi when available."
                 },
                 style = MaterialTheme.typography.bodyMedium,
@@ -560,12 +559,7 @@ private fun QueueHeader(
             IconButton(onClick = onCancelSelection) { Icon(Icons.Rounded.Close, "Cancel selection", Modifier.size(20.dp)) }
             Text("$selectedCount selected", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
             IconButton(onClick = onSelectAll) {
-                Icon(
-                    if (allSelected) Icons.Outlined.Deselect else Icons.Outlined.SelectAll,
-                    if (allSelected) "Deselect all" else "Select all",
-                    tint = ZeneloColors.TextSecondary,
-                    modifier = Modifier.size(22.dp),
-                )
+                SelectAllIcon(allSelected)
             }
             IconButton(onClick = onDeleteSelected, enabled = selectedCount > 0) {
                 Icon(Icons.Outlined.DeleteOutline, "Remove selected", tint = ZeneloColors.Danger, modifier = Modifier.size(22.dp))

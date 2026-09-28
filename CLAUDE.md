@@ -48,6 +48,10 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player.
 - Multi-select (browser: folders + files, queue): long-press selects; the check mark side is a
   setting (`SelectionMarkerSide`). Queue drag handles swallow their down event so holding one
   still doesn't long-press the row.
+- Playback state survives restarts: `PlayQueue` writes the queue (paths, shuffle order, current,
+  shuffle, repeat) to `files/queue.txt` 500 ms after each change (`SavedQueue`), the position to
+  `queue.txt.position` (on pause, seek, every 10 s, service stop); `PlaybackService.onCreate`
+  calls `queue.restore()`, which loads it paused. Never save an empty queue (the pre-restore state).
 - Reorderable lists (queue, patterns): keep ONE state object for the list for the composable's
   lifetime — the reorder library keeps its first onMove lambda, so re-created state breaks drags.
 - Queue: `PlayQueue` owns the full queue; ExoPlayer only holds a window (10 back, current, ~30

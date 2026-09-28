@@ -165,7 +165,8 @@ class MetadataFetcher(
             if (track.title != null && artist != null) add(Triple(track.title, artist, track.album))
             guess(track)?.let { g -> if (g.title != null && g.artist != null) add(Triple(g.title, g.artist, g.album)) }
         }.distinct()
-        if (attempts.isEmpty()) return@withContext cached
+        // Nothing to search by (no tags, no pattern match): as good as not found.
+        if (attempts.isEmpty()) return@withContext LyricsEntity(track.path, null, null, false, SOURCE_LRCLIB, now()).also { lyrics.upsert(it) }
         var result: FoundLyrics? = null
         for ((title, artist, album) in attempts) {
             val found = lrcLib.find(title, artist, album, seconds) ?: return@withContext cached // offline: retry later

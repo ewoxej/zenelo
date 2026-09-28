@@ -10,6 +10,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.horizontalDrag
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -29,6 +30,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material.icons.outlined.MusicNote
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.CheckBox
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.GraphicEq
@@ -192,10 +195,36 @@ fun SelectionMark(selected: Boolean, modifier: Modifier = Modifier) {
     )
 }
 
+/**
+ * Select all / deselect all button icon: a check in a square. Select all: accent square with the
+ * check cut out; deselect all ([allSelected]): white check in a white outline.
+ */
+@Composable
+fun SelectAllIcon(allSelected: Boolean) {
+    if (allSelected) {
+        Box(
+            Modifier
+                .size(17.dp)
+                .border(1.8.dp, ZeneloColors.TextPrimary, RoundedCornerShape(3.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.Check, "Deselect all", tint = ZeneloColors.TextPrimary, modifier = Modifier.size(14.dp))
+        }
+    } else {
+        Icon(Icons.Rounded.CheckBox, "Select all", tint = ZeneloColors.Mustard, modifier = Modifier.size(22.dp))
+    }
+}
+
 /** Mustard round play button in the bottom-right corner. Long-press for the alternate action. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun PlayFab(onClick: () -> Unit, modifier: Modifier = Modifier, onLongClick: (() -> Unit)? = null) {
+fun PlayFab(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
+    icon: ImageVector = Icons.Rounded.PlayArrow,
+    description: String = "Play",
+) {
     Box(
         modifier
             .size(52.dp)
@@ -204,7 +233,7 @@ fun PlayFab(onClick: () -> Unit, modifier: Modifier = Modifier, onLongClick: (()
             .combinedClickable(onClick = onClick, onLongClick = onLongClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(Icons.Rounded.PlayArrow, "Play", tint = ZeneloColors.OnMustard, modifier = Modifier.size(28.dp))
+        Icon(icon, description, tint = ZeneloColors.OnMustard, modifier = Modifier.size(28.dp))
     }
 }
 

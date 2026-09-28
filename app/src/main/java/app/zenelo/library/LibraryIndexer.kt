@@ -38,7 +38,11 @@ class LibraryIndexer(db: ZeneloDatabase) {
      * new/changed files (those under [first], the home folder, before the rest) and drops rows for
      * files that are gone.
      */
-    suspend fun indexAll(roots: List<File>, first: File? = null) = withContext(Dispatchers.IO) {
+    suspend fun indexAll(
+        roots: List<File>,
+        first: File? = null,
+        onProgress: suspend (done: Int, total: Int) -> Unit = { _, _ -> },
+    ) = withContext(Dispatchers.IO) {
         val found = HashMap<String, Pair<Long, Long>>()
         roots.forEach { walk(it, found) }
         ensureActive()
@@ -51,11 +55,12 @@ class LibraryIndexer(db: ZeneloDatabase) {
             .sortedBy { first == null || !it.path.startsWith(first.path + "/") }
         val removed = stamps.keys.filter { path -> path !in found && roots.any { path.startsWith(it.path + "/") } }
         removed.chunked(QUERY_CHUNK).forEach { tracks.delete(it) }
-        readAndStore(changed)
+        readAndStore(changed, onProgress)
     }
 
-    private suspend fun readAndStore(files: List<File>) {
-        for (batch in files.chunked(BATCH)) {
+    private suspend fun readAndStore(files: List<File>, onProgress: suspend (Int, Int) -> Unit = { _, _ -> }) {
+        for ((index, batch) in files.chunked(BATCH).withIndex()) {
+            onProgress(index * BATCH, files.size)
             kotlin.coroutines.coroutineContext.ensureActive()
             val read = batch.map(TagReader::read)
             tracks.upsert(read.map { it.track })
