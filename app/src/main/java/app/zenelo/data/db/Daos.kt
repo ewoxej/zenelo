@@ -24,6 +24,15 @@ abstract class FavoriteDao {
     @Query("DELETE FROM favorites WHERE path = :path")
     abstract suspend fun delete(path: String)
 
+    @Query("SELECT * FROM favorites")
+    abstract suspend fun all(): List<FavoriteEntity>
+
+    @Query("DELETE FROM favorites")
+    abstract suspend fun deleteAll()
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    abstract suspend fun insertAll(favorites: List<FavoriteEntity>)
+
     /** Returns true if the item is a favorite after the call. */
     @Transaction
     open suspend fun toggle(favorite: FavoriteEntity): Boolean {
@@ -41,7 +50,8 @@ abstract class PlaylistDao {
     @Query(
         """
         SELECT p.id, p.name, p.createdAt,
-               (SELECT COUNT(*) FROM playlist_entries e WHERE e.playlistId = p.id) AS trackCount
+               (SELECT COUNT(*) FROM playlist_entries e WHERE e.playlistId = p.id) AS trackCount,
+               (SELECT e.path FROM playlist_entries e WHERE e.playlistId = p.id ORDER BY e.position LIMIT 1) AS coverPath
         FROM playlists p ORDER BY p.createdAt DESC
         """,
     )
@@ -65,6 +75,64 @@ abstract class PlaylistDao {
     @Transaction
     open suspend fun append(playlistId: Long, path: String) {
         insertEntry(PlaylistEntryEntity(playlistId, nextPosition(playlistId), path))
+    }
+
+    @Query("SELECT * FROM playlists WHERE id = :playlistId")
+    abstract fun observe(playlistId: Long): Flow<PlaylistEntity?>
+
+    @Query(
+        """
+        SELECT e.position AS position, e.path AS path, t.title AS title, t.artist AS artist,
+               t.album AS album, t.durationMs AS durationMs
+        FROM playlist_entries e LEFT JOIN tracks t ON t.path = e.path
+        WHERE e.playlistId = :playlistId ORDER BY e.position
+        """,
+    )
+    abstract fun observeTracks(playlistId: Long): Flow<List<PlaylistTrack>>
+
+    @Query("SELECT path FROM playlist_entries WHERE playlistId = :playlistId ORDER BY position")
+    abstract suspend fun paths(playlistId: Long): List<String>
+
+    @Query("UPDATE playlists SET name = :name WHERE id = :playlistId")
+    abstract suspend fun rename(playlistId: Long, name: String)
+
+    @Query("DELETE FROM playlist_entries WHERE playlistId = :playlistId")
+    abstract suspend fun clear(playlistId: Long)
+
+    @Insert
+    abstract suspend fun insertEntries(entries: List<PlaylistEntryEntity>)
+
+    @Transaction
+    open suspend fun appendAll(playlistId: Long, paths: List<String>) {
+        val start = nextPosition(playlistId)
+        insertEntries(paths.mapIndexed { i, path -> PlaylistEntryEntity(playlistId, start + i, path) })
+    }
+
+    @Query("SELECT * FROM playlists ORDER BY createdAt")
+    abstract suspend fun all(): List<PlaylistEntity>
+
+    @Query("SELECT * FROM playlist_entries ORDER BY playlistId, position")
+    abstract suspend fun allEntries(): List<PlaylistEntryEntity>
+
+    @Query("DELETE FROM playlist_entries")
+    abstract suspend fun deleteAllEntries()
+
+    @Query("DELETE FROM playlists")
+    abstract suspend fun deleteAllPlaylists()
+
+    /** A new playlist holding [paths]; returns its id. */
+    @Transaction
+    open suspend fun create(name: String, paths: List<String>, createdAt: Long = System.currentTimeMillis()): Long {
+        val id = insert(PlaylistEntity(name = name, createdAt = createdAt))
+        insertEntries(paths.mapIndexed { i, path -> PlaylistEntryEntity(id, i, path) })
+        return id
+    }
+
+    /** Rewrites the playlist as [paths] (reorder, removal): positions become 0..n-1. */
+    @Transaction
+    open suspend fun replace(playlistId: Long, paths: List<String>) {
+        clear(playlistId)
+        insertEntries(paths.mapIndexed { i, path -> PlaylistEntryEntity(playlistId, i, path) })
     }
 }
 
@@ -96,6 +164,10 @@ interface TrackDao {
 
     @Query("SELECT * FROM tracks WHERE path = :path")
     fun observe(path: String): Flow<TrackEntity?>
+
+    /** Paths ending in "/[name]" (LIKE: `_` / `%` in the name match loosely; callers check). */
+    @Query("SELECT path FROM tracks WHERE path LIKE '%/' || :name")
+    suspend fun pathsNamed(name: String): List<String>
 
     @Query("SELECT * FROM tracks WHERE dir = :dir")
     fun observeInDir(dir: String): Flow<List<TrackEntity>>
@@ -137,6 +209,22 @@ interface TrackDao {
     )
     fun observeDirStats(from: String, to: String): Flow<List<DirStats>>
 
+    @Query("SELECT * FROM tracks")
+    fun observeAll(): Flow<List<TrackEntity>>
+
+    @Query(
+        """
+        SELECT albumKey AS `key`, MAX(album) AS album, MAX(COALESCE(albumArtist, artist)) AS artist,
+               COUNT(*) AS tracks, COALESCE(SUM(durationMs), 0) AS durationMs, MAX(modified) AS added,
+               COALESCE(MIN(CASE WHEN hasArtwork = 1 THEN path END), MIN(path)) AS coverPath
+        FROM tracks WHERE albumKey IS NOT NULL AND album IS NOT NULL GROUP BY albumKey
+        """,
+    )
+    fun observeAlbums(): Flow<List<AlbumRow>>
+
+    @Query("SELECT * FROM tracks WHERE albumKey = :albumKey ORDER BY trackNumber IS NULL, trackNumber, path")
+    fun observeAlbumTracks(albumKey: String): Flow<List<TrackEntity>>
+
     @Query("SELECT COUNT(*) AS tracks, COALESCE(SUM(hasArtwork), 0) AS withArtwork FROM tracks")
     fun observeStats(): Flow<LibraryStats>
 
@@ -145,6 +233,38 @@ interface TrackDao {
 
     @Query("DELETE FROM tracks WHERE path IN (:paths)")
     suspend fun delete(paths: List<String>)
+}
+
+@Dao
+interface PlayDao {
+    @Insert
+    suspend fun insert(play: PlayEntity)
+
+    /** Latest play of each track since [since], newest first. */
+    @Query(
+        """
+        SELECT p.path AS path, MAX(p.playedAt) AS playedAt, t.title AS title, t.artist AS artist,
+               t.album AS album, t.durationMs AS durationMs
+        FROM plays p LEFT JOIN tracks t ON t.path = p.path
+        WHERE p.playedAt >= :since GROUP BY p.path ORDER BY playedAt DESC
+        """,
+    )
+    fun observeSince(since: Long): Flow<List<RecentPlay>>
+
+    @Query("SELECT DISTINCT path FROM plays WHERE playedAt >= :since")
+    suspend fun pathsSince(since: Long): List<String>
+
+    @Query("SELECT * FROM plays ORDER BY playedAt")
+    suspend fun all(): List<PlayEntity>
+
+    @Query("DELETE FROM plays")
+    suspend fun deleteAll()
+
+    @Insert
+    suspend fun insertAll(plays: List<PlayEntity>)
+
+    @Query("DELETE FROM plays WHERE playedAt < :before")
+    suspend fun prune(before: Long)
 }
 
 @Dao

@@ -2,9 +2,12 @@ package app.zenelo
 
 import android.app.Application
 import android.content.Context
+import app.zenelo.data.Backup
 import app.zenelo.data.db.ZeneloDatabase
 import app.zenelo.data.settings.SettingsRepository
 import app.zenelo.library.FileSystemBrowser
+import app.zenelo.library.PlaylistFiles
+import app.zenelo.library.Library
 import app.zenelo.library.LibraryIndexer
 import app.zenelo.library.LoudnessRepository
 import app.zenelo.library.MetadataFetcher
@@ -15,6 +18,7 @@ import app.zenelo.online.CoverSources
 import app.zenelo.online.Http
 import app.zenelo.online.LrcLib
 import app.zenelo.player.PlayQueue
+import app.zenelo.player.PlaylistPicker
 import app.zenelo.player.PlayerController
 import app.zenelo.work.LibraryWork
 import kotlinx.coroutines.CoroutineScope
@@ -22,14 +26,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.io.File
 
 class ZeneloApp : Application() {
-    val container by lazy { AppContainer(this) }
+    /** The database predates this start (checked before anything opens it): not a fresh install. */
+    private var upgradedInstall = false
+    val container by lazy { AppContainer(this, upgradedInstall) }
 
     override fun onCreate() {
         super.onCreate()
+        upgradedInstall = getDatabasePath(ZeneloDatabase.NAME).exists()
         LibraryWork.schedule(this)
         // Writes that waited for a track to end when the app was killed: nothing plays yet, apply them.
         container.appScope.launch { container.pendingWrites.flush() }
@@ -37,9 +45,9 @@ class ZeneloApp : Application() {
 }
 
 /** Manual DI: app-wide singletons. */
-class AppContainer(context: Context) {
+class AppContainer(context: Context, upgradedInstall: Boolean) {
     val db = ZeneloDatabase.create(context)
-    val settings = SettingsRepository(context)
+    val settings = SettingsRepository(context, upgradedInstall)
     val fileBrowser = FileSystemBrowser(context)
     /** Path of the track the service is playing; files in use are never rewritten. */
     val nowPlaying = MutableStateFlow<String?>(null)
@@ -70,8 +78,12 @@ class AppContainer(context: Context) {
     )
     val thumbnails = Thumbnails(context, db.tracks(), metadata)
     val loudness = LoudnessRepository(db)
-    val queue = PlayQueue(db.tracks(), metadata, File(context.filesDir, "queue.txt"))
+    val library = Library(db, settings.settings.map { it.artistSplitter })
+    val queue = PlayQueue(db.tracks(), db.plays(), settings.settings, metadata, File(context.filesDir, "queue.txt"))
     val tagWriter = TagWriter(pendingWrites)
+    val playlistPicker = PlaylistPicker()
+    val playlistFiles = PlaylistFiles(context, db)
+    val backup = Backup(context, db, settings)
     val player = PlayerController(context, queue, coverOverride)
 
     /** Refreshes the queue / Now Playing (tags) and the thumbnails / Now Playing cover after a write. */

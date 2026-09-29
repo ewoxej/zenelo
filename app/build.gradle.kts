@@ -99,6 +99,8 @@ dependencies {
     implementation(libs.reorderable)
 
     testImplementation(libs.junit)
+    // Android's org.json is a stub in local unit tests (BackupFormat).
+    testImplementation("org.json:json:20240303")
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.guava)
 }

@@ -7,7 +7,10 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ShuffleOrder
+import app.zenelo.data.db.PlayDao
 import app.zenelo.data.db.TrackDao
+import app.zenelo.data.settings.ZeneloSettings
+import app.zenelo.library.artistKey
 import app.zenelo.data.db.TrackEntity
 import app.zenelo.library.AudioFile
 import app.zenelo.library.MetadataFetcher
@@ -18,7 +21,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -75,7 +83,13 @@ data class QueueSnapshot(
  * the service starts.
  */
 @OptIn(UnstableApi::class)
-class PlayQueue(private val tracks: TrackDao, private val fetcher: MetadataFetcher, private val stateFile: File) {
+class PlayQueue(
+    private val tracks: TrackDao,
+    private val plays: PlayDao,
+    private val settings: Flow<ZeneloSettings>,
+    private val fetcher: MetadataFetcher,
+    private val stateFile: File,
+) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -119,9 +133,19 @@ class PlayQueue(private val tracks: TrackDao, private val fetcher: MetadataFetch
         player = exoPlayer
         exoPlayer.setShuffleOrder(ShuffleOrder.UnshuffledShuffleOrder(0))
         exoPlayer.addListener(listener)
+        // A new shuffle mode reshuffles the queue if it's shuffled now.
+        modeJob?.cancel()
+        modeJob = scope.launch {
+            settings.map { it.shuffleMode }.distinctUntilChanged().drop(1).collect {
+                mutex.withLock { if (shuffled) reorder(true) }
+            }
+        }
     }
 
+    private var modeJob: Job? = null
+
     fun detach() {
+        modeJob?.cancel()
         player?.removeListener(listener)
         player = null
     }
@@ -151,7 +175,7 @@ class PlayQueue(private val tracks: TrackDao, private val fetcher: MetadataFetch
         val start = startIndex.coerceIn(files.indices)
         val shuffleOn = shuffle ?: p.shuffleModeEnabled
         paths = files.map { it.path }
-        order = if (shuffleOn) listOf(start) + (paths.indices - start).shuffled() else paths.indices.toList()
+        order = if (shuffleOn) shuffledOrder(start) else paths.indices.toList()
         current = order.indexOf(start).toLong()
 
         val positions = windowAround(current)
@@ -346,10 +370,33 @@ class PlayQueue(private val tracks: TrackDao, private val fetcher: MetadataFetch
         normalizeCurrent()
         val playing = order[current.toInt()]
         // A fresh order every time shuffle turns on, with the playing track first.
-        order = if (shuffleOn) listOf(playing) + order.filter { it != playing }.shuffled() else order.sorted()
+        order = if (shuffleOn) shuffledOrder(playing) else order.sorted()
         current = order.indexOf(playing).toLong()
         shuffled = shuffleOn
         rebuildAroundCurrent()
+    }
+
+    /** A shuffled order of [paths] in the chosen [ShuffleMode], [start] first. */
+    private suspend fun shuffledOrder(start: Int): List<Int> {
+        val s = settings.first()
+        if (s.shuffleMode == ShuffleMode.TRACKS) return listOf(start) + (paths.indices - start).shuffled()
+        val list = paths
+        val items = withContext(Dispatchers.IO) {
+            val known = list.distinct().chunked(SQL_CHUNK).flatMap { tracks.getMany(it) }.associateBy { it.path }
+            val recent = plays.pathsSince(System.currentTimeMillis() - Shuffle.RECENT_MS).toHashSet()
+            val splitter = s.artistSplitter
+            list.map { path ->
+                val t = known[path]
+                ShuffleItem(
+                    album = t?.albumKey ?: path.substringBeforeLast('/'),
+                    // Track artist first: a compilation's album artist ("Various Artists") says nothing here.
+                    artists = splitter.split(t?.artist ?: t?.albumArtist).mapTo(HashSet(), ::artistKey),
+                    trackNumber = t?.trackNumber,
+                    recent = path in recent,
+                )
+            }
+        }
+        return withContext(Dispatchers.Default) { Shuffle.order(items, start, s.shuffleMode) }
     }
 
     /**
@@ -438,5 +485,8 @@ class PlayQueue(private val tracks: TrackDao, private val fetcher: MetadataFetch
         /** Upcoming tracks in the player; topped up when fewer than [AHEAD_MIN] remain. */
         const val AHEAD = 30
         const val AHEAD_MIN = 10
+
+        /** Paths per `IN (...)` query: SQLite allows 999 variables. */
+        const val SQL_CHUNK = 900
     }
 }

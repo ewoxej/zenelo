@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Album
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Search
@@ -37,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.zenelo.data.db.FavoriteKind
 import app.zenelo.library.AudioFile
+import app.zenelo.ui.components.BackButton
 import app.zenelo.ui.components.IconTile
 import app.zenelo.ui.components.ListRow
 import app.zenelo.ui.components.PlayFab
@@ -49,7 +51,14 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 @Composable
-fun FavoritesScreen(currentMediaId: String?, isPlaying: Boolean, onOpenFolder: (String) -> Unit) {
+fun FavoritesScreen(
+    currentMediaId: String?,
+    isPlaying: Boolean,
+    onOpenFolder: (String) -> Unit,
+    onOpenAlbum: (String) -> Unit,
+    onOpenArtist: (String) -> Unit,
+    onBack: (() -> Unit)? = null,
+) {
     val container = appContainer()
     val dao = container.db.favorites()
     val flow = remember { dao.observeAll() }
@@ -66,9 +75,10 @@ fun FavoritesScreen(currentMediaId: String?, isPlaying: Boolean, onOpenFolder: (
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             Row(
-                Modifier.fillMaxWidth().height(52.dp).padding(start = 20.dp, end = 4.dp),
+                Modifier.fillMaxWidth().height(52.dp).padding(start = if (onBack != null) 4.dp else 20.dp, end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                if (onBack != null) BackButton(onBack)
                 if (searching) {
                     SearchField(query, { query = it }, "Search favorites", Modifier.weight(1f))
                     IconButton(onClick = { searching = false; query = "" }) { Icon(Icons.Rounded.Close, "Close search") }
@@ -90,7 +100,11 @@ fun FavoritesScreen(currentMediaId: String?, isPlaying: Boolean, onOpenFolder: (
                             when (favorite.kind) {
                                 // Play the favorite tracks as a list, starting from this one.
                                 FavoriteKind.TRACK -> container.player.playFiles(tracks, startIndex = tracks.indexOfFirst { it.path == favorite.path })
-                                FavoriteKind.ALBUM, FavoriteKind.FOLDER -> onOpenFolder(favorite.path)
+                                FavoriteKind.FOLDER -> onOpenFolder(favorite.path)
+                                // Library keys behind "album:" / "artist:" (older album entries were folders).
+                                FavoriteKind.ALBUM ->
+                                    if (favorite.path.startsWith("album:")) onOpenAlbum(favorite.path.removePrefix("album:")) else onOpenFolder(favorite.path)
+                                FavoriteKind.ARTIST -> onOpenArtist(favorite.path.removePrefix("artist:"))
                             }
                         },
                         leading = {
@@ -99,6 +113,7 @@ fun FavoritesScreen(currentMediaId: String?, isPlaying: Boolean, onOpenFolder: (
                                 FavoriteKind.TRACK -> TrackThumb(favorite.path, isCurrent)
                                 FavoriteKind.ALBUM -> IconTile(Icons.Outlined.Album, ZeneloColors.Mustard, ZeneloColors.MustardTint)
                                 FavoriteKind.FOLDER -> IconTile(Icons.Outlined.Folder, ZeneloColors.Mustard, ZeneloColors.MustardTint)
+                                FavoriteKind.ARTIST -> IconTile(Icons.Outlined.Person, ZeneloColors.Mustard, ZeneloColors.MustardTint)
                             }
                         },
                         trailing = {

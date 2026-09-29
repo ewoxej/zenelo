@@ -3,11 +3,20 @@ package app.zenelo.data.settings
 import android.content.Context
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
+import androidx.datastore.preferences.core.stringSetPreferencesKey
+import androidx.datastore.core.DataMigration
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.preferencesDataStoreFile
+import app.zenelo.library.ArtistSplitter
+import app.zenelo.player.ShuffleMode
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 enum class SwipeAction(val label: String) {
@@ -58,13 +67,6 @@ enum class SelectionMarkerSide(val label: String) {
     RIGHT("Right"),
 }
 
-enum class BrowserSort(val label: String) {
-    NAME_ASC("Name A–Z"),
-    NAME_DESC("Name Z–A"),
-    DATE_NEWEST("Date added · newest"),
-    DATE_OLDEST("Date added · oldest"),
-}
-
 /** Default file name patterns for covers / lyrics lookups when tags are missing or wrong. */
 val DEFAULT_FILENAME_PATTERNS = listOf(
     "[%number%[.] ][- ]%artist% - %title%",
@@ -77,6 +79,8 @@ data class ZeneloSettings(
     /** Ask before destructive swipe actions instead of showing an undo snackbar. */
     val confirmRemove: Boolean = false,
     val normalization: NormalizationMode = NormalizationMode.TRACK,
+    /** Added to the normalization gain (dB), −6…+6; still bounded by the peak. */
+    val preampDb: Float = 0f,
     val crossfadeMs: Int = 0,
     /** Covers and lyrics from the internet; always Wi-Fi only. */
     val onlineFetch: Boolean = true,
@@ -89,17 +93,57 @@ data class ZeneloSettings(
     val queueSwipes: Map<QueueSwipeSlot, QueueSwipeAction> = QueueSwipeSlot.entries.associateWith { it.default },
     /** Tried in order when tags don't find covers / lyrics. See [app.zenelo.library.FilenamePattern]. */
     val filenamePatterns: List<String> = DEFAULT_FILENAME_PATTERNS,
-    val browserSort: BrowserSort = BrowserSort.NAME_ASC,
+    val sorts: Map<SortPage, SortOrder> = SortPage.entries.associateWith { it.default },
+    /** Grid / list mode of the library pages that have one. */
+    val albumsView: LibraryView = LibraryView.GRID2,
+    val artistsView: LibraryView = LibraryView.LIST,
+    /** Bottom bar tabs, in order (at most [Navigation.MAX_TABS]; empty = no bar, Home only). */
+    val tabs: List<Section> = Navigation.DEFAULT_TABS,
+    /** Home sections in order, every section present (see [Navigation.completeHome]). */
+    val home: List<HomeItem> = Navigation.DEFAULT_HOME,
+    /** The tab open when the app was last used. */
+    val lastTab: Section? = null,
     val pullDownArea: PullDownArea = PullDownArea.TOP_THIRD,
     val selectionMarker: SelectionMarkerSide = SelectionMarkerSide.RIGHT,
-)
+    val shuffleMode: ShuffleMode = ShuffleMode.TRACKS,
+    /** Split multi-artist tags ("A; B") on these; empty = never split. See [ArtistSplitter]. */
+    val artistSeparators: List<String> = ArtistSplitter.DEFAULT_SEPARATORS,
+    /** Artist names never split although they contain a separator ("AC/DC"). */
+    val artistExceptions: List<String> = ArtistSplitter.DEFAULT_EXCEPTIONS,
+) {
+    val artistSplitter: ArtistSplitter get() = ArtistSplitter(artistSeparators, artistExceptions)
+}
 
-private val Context.dataStore by preferencesDataStore(name = "settings")
-
-class SettingsRepository(context: Context) {
-    private val store = context.applicationContext.dataStore
+/**
+ * Settings (DataStore "settings"). [upgradedInstall]: the app was installed before this version
+ * (its database already existed at startup), see [FirstNavigation].
+ */
+class SettingsRepository(context: Context, upgradedInstall: Boolean) {
+    private val store = PreferenceDataStoreFactory.create(migrations = listOf(FirstNavigation(upgradedInstall))) {
+        context.applicationContext.preferencesDataStoreFile("settings")
+    }
 
     val settings: Flow<ZeneloSettings> = store.data.map { it.toSettings() }
+
+    /** Every stored value by key, for backups. */
+    suspend fun snapshot(): Map<String, Any> = store.data.first().asMap().mapKeys { it.key.name }
+
+    /** Replaces all settings with a [snapshot]'s values. */
+    suspend fun restoreSnapshot(values: Map<String, Any>) = store.edit { prefs ->
+        prefs.clear()
+        values.forEach { (key, value) ->
+            @Suppress("UNCHECKED_CAST")
+            when (value) {
+                is String -> prefs[stringPreferencesKey(key)] = value
+                is Boolean -> prefs[booleanPreferencesKey(key)] = value
+                is Int -> prefs[intPreferencesKey(key)] = value
+                is Long -> prefs[longPreferencesKey(key)] = value
+                is Float -> prefs[floatPreferencesKey(key)] = value
+                is Double -> prefs[doublePreferencesKey(key)] = value
+                is Set<*> -> prefs[stringSetPreferencesKey(key)] = value as Set<String>
+            }
+        }
+    }
 
     suspend fun setHomeFolder(path: String) = store.edit { it[HOME_FOLDER] = path }
 
@@ -110,13 +154,39 @@ class SettingsRepository(context: Context) {
 
     suspend fun setNormalization(mode: NormalizationMode) = store.edit { it[NORMALIZATION] = mode.name }
 
+    suspend fun setPreampDb(value: Float) = store.edit { it[PREAMP_DB] = value }
+
+    suspend fun setShuffleMode(mode: ShuffleMode) = store.edit { it[SHUFFLE_MODE] = mode.name }
+
     suspend fun setCrossfadeMs(value: Int) = store.edit { it[CROSSFADE_MS] = value }
 
     suspend fun setOnlineFetch(value: Boolean) = store.edit { it[ONLINE_FETCH] = value }
 
     suspend fun setEmbedCovers(value: Boolean) = store.edit { it[EMBED_COVERS] = value }
 
-    suspend fun setBrowserSort(sort: BrowserSort) = store.edit { it[BROWSER_SORT] = sort.name }
+    suspend fun setSort(page: SortPage, order: SortOrder) = store.edit { it[sortKey(page)] = order.encode() }
+
+    suspend fun setView(page: SortPage, view: LibraryView) = store.edit {
+        when (page) {
+            SortPage.ALBUMS -> it[ALBUMS_VIEW] = view.name
+            SortPage.ARTISTS -> it[ARTISTS_VIEW] = view.name
+            else -> Unit
+        }
+    }
+
+    /** Refused (false) when it would leave Settings unreachable, see [Navigation.settingsReachable]. */
+    suspend fun setNavigation(tabs: List<Section>, home: List<HomeItem>): Boolean {
+        val bar = tabs.distinct().take(Navigation.MAX_TABS)
+        val sections = Navigation.completeHome(home)
+        if (!Navigation.settingsReachable(bar, sections)) return false
+        store.edit {
+            it[TABS] = bar.joinToString(",") { s -> s.name }
+            it[HOME] = sections.joinToString(",") { h -> "${h.section.name}:${h.mode.name}" }
+        }
+        return true
+    }
+
+    suspend fun setLastTab(section: Section) = store.edit { it[LAST_TAB] = section.name }
 
     suspend fun setPullDownArea(area: PullDownArea) = store.edit { it[PULL_DOWN_AREA] = area.name }
 
@@ -130,6 +200,12 @@ class SettingsRepository(context: Context) {
     suspend fun setFilenamePatterns(patterns: List<String>) =
         store.edit { it[FILENAME_PATTERNS] = patterns.map(String::trim).filter(String::isNotEmpty).joinToString("\n") }
 
+    /** Stored even when empty (splitting off), unlike a missing value (the defaults). */
+    suspend fun setArtistSplitting(separators: List<String>, exceptions: List<String>) = store.edit {
+        it[ARTIST_SEPARATORS] = separators.map(String::trim).filter(String::isNotEmpty).distinct().joinToString("\n")
+        it[ARTIST_EXCEPTIONS] = exceptions.map(String::trim).filter(String::isNotEmpty).distinct().joinToString("\n")
+    }
+
     suspend fun setLastFmApiKey(value: String?) = store.edit {
         if (value.isNullOrBlank()) it.remove(LASTFM_KEY) else it[LASTFM_KEY] = value.trim()
     }
@@ -142,6 +218,8 @@ class SettingsRepository(context: Context) {
         confirmRemove = this[CONFIRM_REMOVE] ?: false,
         normalization = this[NORMALIZATION]?.let { enumOrNull<NormalizationMode>(it) } ?: NormalizationMode.TRACK,
         crossfadeMs = this[CROSSFADE_MS] ?: 0,
+        shuffleMode = this[SHUFFLE_MODE]?.let { enumOrNull<ShuffleMode>(it) } ?: ShuffleMode.TRACKS,
+        preampDb = this[PREAMP_DB] ?: 0f,
         onlineFetch = this[ONLINE_FETCH] ?: true,
         embedCovers = this[EMBED_COVERS] ?: true,
         lastFmApiKey = this[LASTFM_KEY],
@@ -149,17 +227,55 @@ class SettingsRepository(context: Context) {
         queueSwipes = QueueSwipeSlot.entries.associateWith { slot ->
             this[queueSlotKey(slot)]?.let { enumOrNull<QueueSwipeAction>(it) } ?: slot.default
         },
-        browserSort = this[BROWSER_SORT]?.let { enumOrNull<BrowserSort>(it) } ?: BrowserSort.NAME_ASC,
+        sorts = SortPage.entries.associateWith { page ->
+            SortOrder.decode(this[sortKey(page)]) ?: (if (page == SortPage.BROWSER) legacyBrowserSort() else null) ?: page.default
+        },
+        albumsView = this[ALBUMS_VIEW]?.let { enumOrNull<LibraryView>(it) } ?: LibraryView.GRID2,
+        artistsView = this[ARTISTS_VIEW]?.let { enumOrNull<LibraryView>(it) } ?: LibraryView.LIST,
+        tabs = this[TABS]?.split(',')?.filter(String::isNotEmpty)?.mapNotNull { enumOrNull<Section>(it) } ?: Navigation.DEFAULT_TABS,
+        home = this[HOME]?.split(',')?.mapNotNull { entry ->
+            val (section, mode) = entry.split(':').takeIf { it.size == 2 } ?: return@mapNotNull null
+            HomeItem(enumOrNull<Section>(section) ?: return@mapNotNull null, enumOrNull<HomeMode>(mode) ?: return@mapNotNull null)
+        }?.let(Navigation::completeHome) ?: Navigation.DEFAULT_HOME,
+        lastTab = this[LAST_TAB]?.let { enumOrNull<Section>(it) },
         pullDownArea = this[PULL_DOWN_AREA]?.let { enumOrNull<PullDownArea>(it) } ?: PullDownArea.TOP_THIRD,
         selectionMarker = this[SELECTION_MARKER]?.let { enumOrNull<SelectionMarkerSide>(it) } ?: SelectionMarkerSide.RIGHT,
         filenamePatterns = this[FILENAME_PATTERNS]?.split('\n')?.filter(String::isNotBlank) ?: DEFAULT_FILENAME_PATTERNS,
+        artistSeparators = this[ARTIST_SEPARATORS]?.split('\n')?.filter(String::isNotBlank) ?: ArtistSplitter.DEFAULT_SEPARATORS,
+        artistExceptions = this[ARTIST_EXCEPTIONS]?.split('\n')?.filter(String::isNotBlank) ?: ArtistSplitter.DEFAULT_EXCEPTIONS,
     )
+
+    /** The browser's sort before per-page sorts existed ("NAME_DESC", "DATE_NEWEST", ...). */
+    private fun Preferences.legacyBrowserSort(): SortOrder? = when (this[BROWSER_SORT]) {
+        "NAME_DESC" -> SortOrder(SortField.NAME, descending = true)
+        "DATE_NEWEST" -> SortOrder(SortField.DATE_ADDED, descending = true)
+        "DATE_OLDEST" -> SortOrder(SortField.DATE_ADDED)
+        else -> null
+    }
+
+    /**
+     * Runs once, while no bottom bar is stored: an upgrade from the fixed-tabs version keeps its
+     * four tabs ([Navigation.LEGACY_TABS]); a new install gets the defaults. Written either way, so
+     * the choice is made on the first start only.
+     */
+    private class FirstNavigation(private val upgradedInstall: Boolean) : DataMigration<Preferences> {
+        override suspend fun shouldMigrate(currentData: Preferences) = currentData[TABS] == null
+
+        override suspend fun migrate(currentData: Preferences): Preferences = currentData.toMutablePreferences().apply {
+            val tabs = if (upgradedInstall) Navigation.LEGACY_TABS else Navigation.DEFAULT_TABS
+            this[TABS] = tabs.joinToString(",") { it.name }
+        }
+
+        override suspend fun cleanUp() = Unit
+    }
 
     private companion object {
         val HOME_FOLDER = stringPreferencesKey("home_folder")
         val CONFIRM_REMOVE = booleanPreferencesKey("confirm_remove")
         val NORMALIZATION = stringPreferencesKey("normalization")
         val CROSSFADE_MS = intPreferencesKey("crossfade_ms")
+        val SHUFFLE_MODE = stringPreferencesKey("shuffle_mode")
+        val PREAMP_DB = floatPreferencesKey("preamp_db")
         val ONLINE_FETCH = booleanPreferencesKey("online_fetch")
         val EMBED_COVERS = booleanPreferencesKey("embed_covers")
         val LASTFM_KEY = stringPreferencesKey("lastfm_api_key")
@@ -168,6 +284,15 @@ class SettingsRepository(context: Context) {
         val BROWSER_SORT = stringPreferencesKey("browser_sort")
         val PULL_DOWN_AREA = stringPreferencesKey("pull_down_area")
         val SELECTION_MARKER = stringPreferencesKey("selection_marker")
+        val ALBUMS_VIEW = stringPreferencesKey("albums_view")
+        val ARTISTS_VIEW = stringPreferencesKey("artists_view")
+        val TABS = stringPreferencesKey("tabs")
+        val HOME = stringPreferencesKey("home_sections")
+        val LAST_TAB = stringPreferencesKey("last_tab")
+        val ARTIST_SEPARATORS = stringPreferencesKey("artist_separators")
+        val ARTIST_EXCEPTIONS = stringPreferencesKey("artist_exceptions")
+
+        fun sortKey(page: SortPage) = stringPreferencesKey("sort_${page.name.lowercase()}")
 
         fun queueSlotKey(slot: QueueSwipeSlot) = stringPreferencesKey("queue_swipe_${slot.name.lowercase()}")
 

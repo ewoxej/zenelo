@@ -1,5 +1,15 @@
 package app.zenelo.ui.settings
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.outlined.Restore
+import androidx.compose.material.icons.outlined.Save
+import app.zenelo.data.BackupData
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,7 +30,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Tab
 import androidx.compose.material.icons.outlined.Key
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Swipe
 import androidx.compose.material.icons.rounded.ChevronRight
@@ -36,6 +48,8 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.OutlinedTextField
@@ -58,6 +72,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.zenelo.data.settings.NormalizationMode
+import app.zenelo.data.settings.HomeMode
 import app.zenelo.data.settings.DEFAULT_FILENAME_PATTERNS
 import app.zenelo.data.settings.QueueSwipeAction
 import app.zenelo.data.settings.QueueSwipeSlot
@@ -69,7 +84,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.material.icons.outlined.TextFields
 import app.zenelo.data.settings.SwipeSlot
 import app.zenelo.data.settings.ZeneloSettings
+import app.zenelo.player.ShuffleMode
 import app.zenelo.ui.components.IconTile
+import app.zenelo.ui.components.BackButton
 import app.zenelo.ui.components.ListRow
 import app.zenelo.ui.components.ScreenTitle
 import app.zenelo.ui.components.SectionHeader
@@ -90,13 +107,42 @@ private fun rememberSettings(): ZeneloSettings {
 }
 
 @Composable
-fun SettingsScreen(onOpenSwipeSettings: () -> Unit) {
+fun SettingsScreen(
+    onOpenSwipeSettings: () -> Unit,
+    onCustomizeHome: () -> Unit,
+    onCustomizeTabs: () -> Unit,
+    onMessage: (String) -> Unit,
+    onBack: (() -> Unit)? = null,
+) {
     val repo = appContainer().settings
     val settings = rememberSettings()
     val scope = rememberCoroutineScope()
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        ScreenTitle("Settings", Modifier.padding(start = 20.dp, top = 12.dp, bottom = 4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (onBack != null) BackButton(onBack)
+            ScreenTitle("Settings", Modifier.padding(start = if (onBack != null) 0.dp else 20.dp, top = 12.dp, bottom = 4.dp))
+        }
+
+        SectionHeader("Navigation")
+        ListRow(
+            title = "Bottom bar",
+            subtitle = settings.tabs.joinToString(" · ") { it.label }.ifEmpty { "Hidden · Home only" },
+            onClick = onCustomizeTabs,
+            leading = { IconTile(Icons.Outlined.Tab, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+            trailing = { Icon(Icons.Rounded.ChevronRight, null, tint = ZeneloColors.TextMuted, modifier = Modifier.padding(12.dp).size(20.dp)) },
+        )
+        ListRow(
+            title = "Home screen",
+            subtitle = settings.home.let { h ->
+                val icons = h.count { it.mode == HomeMode.ICON }
+                val cards = h.count { it.mode == HomeMode.GRID || it.mode == HomeMode.LIST }
+                "$icons shortcut${if (icons == 1) "" else "s"} · $cards card${if (cards == 1) "" else "s"}"
+            },
+            onClick = onCustomizeHome,
+            leading = { IconTile(Icons.Outlined.Home, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+            trailing = { Icon(Icons.Rounded.ChevronRight, null, tint = ZeneloColors.TextMuted, modifier = Modifier.padding(12.dp).size(20.dp)) },
+        )
 
         SectionHeader("Lists")
         ListRow(
@@ -125,6 +171,13 @@ fun SettingsScreen(onOpenSwipeSettings: () -> Unit) {
             label = { it.label },
         ) { scope.launch { repo.setSelectionMarker(it) } }
 
+        SectionHeader("Shuffle")
+        ShuffleMode.entries.forEach { mode ->
+            RadioRow(mode.label, mode.description, selected = settings.shuffleMode == mode) {
+                scope.launch { repo.setShuffleMode(mode) }
+            }
+        }
+
         SectionHeader("Volume normalization")
         Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             NormalizationMode.entries.forEach { mode ->
@@ -138,6 +191,30 @@ fun SettingsScreen(onOpenSwipeSettings: () -> Unit) {
                     ),
                 )
             }
+        }
+
+        if (settings.normalization != NormalizationMode.OFF) {
+            // Local value while dragging (0.5 dB steps); persisted once on release.
+            var preamp by remember(settings.preampDb) { mutableFloatStateOf(settings.preampDb) }
+            val shown = (preamp * 2).roundToInt() / 2f
+            Text(
+                "Pre-amp · ${if (shown > 0) "+" else ""}${"%.1f".format(shown)} dB",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp),
+            )
+            Text(
+                "Louder or quieter than the −18 LUFS target. Never pushed past a track's peak.",
+                style = MaterialTheme.typography.bodySmall,
+                color = ZeneloColors.TextMuted,
+                modifier = Modifier.padding(horizontal = 20.dp),
+            )
+            ZeneloSlider(
+                value = preamp,
+                onValueChange = { preamp = it },
+                onValueChangeFinished = { scope.launch { repo.setPreampDb(shown) } },
+                valueRange = -6f..6f,
+                modifier = Modifier.padding(horizontal = 20.dp),
+            )
         }
 
         // Local value while dragging; persisted once on release.
@@ -191,10 +268,108 @@ fun SettingsScreen(onOpenSwipeSettings: () -> Unit) {
 
         SectionHeader("Library")
         LibraryStatus()
+        var editingArtists by remember { mutableStateOf(false) }
+        ListRow(
+            title = "Multiple artists",
+            subtitle = settings.artistSeparators.joinToString("  ").ifEmpty { "Off · tags aren't split" }.let {
+                if (settings.artistSeparators.isEmpty()) it else "Split on  $it"
+            },
+            onClick = { editingArtists = true },
+            leading = { IconTile(Icons.Outlined.Person, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+        )
+        if (editingArtists) {
+            ArtistSplitDialog(settings.artistSeparators, settings.artistExceptions, onDismiss = { editingArtists = false }) { seps, keep ->
+                scope.launch { repo.setArtistSplitting(seps, keep) }
+                editingArtists = false
+            }
+        }
         ListRow(
             title = "Home folder",
             subtitle = settings.homeFolder ?: "Long-press the home button in Folders",
             leading = { IconTile(Icons.Outlined.Home, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+        )
+
+        SectionHeader("Backup")
+        BackupRows(onMessage)
+    }
+}
+
+/** "Back up" writes one file (settings, favorites, playlists, play history); "Restore" reads one back after a confirmation. */
+@Composable
+private fun BackupRows(onMessage: (String) -> Unit) {
+    val backup = appContainer().backup
+    val scope = rememberCoroutineScope()
+    var pending by remember { mutableStateOf<BackupData?>(null) }
+    val writer = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val data = runCatching { backup.write(uri) }.getOrNull()
+            onMessage(if (data == null) "Couldn't write the backup" else "Backed up · ${backupSummary(data)}")
+        }
+    }
+    val reader = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            runCatching { backup.read(uri) }
+                .onSuccess { pending = it }
+                .onFailure { onMessage(it.message?.takeIf { _ -> it is IllegalArgumentException } ?: "Couldn't read the backup") }
+        }
+    }
+    ListRow(
+        title = "Back up",
+        subtitle = "Settings, favorites, playlists, play history · one file",
+        onClick = { writer.launch("zenelo-backup-${LocalDate.now()}.json") },
+        leading = { IconTile(Icons.Outlined.Save, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+    )
+    ListRow(
+        title = "Restore",
+        subtitle = "From a backup file · replaces all of the above",
+        onClick = { reader.launch(arrayOf("application/json", "application/octet-stream", "text/plain")) },
+        leading = { IconTile(Icons.Outlined.Restore, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+    )
+    pending?.let { data ->
+        AlertDialog(
+            onDismissRequest = { pending = null },
+            containerColor = ZeneloColors.Card,
+            title = { Text("Restore backup?") },
+            text = {
+                val date = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
+                    .format(Instant.ofEpochMilli(data.createdAt).atZone(ZoneId.systemDefault()))
+                Text("From $date\n${backupSummary(data)}\n\nCurrent settings, favorites, playlists and play history will be replaced.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pending = null
+                    scope.launch {
+                        val ok = runCatching { backup.restore(data) }.isSuccess
+                        onMessage(if (ok) "Restored · ${backupSummary(data)}" else "Couldn't restore the backup")
+                    }
+                }) { Text("Restore", color = ZeneloColors.Danger) }
+            },
+            dismissButton = { TextButton(onClick = { pending = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+private fun backupSummary(data: BackupData): String {
+    fun n(count: Int, what: String) = "$count $what${if (count == 1) "" else "s"}"
+    return listOf(n(data.favorites.size, "favorite"), n(data.playlists.size, "playlist"), n(data.plays.size, "play")).joinToString(" · ")
+}
+
+@Composable
+private fun RadioRow(title: String, subtitle: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = ZeneloColors.TextMuted)
+        }
+        RadioButton(
+            selected = selected,
+            onClick = onClick,
+            colors = RadioButtonDefaults.colors(selectedColor = ZeneloColors.Mustard, unselectedColor = ZeneloColors.TextMuted),
         )
     }
 }

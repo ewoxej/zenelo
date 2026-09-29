@@ -35,7 +35,14 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.ui.graphics.Color
-import app.zenelo.data.settings.BrowserSort
+import app.zenelo.data.settings.SortOrder
+import app.zenelo.data.settings.SortPage
+import app.zenelo.ui.components.SortMenu
+import app.zenelo.ui.components.SortToggle
+import app.zenelo.ui.components.SelectionBar
+import app.zenelo.ui.components.SelectableLeading
+import app.zenelo.ui.components.IconMenuItem
+import app.zenelo.ui.components.TrackMenu
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -108,11 +115,13 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
         selected = emptySet()
     }
 
+    var sortOpen by remember { mutableStateOf(false) }
     // The home folder is where "up" stops: no back button there, and system back leaves the app.
     val atHome = state.dir?.absolutePath == settings.homeFolder
     val canGoUp = state.canGoUp && !atHome
-    BackHandler(enabled = isActive && (selecting || state.searching || canGoUp)) {
+    BackHandler(enabled = isActive && (sortOpen || selecting || state.searching || canGoUp)) {
         when {
+            sortOpen -> sortOpen = false
             selecting -> exitSelection()
             state.searching -> viewModel.setSearching(false)
             else -> viewModel.goUp()
@@ -158,9 +167,9 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
         selecting = true
         selected = selected + path
     }
-    val sort = settings.browserSort
-    val folders = remember(state.folders, state.query, sort, state.folderModified) { state.visibleFolders(sort) }
-    val files = remember(state.files, state.query, sort) { state.visibleFiles(sort) }
+    val sort = settings.sorts[SortPage.BROWSER] ?: SortPage.BROWSER.default
+    val folders = remember(state.folders, state.query, sort, state.folderModified, state.folderTracks) { state.visibleFolders(sort) }
+    val files = remember(state.files, state.query, sort, state.tracks) { state.visibleFiles(sort) }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -192,9 +201,10 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
                 // Same height as the normal top bar, so the list doesn't jump under the finger.
                 Breadcrumb(state, viewModel)
             } else {
-                TopBar(state, canGoUp, sort, viewModel)
+                TopBar(state, canGoUp, sortOpen, { sortOpen = !sortOpen }, viewModel)
             }
-            LazyColumn(Modifier.weight(1f), state = listState, contentPadding = PaddingValues(bottom = 80.dp)) {
+            Box(Modifier.weight(1f)) {
+            LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 80.dp)) {
                 if (folders.isNotEmpty()) {
                     item(key = "h-folders") { SectionHeader("Folders · ${folders.size}") }
                     items(folders, key = { it.absolutePath }) { folder ->
@@ -247,6 +257,10 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
                 if (!state.loading && folders.isEmpty() && files.isEmpty()) {
                     item(key = "empty") { SectionHeader(if (state.query.isNotBlank()) "Nothing found" else "Empty folder") }
                 }
+            }
+            if (sortOpen) {
+                SortMenu(SortPage.BROWSER.fields, sort, onSelect = { viewModel.setSort(it); sortOpen = false }, onDismiss = { sortOpen = false })
+            }
             }
         }
 
@@ -321,7 +335,7 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun TopBar(state: BrowserState, canGoUp: Boolean, sort: BrowserSort, viewModel: BrowserViewModel) {
+private fun TopBar(state: BrowserState, canGoUp: Boolean, sortOpen: Boolean, onSort: () -> Unit, viewModel: BrowserViewModel) {
     Column(Modifier.padding(top = 4.dp)) {
         Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
             if (canGoUp) {
@@ -353,7 +367,7 @@ private fun TopBar(state: BrowserState, canGoUp: Boolean, sort: BrowserSort, vie
                     modifier = Modifier.weight(1f),
                 )
                 IconButton(onClick = { viewModel.setSearching(true) }) { Icon(Icons.Rounded.Search, "Search", Modifier.size(22.dp)) }
-                SortButton(sort, viewModel::setSort)
+                SortToggle(sortOpen, onSort)
             }
         }
         Breadcrumb(state, viewModel)
@@ -452,126 +466,6 @@ private fun TrackRow(
     )
 }
 
-/** The ⋮ button of a track row and its menu. */
-@Composable
-private fun TrackMenu(
-    onAction: (SwipeAction) -> Unit,
-    onDownloadCover: () -> Unit,
-    onEditTags: (fromFileName: Boolean) -> Unit,
-) {
-    var menu by remember { mutableStateOf(false) }
-    Box {
-        IconButton(onClick = { menu = true }, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Rounded.MoreVert, "More", tint = ZeneloColors.TextMuted, modifier = Modifier.size(20.dp))
-        }
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            SwipeAction.entries.filter { it != SwipeAction.NONE }.forEach { action ->
-                DropdownMenuItem(
-                    text = { Text(action.label) },
-                    leadingIcon = { Icon(action.icon, null, tint = action.accent) },
-                    onClick = {
-                        menu = false
-                        onAction(action)
-                    },
-                )
-            }
-            DropdownMenuItem(
-                text = { Text("Edit tags…") },
-                leadingIcon = { Icon(Icons.Outlined.Edit, null, tint = ZeneloColors.Celadon) },
-                onClick = {
-                    menu = false
-                    onEditTags(false)
-                },
-            )
-            DropdownMenuItem(
-                text = { Text("Tags from file name…") },
-                leadingIcon = { Icon(Icons.Outlined.DriveFileRenameOutline, null, tint = ZeneloColors.Celadon) },
-                onClick = {
-                    menu = false
-                    onEditTags(true)
-                },
-            )
-            DropdownMenuItem(
-                text = { Text("Download cover…") },
-                leadingIcon = { Icon(Icons.Outlined.Image, null, tint = ZeneloColors.Celadon) },
-                onClick = {
-                    menu = false
-                    onDownloadCover()
-                },
-            )
-        }
-    }
-}
-
-/** Replaces the top bar while files are selected: count, select all, and actions for all of them. */
-@Composable
-private fun SelectionBar(
-    count: Int,
-    allSelected: Boolean,
-    canDelete: Boolean,
-    onClose: () -> Unit,
-    onSelectAll: () -> Unit,
-    onPlay: (shuffle: Boolean) -> Unit,
-    onAction: (SwipeAction) -> Unit,
-) {
-    var menu by remember { mutableStateOf(false) }
-    Row(
-        Modifier.fillMaxWidth().padding(top = 4.dp).height(48.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconButton(onClick = onClose, modifier = Modifier.size(40.dp)) { Icon(Icons.Rounded.Close, "Cancel selection", Modifier.size(20.dp)) }
-        Text("$count", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f).padding(start = 4.dp))
-        IconButton(onClick = onSelectAll, modifier = Modifier.size(40.dp)) {
-            SelectAllIcon(allSelected)
-        }
-        for (action in listOf(SwipeAction.PLAY_NEXT, SwipeAction.ADD_TO_QUEUE, SwipeAction.FAVORITE)) {
-            IconButton(onClick = { onAction(action) }, enabled = count > 0, modifier = Modifier.size(40.dp)) {
-                Icon(action.icon, action.label, tint = action.accent, modifier = Modifier.size(22.dp))
-            }
-        }
-        Box {
-            IconButton(onClick = { menu = true }, enabled = count > 0, modifier = Modifier.size(40.dp)) {
-                Icon(Icons.Rounded.MoreVert, "More", tint = ZeneloColors.TextSecondary, modifier = Modifier.size(22.dp))
-            }
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                FolderMenuItem("Play", Icons.Rounded.PlayArrow, ZeneloColors.Mustard) { menu = false; onPlay(false) }
-                FolderMenuItem("Shuffle", Icons.Rounded.Shuffle, ZeneloColors.Celadon) { menu = false; onPlay(true) }
-                // Folders can't be deleted from here.
-                if (canDelete) {
-                    val delete = SwipeAction.DELETE_FILE
-                    FolderMenuItem(delete.label, delete.icon, delete.accent) { menu = false; onAction(delete) }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SortButton(sort: BrowserSort, onSelect: (BrowserSort) -> Unit) {
-    var open by remember { mutableStateOf(false) }
-    Box {
-        IconButton(onClick = { open = true }) {
-            Icon(
-                if (sort == BrowserSort.DATE_NEWEST || sort == BrowserSort.DATE_OLDEST) Icons.Rounded.Schedule else Icons.Rounded.SortByAlpha,
-                "Sort",
-                tint = if (sort == BrowserSort.NAME_ASC) ZeneloColors.TextPrimary else ZeneloColors.Mustard,
-                modifier = Modifier.size(22.dp),
-            )
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            BrowserSort.entries.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(option.label, color = if (option == sort) ZeneloColors.Mustard else ZeneloColors.TextPrimary) },
-                    onClick = {
-                        open = false
-                        onSelect(option)
-                    },
-                )
-            }
-        }
-    }
-}
-
 /** Folder row: tap opens it, ⋮ shows its actions (play, shuffle, queue, favorite), long-press selects. */
 @Composable
 private fun FolderRow(
@@ -613,25 +507,13 @@ private fun FolderMenu(folder: File, viewModel: BrowserViewModel) {
             Icon(Icons.Rounded.MoreVert, "More", tint = ZeneloColors.TextMuted, modifier = Modifier.size(20.dp))
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            FolderMenuItem("Play", Icons.Rounded.PlayArrow, ZeneloColors.Mustard) { menu = false; viewModel.playSubtree(folder, shuffle = false) }
-            FolderMenuItem("Shuffle", Icons.Rounded.Shuffle, ZeneloColors.Celadon) { menu = false; viewModel.playSubtree(folder, shuffle = true) }
-            FolderMenuItem("Play next", SwipeAction.PLAY_NEXT.icon, SwipeAction.PLAY_NEXT.accent) { menu = false; viewModel.queueSubtree(folder, next = true) }
-            FolderMenuItem("Add to queue", SwipeAction.ADD_TO_QUEUE.icon, SwipeAction.ADD_TO_QUEUE.accent) { menu = false; viewModel.queueSubtree(folder, next = false) }
-            FolderMenuItem("Favorite", SwipeAction.FAVORITE.icon, SwipeAction.FAVORITE.accent) { menu = false; viewModel.toggleFolderFavorite(folder) }
+            IconMenuItem("Play", Icons.Rounded.PlayArrow, ZeneloColors.Mustard) { menu = false; viewModel.playSubtree(folder, shuffle = false) }
+            IconMenuItem("Shuffle", Icons.Rounded.Shuffle, ZeneloColors.Celadon) { menu = false; viewModel.playSubtree(folder, shuffle = true) }
+            IconMenuItem("Play next", SwipeAction.PLAY_NEXT.icon, SwipeAction.PLAY_NEXT.accent) { menu = false; viewModel.queueSubtree(folder, next = true) }
+            IconMenuItem("Add to queue", SwipeAction.ADD_TO_QUEUE.icon, SwipeAction.ADD_TO_QUEUE.accent) { menu = false; viewModel.queueSubtree(folder, next = false) }
+            IconMenuItem("Favorite", SwipeAction.FAVORITE.icon, SwipeAction.FAVORITE.accent) { menu = false; viewModel.toggleFolderFavorite(folder) }
+            IconMenuItem("Add to playlist…", SwipeAction.ADD_TO_PLAYLIST.icon, SwipeAction.ADD_TO_PLAYLIST.accent) { menu = false; viewModel.addFolderToPlaylist(folder) }
         }
     }
 }
 
-/** A row's icon / thumbnail, with the selection mark in front of it when the mark sits on the left. */
-@Composable
-private fun SelectableLeading(showMark: Boolean, selected: Boolean, content: @Composable () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        if (showMark) SelectionMark(selected, Modifier.padding(end = 12.dp))
-        content()
-    }
-}
-
-@Composable
-private fun FolderMenuItem(label: String, icon: ImageVector, tint: Color, onClick: () -> Unit) {
-    DropdownMenuItem(text = { Text(label) }, leadingIcon = { Icon(icon, null, tint = tint) }, onClick = onClick)
-}

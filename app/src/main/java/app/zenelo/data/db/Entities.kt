@@ -5,9 +5,12 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
-enum class FavoriteKind { TRACK, ALBUM, FOLDER }
+enum class FavoriteKind { TRACK, ALBUM, FOLDER, ARTIST }
 
-/** A favorited track file, album or folder. `path` is the absolute file or folder path. */
+/**
+ * A favorited track file, folder, album or artist. `path`: the absolute file or folder path;
+ * albums and artists use [albumFavoriteId] / [artistFavoriteId] of their library key.
+ */
 @Entity(tableName = "favorites")
 data class FavoriteEntity(
     @PrimaryKey val path: String,
@@ -48,6 +51,8 @@ data class PlaylistWithCount(
     val name: String,
     val createdAt: Long,
     val trackCount: Int,
+    /** The first track, for a cover. */
+    val coverPath: String? = null,
 )
 
 /**
@@ -87,6 +92,9 @@ data class TrackEntity(
     val trackGainDb: Float?,
     val albumGainDb: Float?,
     val albumKey: String?,
+    /** ReplayGain peaks (linear sample peak, 1.0 = full scale); bound the gain so it doesn't clip. */
+    val trackPeak: Float? = null,
+    val albumPeak: Float? = null,
 ) {
     val extension: String get() = path.substringAfterLast('.', "").lowercase()
 }
@@ -119,6 +127,61 @@ data class LyricsEntity(
 }
 
 data class LibraryStats(val tracks: Int, val withArtwork: Int)
+
+fun albumFavoriteId(albumKey: String) = "album:$albumKey"
+
+fun artistFavoriteId(artistKey: String) = "artist:$artistKey"
+
+/** A playlist entry with its track's tags (null when the file isn't indexed, e.g. deleted). */
+data class PlaylistTrack(
+    val position: Int,
+    val path: String,
+    val title: String?,
+    val artist: String?,
+    val album: String?,
+    val durationMs: Long?,
+)
+
+/** One play of a track (counted after 30 s, or half of a shorter track), for "Recently played". */
+@Entity(tableName = "plays", indices = [Index("playedAt")])
+data class PlayEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val path: String,
+    val playedAt: Long,
+)
+
+/** A track's latest play, with its tags (null when the file isn't indexed). */
+data class RecentPlay(
+    val path: String,
+    val playedAt: Long,
+    val title: String?,
+    val artist: String?,
+    val album: String?,
+    val durationMs: Long?,
+)
+
+/** An album of the library: tracks sharing an album key (album artist + album). */
+data class AlbumRow(
+    val key: String,
+    val album: String,
+    val artist: String?,
+    val tracks: Int,
+    val durationMs: Long,
+    /** Newest file mtime: when the album (last) arrived. */
+    val added: Long,
+    /** A track to take the cover from, one with embedded art if any. */
+    val coverPath: String,
+)
+
+/** An artist of the library, by album artist (else track artist); [key] is its lowercase name. */
+data class ArtistRow(
+    val key: String,
+    val name: String,
+    val albums: Int,
+    val tracks: Int,
+    val added: Long,
+    val coverPath: String,
+)
 
 data class DirStats(val dir: String, val tracks: Int, val durationMs: Long)
 

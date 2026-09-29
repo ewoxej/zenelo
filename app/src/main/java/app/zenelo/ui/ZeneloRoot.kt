@@ -39,10 +39,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.QueueMusic
-import androidx.compose.material.icons.outlined.FavoriteBorder
-import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.SkipNext
@@ -76,7 +72,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
-import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import app.zenelo.player.PlayerController
 import app.zenelo.player.PlayerUiState
@@ -99,21 +94,60 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import app.zenelo.ui.playlists.PlaylistsScreen
+import app.zenelo.ui.playlists.PlaylistScreen
+import app.zenelo.ui.playlists.PlaylistPickerDialog
 import app.zenelo.ui.settings.SettingsScreen
 import app.zenelo.ui.settings.SwipeSettingsScreen
 import app.zenelo.ui.theme.ZeneloColors
+import app.zenelo.data.settings.Navigation
+import app.zenelo.data.settings.Section
+import app.zenelo.data.settings.ZeneloSettings
+import app.zenelo.library.AudioFile
+import app.zenelo.ui.components.CoverPickerDialog
+import app.zenelo.ui.components.TagEditorDialog
+import app.zenelo.ui.components.ZeneloSnackbar
+import app.zenelo.ui.components.icon
+import app.zenelo.ui.home.CustomizeHomeScreen
+import app.zenelo.ui.home.CustomizeTabsScreen
+import app.zenelo.ui.home.HomeNav
+import app.zenelo.ui.home.HomeScreen
+import app.zenelo.ui.home.SearchScreen
+import app.zenelo.ui.library.AlbumScreen
+import app.zenelo.ui.library.AlbumsScreen
+import app.zenelo.ui.library.ArtistScreen
+import app.zenelo.ui.library.ArtistsScreen
+import app.zenelo.ui.library.LibraryEvent
+import app.zenelo.ui.library.LibraryNav
+import app.zenelo.ui.library.LibraryViewModel
+import app.zenelo.ui.library.RecentScreen
+import app.zenelo.ui.library.TrackDialog
+import app.zenelo.ui.library.TracksScreen
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.TextButton
 import java.io.File
 
 private object Routes {
-    /** The four tabs, as pages of a horizontal pager. */
+    /** The bottom bar tabs, as pages of a horizontal pager. */
     const val MAIN = "main"
     const val SWIPE_SETTINGS = "settings/swipes"
-}
+    const val CUSTOMIZE_HOME = "settings/home"
+    const val CUSTOMIZE_TABS = "settings/tabs"
+    const val SEARCH = "search"
+    /** A section that isn't a tab, opened from Home. */
+    const val SECTION = "section/{section}"
+    const val ALBUM = "album/{key}"
+    const val ARTIST = "artist/{key}"
+    const val PLAYLIST = "playlist/{id}"
 
-private const val TAB_FOLDERS = 0
-private const val TAB_FAVORITES = 1
-private const val TAB_PLAYLISTS = 2
-private const val TAB_SETTINGS = 3
+    fun section(section: Section) = "section/${section.name}"
+    fun album(key: String) = "album/${Uri.encode(key)}"
+    fun artist(key: String) = "artist/${Uri.encode(key)}"
+    fun playlist(id: Long) = "playlist/$id"
+}
 
 @Composable
 fun ZeneloRoot() {
@@ -164,15 +198,41 @@ private fun FileAccessGate(onGrant: () -> Unit) {
 @Composable
 private fun MainScaffold() {
     val container = appContainer()
+    val settingsFlow = remember { container.settings.settings }
+    val settings by settingsFlow.collectAsStateWithLifecycle(initialValue = null)
+    // The tabs and the last one used come from settings: wait for them rather than flash defaults.
+    val loaded = settings ?: return Box(Modifier.fillMaxSize().background(ZeneloColors.Background))
+    MainContent(loaded)
+}
+
+@Composable
+private fun MainContent(settings: ZeneloSettings) {
+    val container = appContainer()
     val nav = rememberNavController()
-    // Activity-scoped so Favorites and Now Playing can open a folder in the browser.
+    // Activity-scoped so Home, Favorites and Now Playing can open a folder in the browser.
     val browserViewModel: BrowserViewModel = viewModel(factory = BrowserViewModel.factory(container))
+    val libraryViewModel: LibraryViewModel = viewModel(factory = LibraryViewModel.factory(container))
     val playerState by container.player.state.collectAsStateWithLifecycle()
-    val backStack by nav.currentBackStackEntryAsState()
-    val route = backStack?.destination?.route
-    val tabs = rememberPagerState { TABS.size }
+    val pages = Navigation.pages(settings.tabs)
+    val pager = rememberPagerState(initialPage = pages.indexOf(settings.lastTab).coerceAtLeast(0)) { pages.size }
     val scope = rememberCoroutineScope()
-    val selectTab: (Int) -> Unit = { page -> scope.launch { tabs.animateScrollToPage(page, animationSpec = tween(180)) } }
+    val selectPage: (Int) -> Unit = { page -> scope.launch { pager.animateScrollToPage(page, animationSpec = tween(180)) } }
+
+    // Remember the tab in use; keep showing it when the bar is rearranged.
+    var activeSection by remember { mutableStateOf(pages.getOrNull(pager.currentPage)) }
+    LaunchedEffect(pager.settledPage, pages) {
+        pages.getOrNull(pager.settledPage)?.let {
+            if (it != activeSection) {
+                activeSection = it
+                container.settings.setLastTab(it)
+            }
+        }
+    }
+    LaunchedEffect(pages) {
+        val i = pages.indexOf(activeSection)
+        if (i >= 0 && i != pager.currentPage) pager.scrollToPage(i)
+    }
+
     val sheet = remember { PlayerSheet(scope) }
     val sheetVisible by remember { derivedStateOf { sheet.fraction < 1f } }
     // The mini player only shows while the sheet is (nearly) collapsed: it fades into Now Playing.
@@ -186,21 +246,83 @@ private fun MainScaffold() {
     val collapsedTop = (rootHeight - tabBarHeight - miniHeight).toFloat()
     sheet.heightPx = collapsedTop.coerceAtLeast(1f)
     val density = LocalDensity.current
+    val bottomReserved = with(density) { (tabBarHeight + if (playing) miniHeight else 0).toDp() }
+
+    /** A tab switches pages; anything else opens as a sub-page with a back arrow. */
+    val openSection: (Section) -> Unit = { section ->
+        val page = pages.indexOf(section)
+        if (page >= 0) {
+            nav.popBackStack(Routes.MAIN, inclusive = false)
+            selectPage(page)
+        } else {
+            nav.navigate(Routes.section(section))
+        }
+    }
     val openFolderInBrowser: (File) -> Unit = { folder ->
         browserViewModel.open(folder)
-        nav.popBackStack(Routes.MAIN, inclusive = false)
-        scope.launch { tabs.scrollToPage(TAB_FOLDERS) }
+        val page = pages.indexOf(Section.FOLDERS)
+        if (page >= 0) {
+            nav.popBackStack(Routes.MAIN, inclusive = false)
+            scope.launch { pager.scrollToPage(page) }
+        } else if (nav.currentBackStackEntry?.arguments?.getString("section") != Section.FOLDERS.name) {
+            nav.navigate(Routes.section(Section.FOLDERS))
+        }
         sheet.close()
+    }
+    val libraryNav = remember(nav) {
+        LibraryNav(
+            onOpenAlbum = { key -> nav.navigate(Routes.album(key)) },
+            onOpenArtist = { key -> nav.navigate(Routes.artist(key)) },
+        )
+    }
+    val openPlaylist: (Long) -> Unit = { id -> nav.navigate(Routes.playlist(id)) }
+    val homeNav = HomeNav(
+        library = libraryNav,
+        onOpenPlaylist = openPlaylist,
+        onOpenSection = openSection,
+        onOpenFolder = openFolderInBrowser,
+        onCustomize = { nav.navigate(Routes.CUSTOMIZE_HOME) },
+        onSearch = { nav.navigate(Routes.SEARCH) },
+    )
+
+    @Composable
+    fun SectionPage(section: Section, isActive: Boolean, onBack: (() -> Unit)?) {
+        when (section) {
+            Section.HOME -> HomeScreen(libraryViewModel, homeNav)
+            Section.FOLDERS -> BrowserScreen(
+                browserViewModel,
+                currentMediaId = playerState.mediaId,
+                isPlaying = playerState.isPlaying,
+                isActive = isActive,
+            )
+            Section.FAVORITES -> FavoritesScreen(
+                currentMediaId = playerState.mediaId,
+                isPlaying = playerState.isPlaying,
+                onOpenFolder = { openFolderInBrowser(File(it)) },
+                onOpenAlbum = libraryNav.onOpenAlbum,
+                onOpenArtist = libraryNav.onOpenArtist,
+                onBack = onBack,
+            )
+            Section.PLAYLISTS -> PlaylistsScreen(openPlaylist, libraryViewModel::showMessage, onBack)
+            Section.SETTINGS -> SettingsScreen(
+                onOpenSwipeSettings = { nav.navigate(Routes.SWIPE_SETTINGS) },
+                onCustomizeHome = { nav.navigate(Routes.CUSTOMIZE_HOME) },
+                onCustomizeTabs = { nav.navigate(Routes.CUSTOMIZE_TABS) },
+                onMessage = libraryViewModel::showMessage,
+                onBack = onBack,
+            )
+            Section.ALBUMS -> AlbumsScreen(libraryViewModel, libraryNav, onBack)
+            Section.ARTISTS -> ArtistsScreen(libraryViewModel, libraryNav, onBack)
+            Section.TRACKS -> TracksScreen(libraryViewModel, onBack)
+            Section.RECENT -> RecentScreen(libraryViewModel, onBack)
+        }
     }
 
     Box(Modifier.fillMaxSize().onSizeChanged { rootHeight = it.height }) {
         Scaffold(
             containerColor = ZeneloColors.Background,
             // The mini player and the tab bar are drawn over the scaffold (below): this only keeps their room.
-            bottomBar = {
-                val reserved = tabBarHeight + if (playing) miniHeight else 0
-                Spacer(Modifier.fillMaxWidth().height(with(density) { reserved.toDp() }))
-            },
+            bottomBar = { Spacer(Modifier.fillMaxWidth().height(bottomReserved)) },
         ) { padding ->
             NavHost(
                 nav,
@@ -213,37 +335,43 @@ private fun MainScaffold() {
                 popExitTransition = { fadeOut(tween(90)) },
             ) {
                 composable(Routes.MAIN) {
-                    // Back from another tab returns to Folders before leaving the app.
-                    BackHandler(enabled = tabs.currentPage != TAB_FOLDERS) { selectTab(TAB_FOLDERS) }
+                    // Back from another tab returns to the first one before leaving the app.
+                    BackHandler(enabled = pager.currentPage != 0) { selectPage(0) }
                     // Horizontal swipes switch tabs. Track rows keep their own swipe actions: their
                     // gesture handler sees the drag first and consumes it.
                     HorizontalPager(
-                        tabs,
+                        pager,
+                        key = { pages.getOrNull(it)?.name ?: it },
                         flingBehavior = PagerDefaults.flingBehavior(
-                            state = tabs,
+                            state = pager,
                             snapAnimationSpec = spring(stiffness = Spring.StiffnessMedium),
                         ),
                     ) { page ->
-                        when (page) {
-                            TAB_FOLDERS -> BrowserScreen(
-                                browserViewModel,
-                                currentMediaId = playerState.mediaId,
-                                isPlaying = playerState.isPlaying,
-                                isActive = tabs.currentPage == TAB_FOLDERS,
-                            )
-                            TAB_FAVORITES -> FavoritesScreen(
-                                currentMediaId = playerState.mediaId,
-                                isPlaying = playerState.isPlaying,
-                                onOpenFolder = { openFolderInBrowser(File(it)) },
-                            )
-                            TAB_PLAYLISTS -> PlaylistsScreen()
-                            TAB_SETTINGS -> SettingsScreen(onOpenSwipeSettings = { nav.navigate(Routes.SWIPE_SETTINGS) })
-                        }
+                        pages.getOrNull(page)?.let { SectionPage(it, isActive = pager.currentPage == page, onBack = null) }
                     }
                 }
+                composable(Routes.SECTION) { entry ->
+                    val section = entry.arguments?.getString("section")?.let { name -> Section.entries.firstOrNull { it.name == name } }
+                    if (section != null) SectionPage(section, isActive = true) { nav.popBackStack() }
+                }
+                composable(Routes.ALBUM) { entry ->
+                    AlbumScreen(libraryViewModel, entry.arguments?.getString("key").orEmpty(), libraryNav) { nav.popBackStack() }
+                }
+                composable(Routes.ARTIST) { entry ->
+                    ArtistScreen(libraryViewModel, entry.arguments?.getString("key").orEmpty(), libraryNav) { nav.popBackStack() }
+                }
+                composable(Routes.PLAYLIST) { entry ->
+                    val id = entry.arguments?.getString("id")?.toLongOrNull()
+                    if (id != null) PlaylistScreen(libraryViewModel, id) { nav.popBackStack() }
+                }
+                composable(Routes.SEARCH) { SearchScreen(libraryViewModel, libraryNav) { nav.popBackStack() } }
                 composable(Routes.SWIPE_SETTINGS) { SwipeSettingsScreen(onBack = { nav.popBackStack() }) }
+                composable(Routes.CUSTOMIZE_HOME) { CustomizeHomeScreen(onBack = { nav.popBackStack() }) }
+                composable(Routes.CUSTOMIZE_TABS) { CustomizeTabsScreen(onBack = { nav.popBackStack() }) }
             }
         }
+
+        LibraryMessages(libraryViewModel, Modifier.align(Alignment.BottomCenter).padding(bottom = bottomReserved))
 
         // The player sheet: collapsed it is just the mini player above the tab bar; dragged up it
         // grows into Now Playing (the mini player fading out), and back. Now Playing is composed
@@ -282,7 +410,7 @@ private fun MainScaffold() {
             }
         }
 
-        // Tabs on top of the collapsed sheet; they slide away as it opens.
+        // Tabs on top of the collapsed sheet; they slide away as it opens. No tabs: no bar.
         Column(
             Modifier
                 .align(Alignment.BottomCenter)
@@ -291,28 +419,71 @@ private fun MainScaffold() {
                 .background(ZeneloColors.Bar)
                 .navigationBarsPadding(),
         ) {
-            BottomBar(selected = if (route == Routes.SWIPE_SETTINGS) TAB_SETTINGS else tabs.currentPage) { page ->
-                nav.popBackStack(Routes.MAIN, inclusive = false)
-                selectTab(page)
+            if (settings.tabs.isNotEmpty()) {
+                BottomBar(settings.tabs, selected = pager.currentPage) { page ->
+                    nav.popBackStack(Routes.MAIN, inclusive = false)
+                    selectPage(page)
+                }
             }
         }
     }
 }
 
-private data class Tab(val icon: ImageVector, val label: String)
+/** Snackbars, the delete confirmation and the ⋮ menu's dialogs of the library pages. */
+@Composable
+private fun LibraryMessages(vm: LibraryViewModel, modifier: Modifier) {
+    val snackbar = remember { SnackbarHostState() }
+    var icon by remember { mutableStateOf<ImageVector?>(null) }
+    var confirmDelete by remember { mutableStateOf<List<AudioFile>?>(null) }
+    val dialog by vm.dialog.collectAsStateWithLifecycle()
+    LaunchedEffect(vm) {
+        vm.events.collect { event ->
+            when (event) {
+                is LibraryEvent.ConfirmDelete -> confirmDelete = event.files
+                is LibraryEvent.Message -> launch {
+                    snackbar.currentSnackbarData?.dismiss()
+                    icon = event.action?.icon
+                    val result = snackbar.showSnackbar(event.text, actionLabel = if (event.undo != null) "Undo" else null, duration = SnackbarDuration.Short)
+                    if (result == SnackbarResult.ActionPerformed) event.undo?.invoke()
+                }
+            }
+        }
+    }
+    SnackbarHost(snackbar, modifier) { ZeneloSnackbar(it, icon) }
 
-private val TABS = listOf(
-    Tab(Icons.Outlined.Folder, "Folders"),
-    Tab(Icons.Outlined.FavoriteBorder, "Favorites"),
-    Tab(Icons.AutoMirrored.Rounded.QueueMusic, "Playlists"),
-    Tab(Icons.Outlined.Settings, "Settings"),
-)
+    val pickerFlow = appContainer().playlistPicker.request
+    val picking by pickerFlow.collectAsStateWithLifecycle()
+    picking?.let { paths ->
+        PlaylistPickerDialog(paths, onDismiss = appContainer().playlistPicker::dismiss, onDone = vm::showMessage)
+    }
+
+    when (val d = dialog) {
+        is TrackDialog.EditTags -> TagEditorDialog(d.path, d.fromFileName, onDismiss = { vm.openDialog(null) }, onDone = vm::showMessage)
+        is TrackDialog.Cover -> CoverPickerDialog(d.path, onDismiss = { vm.openDialog(null) }, onDone = vm::showMessage)
+        null -> Unit
+    }
+    confirmDelete?.let { files ->
+        AlertDialog(
+            onDismissRequest = { confirmDelete = null },
+            containerColor = ZeneloColors.Card,
+            title = { Text(if (files.size == 1) "Delete file?" else "Delete ${files.size} files?") },
+            text = { Text(if (files.size == 1) files.first().name else "They'll be removed from the device.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.delete(files)
+                    confirmDelete = null
+                }) { Text("Delete", color = ZeneloColors.Danger) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Cancel") } },
+        )
+    }
+}
 
 /** Icon + label tabs; the selected tab gets a celadon pill, as in the design. */
 @Composable
-private fun BottomBar(selected: Int, onSelect: (Int) -> Unit) {
+private fun BottomBar(tabs: List<Section>, selected: Int, onSelect: (Int) -> Unit) {
     Row(Modifier.fillMaxWidth().height(60.dp), verticalAlignment = Alignment.CenterVertically) {
-        TABS.forEachIndexed { index, tab ->
+        tabs.forEachIndexed { index, tab ->
             val isSelected = index == selected
             Column(
                 Modifier.weight(1f).fillMaxHeight().clickable { onSelect(index) },
@@ -339,6 +510,7 @@ private fun BottomBar(selected: Int, onSelect: (Int) -> Unit) {
                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.5.sp),
                     fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
                     color = if (isSelected) ZeneloColors.TextPrimary else ZeneloColors.TextMuted,
+                    maxLines = 1,
                 )
             }
         }

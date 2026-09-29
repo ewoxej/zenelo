@@ -244,6 +244,7 @@ private fun TopBar(
     modifier: Modifier = Modifier,
 ) {
     var menu by remember { mutableStateOf(false) }
+    val picker = appContainer().playlistPicker
     val folder = state.mediaId?.let { File(it).parentFile }
     val roots = appContainer().fileBrowser.let { fs -> remember { fs.roots() } }
     // Taller than the icons need: it doubles as the pull-down handle.
@@ -273,6 +274,14 @@ private fun TopBar(
                     onClick = {
                         menu = false
                         folder?.let(onOpenFolder)
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("Add to playlist…") },
+                    enabled = state.mediaId != null,
+                    onClick = {
+                        menu = false
+                        state.mediaId?.let { picker.pick(listOf(it)) }
                     },
                 )
                 DropdownMenuItem(

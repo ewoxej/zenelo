@@ -69,6 +69,8 @@ object TagReader {
             trackGainDb = tag?.replayGain("REPLAYGAIN_TRACK_GAIN"),
             albumGainDb = tag?.replayGain("REPLAYGAIN_ALBUM_GAIN"),
             albumKey = albumKey(albumArtist ?: artist, album),
+            trackPeak = tag?.replayGain("REPLAYGAIN_TRACK_PEAK"),
+            albumPeak = tag?.replayGain("REPLAYGAIN_ALBUM_PEAK"),
         )
         return TagData(track, tag.field(FieldKey.LYRICS))
     }

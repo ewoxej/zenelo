@@ -9,7 +9,10 @@ import app.zenelo.AppContainer
 import app.zenelo.data.db.FavoriteEntity
 import app.zenelo.data.db.FavoriteKind
 import app.zenelo.data.db.TrackEntity
-import app.zenelo.data.settings.BrowserSort
+import app.zenelo.data.settings.SortField
+import app.zenelo.data.settings.SortOrder
+import app.zenelo.data.settings.SortPage
+import app.zenelo.library.LibrarySort
 import app.zenelo.data.settings.SwipeAction
 import app.zenelo.ui.components.formatTotal
 import app.zenelo.data.settings.ZeneloSettings
@@ -50,28 +53,44 @@ data class BrowserState(
     val subfolderCounts: Map<String, Int> = emptyMap(),
     /** Tracks and total duration under each subfolder (recursive), from the library index. */
     val folderStats: Map<String, Pair<Int, Long>> = emptyMap(),
+    /** Tracks directly in each subfolder (its own subfolders not counted), for sorting. */
+    val folderTracks: Map<String, Int> = emptyMap(),
     /** True until the first listing of [dir] arrives; starts true so launch doesn't flash "empty". */
     val loading: Boolean = true,
     val query: String = "",
     val searching: Boolean = false,
 ) {
-    fun visibleFolders(sort: BrowserSort): List<File> {
+    /**
+     * Folders sort by name, date or the tracks directly inside them; artist / album / duration apply
+     * to files only (folders keep name order).
+     */
+    fun visibleFolders(sort: SortOrder): List<File> {
         val matching = folders.filter { query.isBlank() || it.name.contains(query, ignoreCase = true) }
-        return when (sort) {
-            BrowserSort.NAME_ASC -> matching
-            BrowserSort.NAME_DESC -> matching.asReversed()
-            BrowserSort.DATE_NEWEST -> matching.sortedByDescending { folderModified[it.path] ?: 0L }
-            BrowserSort.DATE_OLDEST -> matching.sortedBy { folderModified[it.path] ?: 0L }
+        return when (sort.sortBy) {
+            SortField.DATE_ADDED ->
+                if (sort.descending) matching.sortedByDescending { folderModified[it.path] ?: 0L } else matching.sortedBy { folderModified[it.path] ?: 0L }
+            // Stable sort: equal counts stay in name order.
+            SortField.TRACKS ->
+                if (sort.descending) matching.sortedByDescending { folderTracks[it.path] ?: 0 } else matching.sortedBy { folderTracks[it.path] ?: 0 }
+            SortField.NAME -> if (sort.descending) matching.asReversed() else matching
+            else -> matching
         }
     }
 
-    fun visibleFiles(sort: BrowserSort): List<AudioFile> {
+    /** Files by name (as listed), date, or their tags (untagged files go last). */
+    fun visibleFiles(sort: SortOrder): List<AudioFile> {
         val matching = files.filter { query.isBlank() || it.name.contains(query, ignoreCase = true) }
-        return when (sort) {
-            BrowserSort.NAME_ASC -> matching
-            BrowserSort.NAME_DESC -> matching.asReversed()
-            BrowserSort.DATE_NEWEST -> matching.sortedByDescending { it.modified }
-            BrowserSort.DATE_OLDEST -> matching.sortedBy { it.modified }
+        val known = matching.mapNotNull { tracks[it.path] }
+        fun byTracks(): List<AudioFile> {
+            val order = LibrarySort.tracks(known, sort).withIndex().associate { (i, t) -> t.path to i }
+            return matching.sortedBy { order[it.path] ?: Int.MAX_VALUE }
+        }
+        return when (sort.sortBy) {
+            SortField.NAME -> if (sort.descending) matching.asReversed() else matching
+            SortField.DATE_ADDED -> if (sort.descending) matching.sortedByDescending { it.modified } else matching.sortedBy { it.modified }
+            // A folder sort: files keep name order.
+            SortField.TRACKS -> matching
+            else -> byTracks()
         }
     }
 
@@ -140,16 +159,20 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                 .map { (dir, rows) ->
                     val prefix = dir.absolutePath + "/"
                     val byChild = HashMap<String, Pair<Int, Long>>()
+                    val direct = HashMap<String, Int>()
                     for (row in rows) {
                         if (!row.dir.startsWith(prefix)) continue
                         val child = prefix + row.dir.substring(prefix.length).substringBefore('/')
                         val (t, d) = byChild[child] ?: (0 to 0L)
                         byChild[child] = (t + row.tracks) to (d + row.durationMs)
+                        if (row.dir == child) direct[child] = row.tracks
                     }
-                    dir to byChild
+                    Triple(dir, byChild, direct)
                 }
                 .flowOn(Dispatchers.Default)
-                .collect { (dir, stats) -> _state.update { if (it.dir != dir) it else it.copy(folderStats = stats) } }
+                .collect { (dir, stats, direct) ->
+                    _state.update { if (it.dir != dir) it else it.copy(folderStats = stats, folderTracks = direct) }
+                }
         }
         viewModelScope.launch {
             // Indexing a big folder re-emits it after every batch: sample, and build the map off the main thread.
@@ -176,6 +199,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                 folderModified = cached?.folderModified.orEmpty(),
                 subfolderCounts = cached?.let { c -> subfolderCounts(c.folders) }.orEmpty(),
                 folderStats = if (it.dir == dir) it.folderStats else emptyMap(),
+                folderTracks = if (it.dir == dir) it.folderTracks else emptyMap(),
                 loading = cached == null,
                 query = "",
                 searching = false,
@@ -202,9 +226,11 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
     private fun subfolderCounts(folders: List<File>): Map<String, Int> =
         folders.mapNotNull { f -> fs.cached(f)?.let { f.path to it.folders.size } }.toMap()
 
-    fun setSort(sort: BrowserSort) {
-        viewModelScope.launch { container.settings.setBrowserSort(sort) }
+    fun setSort(sort: SortOrder) {
+        viewModelScope.launch { container.settings.setSort(SortPage.BROWSER, sort) }
     }
+
+    val sort: SortOrder get() = settings.value.sorts[SortPage.BROWSER] ?: SortPage.BROWSER.default
 
     fun setSearching(searching: Boolean) = _state.update { it.copy(searching = searching, query = if (searching) it.query else "") }
 
@@ -244,7 +270,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    private fun visibleFiles() = _state.value.visibleFiles(settings.value.browserSort)
+    private fun visibleFiles() = _state.value.visibleFiles(sort)
 
     /**
      * The play button. Paused on a track of this folder: carries on from there. Otherwise plays the
@@ -299,7 +325,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
             SwipeAction.ADD_TO_QUEUE -> queueSubtree(folder, next = false)
             SwipeAction.PLAY_NEXT -> queueSubtree(folder, next = true)
             SwipeAction.FAVORITE -> toggleFolderFavorite(folder)
-            SwipeAction.ADD_TO_PLAYLIST -> showMessage("Playlist picker — coming soon")
+            SwipeAction.ADD_TO_PLAYLIST -> addFolderToPlaylist(folder)
             SwipeAction.REMOVE_FROM_LIST, SwipeAction.HIDE -> {
                 val before = _state.value.folders
                 _state.update { it.copy(folders = it.folders - folder) }
@@ -308,6 +334,14 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                 }
             }
             SwipeAction.DELETE_FILE -> showMessage("Folders can't be deleted from here")
+        }
+    }
+
+    /** Everything under [folder] (subfolders included) into a playlist, via the picker. */
+    fun addFolderToPlaylist(folder: File) {
+        viewModelScope.launch {
+            val files = fs.listRecursive(folder)
+            if (files.isEmpty()) _events.send(BrowserEvent.Message("No music in ${folder.name}")) else container.playlistPicker.pick(files.map { it.path })
         }
     }
 
@@ -334,8 +368,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                     val added = favorites.toggle(FavoriteEntity(file.path, FavoriteKind.TRACK, file.title))
                     _events.send(BrowserEvent.Message(action = action, text = if (added) "Added to favorites" else "Removed from favorites"))
                 }
-                // TODO: playlist picker sheet.
-                SwipeAction.ADD_TO_PLAYLIST -> _events.send(BrowserEvent.Message(action = action, text = "Playlist picker — coming soon"))
+                SwipeAction.ADD_TO_PLAYLIST -> container.playlistPicker.pick(listOf(file.path))
                 // TODO: persist hidden files.
                 SwipeAction.REMOVE_FROM_LIST, SwipeAction.HIDE ->
                     if (settings.value.confirmRemove) {
@@ -404,7 +437,10 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                     val failed = files.size - deleted.size
                     _events.send(BrowserEvent.Message("${deleted.size} deleted" + if (failed > 0) " · $failed couldn't be deleted" else ""))
                 }
-                SwipeAction.ADD_TO_PLAYLIST -> _events.send(BrowserEvent.Message("Playlist picker — coming soon", action = action))
+                SwipeAction.ADD_TO_PLAYLIST -> {
+                    val all = expand(folders, files)
+                    if (all.isEmpty()) _events.send(BrowserEvent.Message("No music selected")) else container.playlistPicker.pick(all.map { it.path })
+                }
                 SwipeAction.NONE -> Unit
             }
         }

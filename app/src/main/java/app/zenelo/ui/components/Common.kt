@@ -37,6 +37,8 @@ import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarData
 import androidx.compose.material3.Text
@@ -111,9 +113,10 @@ fun IconTile(
     background: Color = ZeneloColors.Card,
     size: Dp = 36.dp,
     iconSize: Dp = 18.dp,
+    cornerRadius: Dp = 8.dp,
 ) {
     Box(
-        Modifier.size(size).clip(RoundedCornerShape(8.dp)).background(background),
+        Modifier.size(size).clip(RoundedCornerShape(cornerRadius)).background(background),
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(iconSize))
@@ -181,6 +184,14 @@ fun ListRow(
             }
         }
         trailing()
+    }
+}
+
+/** ← of a sub-page header. */
+@Composable
+fun BackButton(onBack: () -> Unit) {
+    IconButton(onClick = onBack) {
+        Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", Modifier.size(20.dp))
     }
 }
 

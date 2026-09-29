@@ -6,7 +6,9 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import app.zenelo.R
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
@@ -16,6 +18,7 @@ object ZeneloColors {
     val Bar = Color(0xFF181A15)          // bottom nav, mini player
     val Card = Color(0xFF20231C)         // icon tiles, settings cards
     val Placeholder = Color(0xFF2A2D25)  // empty cover art
+    val Inset = Color(0xFF121410)        // cells inside a card (sort menu, segmented control)
     val TextPrimary = Color(0xFFF4F4EE)
     val TextSecondary = Color(0xFFAEB0A0)
     val TextMuted = Color(0xFF7F8274)
@@ -29,9 +32,19 @@ object ZeneloColors {
     val CeladonTint = Celadon.copy(alpha = 0.12f)
 }
 
-// TODO: bundle IBM Plex Sans / Mono TTFs in res/font and swap these in.
-val PlexSans: FontFamily = FontFamily.SansSerif
-val PlexMono: FontFamily = FontFamily.Monospace
+// IBM Plex (OFL), built from the design bundle's woff2 subsets (latin, latin-ext, cyrillic,
+// cyrillic-ext, greek, vietnamese) merged into one TTF per weight.
+val PlexSans: FontFamily = FontFamily(
+    Font(R.font.plex_sans_regular, FontWeight.Normal),
+    Font(R.font.plex_sans_medium, FontWeight.Medium),
+    Font(R.font.plex_sans_semibold, FontWeight.SemiBold),
+    Font(R.font.plex_sans_bold, FontWeight.Bold),
+)
+val PlexMono: FontFamily = FontFamily(
+    Font(R.font.plex_mono_regular, FontWeight.Normal),
+    Font(R.font.plex_mono_medium, FontWeight.Medium),
+    Font(R.font.plex_mono_semibold, FontWeight.SemiBold),
+)
 
 private val ZeneloTypography = Typography(
     // Screen titles: "Ambient", "Favorites".
@@ -47,7 +60,19 @@ private val ZeneloTypography = Typography(
     // Mono: section headers ("FOLDERS · 3") and metadata ("4:31 · 24/96 · 78 MB").
     labelMedium = TextStyle(fontFamily = PlexMono, fontSize = 11.sp, lineHeight = 15.sp),
     labelSmall = TextStyle(fontFamily = PlexMono, fontSize = 10.5.sp, letterSpacing = 1.26.sp),
-)
+).let { t ->
+    // The styles not set above (buttons, dialogs, text fields) in Plex Sans too, not Roboto.
+    val d = Typography()
+    t.copy(
+        displayLarge = d.displayLarge.copy(fontFamily = PlexSans),
+        displayMedium = d.displayMedium.copy(fontFamily = PlexSans),
+        displaySmall = d.displaySmall.copy(fontFamily = PlexSans),
+        headlineLarge = d.headlineLarge.copy(fontFamily = PlexSans),
+        headlineMedium = d.headlineMedium.copy(fontFamily = PlexSans),
+        headlineSmall = d.headlineSmall.copy(fontFamily = PlexSans),
+        labelLarge = d.labelLarge.copy(fontFamily = PlexSans),
+    )
+}
 
 private val ZeneloColorScheme = darkColorScheme(
     primary = ZeneloColors.Mustard,

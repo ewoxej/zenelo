@@ -27,6 +27,7 @@ import app.zenelo.data.db.FavoriteEntity
 import app.zenelo.data.db.FavoriteKind
 import app.zenelo.data.db.TrackEntity
 import app.zenelo.data.settings.NormalizationMode
+import app.zenelo.library.Library
 import app.zenelo.player.audio.NormalizationAudioProcessor
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -36,17 +37,17 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import java.io.File
 
 /**
  * Owns the ExoPlayer and the MediaSession. Media3 builds the media notification from the session;
- * heart and shuffle are the two custom actions from the design.
- *
- * TODO crossfade: ExoPlayer has no built-in crossfade. Plan: two ExoPlayer instances behind a
- *  forwarding Player, ramping volumes over `ZeneloSettings.crossfadeMs`; disabled (gapless) at 0.
+ * heart and shuffle are the two custom actions from the design. Crossfade: [Crossfader].
  */
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
@@ -56,11 +57,17 @@ class PlaybackService : MediaSessionService() {
     private val normalization = NormalizationAudioProcessor()
 
     private lateinit var player: ExoPlayer
+    private lateinit var crossfader: Crossfader
     private var session: MediaSession? = null
     private var currentIsFavorite = false
     private var favoriteJob: Job? = null
     private var metadataJob: Job? = null
     private var positionJob: Job? = null
+    private var listenJob: Job? = null
+
+    /** Time the current track has actually played, for counting it in "Recently played". */
+    private var listenedMs = 0L
+    private var playCounted = false
 
     private fun savePosition(now: Boolean = false) =
         container.queue.savePosition(player.currentMediaItem?.mediaId, player.currentPosition, now)
@@ -80,12 +87,41 @@ class PlaybackService : MediaSessionService() {
             .build()
         player.addListener(PlayerListener())
         container.queue.attach(player)
+        crossfader = Crossfader(
+            main = player,
+            scope = scope,
+            buildTail = { processor ->
+                // No audio focus of its own: it would take it from the main player.
+                ExoPlayer.Builder(this, ZeneloRenderersFactory(this, processor))
+                    .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), false)
+                    .build()
+            },
+            currentGainDb = { normalization.gainDb },
+            // The old track's file was read until the fade ended: write what waited for it now.
+            onFadeEnd = { flushPendingWrites() },
+        ).also { it.start() }
+        scope.launch {
+            container.settings.settings.map { it.crossfadeMs }.distinctUntilChanged().collect { crossfader.fadeMs = it }
+        }
+        // Mode / pre-amp changes apply to the playing track at once (its gain is otherwise set on track change).
+        scope.launch {
+            container.settings.settings.map { it.normalization to it.preampDb }.distinctUntilChanged().drop(1).collect {
+                val track = player.currentMediaItem?.mediaId?.let { container.db.tracks().get(it) }
+                normalization.gainDb = if (track == null) 0f else gainFor(track)
+            }
+        }
         // Last session's queue, paused where it was.
         container.queue.restore()
         positionJob = scope.launch {
             while (true) {
                 delay(POSITION_SAVE_MS)
                 if (player.isPlaying) savePosition()
+            }
+        }
+        listenJob = scope.launch {
+            while (true) {
+                delay(LISTEN_TICK_MS)
+                if (player.isPlaying) countListening()
             }
         }
 
@@ -116,12 +152,25 @@ class PlaybackService : MediaSessionService() {
         container.appScope.launch { container.pendingWrites.flush() }
     }
 
+    /** Counts a play once the track has played long enough (see [Library.playThresholdMs]). */
+    private fun countListening() {
+        if (playCounted) return
+        listenedMs += LISTEN_TICK_MS
+        val path = player.currentMediaItem?.mediaId ?: return
+        if (listenedMs >= Library.playThresholdMs(player.duration.coerceAtLeast(0L))) {
+            playCounted = true
+            container.appScope.launch { container.library.recordPlay(path) }
+        }
+    }
+
     override fun onDestroy() {
         positionJob?.cancel()
+        listenJob?.cancel()
         savePosition(now = true)
         // Nothing plays any more: every waiting write can go to its file.
         container.nowPlaying.value = null
         flushPendingWrites()
+        crossfader.release()
         container.queue.detach()
         session?.run {
             player.release()
@@ -149,8 +198,12 @@ class PlaybackService : MediaSessionService() {
 
     private fun onTrackChanged(item: MediaItem?) {
         val path = item?.mediaId
+        // Also on repeat-one: every time round is a play of its own.
+        listenedMs = 0
+        playCounted = false
         container.nowPlaying.value = path
-        flushPendingWrites()
+        // During a crossfade the old file still plays from the tail player: its writes wait for the fade's end.
+        if (!crossfader.fading) flushPendingWrites()
         metadataJob?.cancel()
         metadataJob = scope.launch {
             val track = path?.let { container.db.tracks().get(it) ?: container.indexer.indexOne(it) }
@@ -176,9 +229,14 @@ class PlaybackService : MediaSessionService() {
 
     /** ReplayGain tags first, then our own measurement; 0 dB until the track has been measured. */
     private suspend fun gainFor(track: TrackEntity): Float {
-        val mode = container.settings.settings.first().normalization
-        if (mode == NormalizationMode.OFF) return 0f
-        val gain = container.loudness.gainFor(track, album = mode == NormalizationMode.ALBUM, targetLufs = TARGET_LUFS) ?: 0f
+        val settings = container.settings.settings.first()
+        if (settings.normalization == NormalizationMode.OFF) return 0f
+        val gain = container.loudness.gainFor(
+            track,
+            album = settings.normalization == NormalizationMode.ALBUM,
+            targetLufs = TARGET_LUFS,
+            preampDb = settings.preampDb,
+        ) ?: 0f
         return gain.coerceIn(-MAX_GAIN_DB, MAX_GAIN_DB)
     }
 
@@ -279,6 +337,8 @@ class PlaybackService : MediaSessionService() {
 
         /** How often the position is saved while playing (a kill loses at most this much). */
         const val POSITION_SAVE_MS = 10_000L
+
+        const val LISTEN_TICK_MS = 1_000L
     }
 }
 
