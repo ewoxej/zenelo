@@ -42,6 +42,8 @@ fun TrackMenu(
     onAction: (SwipeAction) -> Unit,
     onDownloadCover: () -> Unit,
     onEditTags: (fromFileName: Boolean) -> Unit,
+    /** False for mStream tracks: the server's files aren't ours to rewrite or delete. */
+    local: Boolean = true,
 ) {
     var menu by remember { mutableStateOf(false) }
     Box {
@@ -49,7 +51,7 @@ fun TrackMenu(
             Icon(Icons.Rounded.MoreVert, "More", tint = ZeneloColors.TextMuted, modifier = Modifier.size(20.dp))
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            SwipeAction.entries.filter { it != SwipeAction.NONE }.forEach { action ->
+            SwipeAction.entries.filter { it != SwipeAction.NONE && (local || it != SwipeAction.DELETE_FILE) }.forEach { action ->
                 DropdownMenuItem(
                     text = { Text(action.label) },
                     leadingIcon = { Icon(action.icon, null, tint = action.accent) },
@@ -59,22 +61,24 @@ fun TrackMenu(
                     },
                 )
             }
-            DropdownMenuItem(
-                text = { Text("Edit tags…") },
-                leadingIcon = { Icon(Icons.Outlined.Edit, null, tint = ZeneloColors.Celadon) },
-                onClick = {
-                    menu = false
-                    onEditTags(false)
-                },
-            )
-            DropdownMenuItem(
-                text = { Text("Tags from file name…") },
-                leadingIcon = { Icon(Icons.Outlined.DriveFileRenameOutline, null, tint = ZeneloColors.Celadon) },
-                onClick = {
-                    menu = false
-                    onEditTags(true)
-                },
-            )
+            if (local) {
+                DropdownMenuItem(
+                    text = { Text("Edit tags…") },
+                    leadingIcon = { Icon(Icons.Outlined.Edit, null, tint = ZeneloColors.Celadon) },
+                    onClick = {
+                        menu = false
+                        onEditTags(false)
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("Tags from file name…") },
+                    leadingIcon = { Icon(Icons.Outlined.DriveFileRenameOutline, null, tint = ZeneloColors.Celadon) },
+                    onClick = {
+                        menu = false
+                        onEditTags(true)
+                    },
+                )
+            }
             DropdownMenuItem(
                 text = { Text("Download cover…") },
                 leadingIcon = { Icon(Icons.Outlined.Image, null, tint = ZeneloColors.Celadon) },

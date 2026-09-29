@@ -88,6 +88,7 @@ import app.zenelo.player.PlayerUiState
 import app.zenelo.data.db.ArtistRow
 import app.zenelo.data.db.TrackEntity
 import app.zenelo.library.artistKey
+import app.zenelo.mstream.MStreamPaths
 import app.zenelo.library.artistTag
 import kotlinx.coroutines.flow.StateFlow
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -270,7 +271,9 @@ private fun TopBar(
 ) {
     var menu by remember { mutableStateOf(false) }
     val picker = appContainer().playlistPicker
-    val folder = state.mediaId?.let { File(it).parentFile }
+    // mStream tracks have no folder here (yet): the label shows the server's path instead.
+    val remote = MStreamPaths.isRemote(state.mediaId)
+    val folder = state.mediaId?.takeUnless { remote }?.let { File(it).parentFile }
     val roots = appContainer().fileBrowser.let { fs -> remember { fs.roots() } }
     val settingsFlow = appContainer().settings.settings
     val settings by settingsFlow.collectAsStateWithLifecycle(initialValue = null)
@@ -291,14 +294,18 @@ private fun TopBar(
     Row(modifier.fillMaxWidth().padding(horizontal = 4.dp).height(64.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onBack) { Icon(Icons.Rounded.KeyboardArrowDown, "Close") }
         Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("PLAYING FROM FOLDER", style = MaterialTheme.typography.labelSmall, color = ZeneloColors.TextMuted)
+            Text(if (remote) "PLAYING FROM MSTREAM" else "PLAYING FROM FOLDER", style = MaterialTheme.typography.labelSmall, color = ZeneloColors.TextMuted)
             Text(
                 // Up to three segments below the storage root: "Music / Ambient / Harbor".
-                folder?.let { f ->
-                    val root = roots.firstOrNull { f.startsWith(it.dir) }?.dir
-                    val relative = if (root != null) f.relativeTo(root).path else f.path
-                    relative.split(File.separatorChar).filter { it.isNotEmpty() }.takeLast(3).joinToString(" / ")
-                }.orEmpty(),
+                if (remote) {
+                    MStreamPaths.dir(state.mediaId!!).let(MStreamPaths::serverPath).split('/').filter { it.isNotEmpty() }.takeLast(3).joinToString(" / ")
+                } else {
+                    folder?.let { f ->
+                        val root = roots.firstOrNull { f.startsWith(it.dir) }?.dir
+                        val relative = if (root != null) f.relativeTo(root).path else f.path
+                        relative.split(File.separatorChar).filter { it.isNotEmpty() }.takeLast(3).joinToString(" / ")
+                    }.orEmpty()
+                },
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -344,7 +351,8 @@ private fun TopBar(
                 )
                 DropdownMenuItem(
                     text = { Text("Edit tags…") },
-                    enabled = state.mediaId != null,
+                    // The server's files aren't ours to write.
+                    enabled = state.mediaId != null && !remote,
                     onClick = {
                         menu = false
                         onEditTags()

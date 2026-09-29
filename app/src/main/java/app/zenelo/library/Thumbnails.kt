@@ -7,6 +7,7 @@ import android.media.MediaMetadataRetriever
 import android.util.LruCache
 import app.zenelo.data.db.TrackDao
 import app.zenelo.data.db.TrackEntity
+import app.zenelo.mstream.MStreamPaths
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -64,7 +65,8 @@ class Thumbnails(context: Context, private val tracks: TrackDao, private val fet
                     BitmapFactory.decodeFile(cached.path)
                 } else {
                     val info = tracks.get(path)
-                    source(file, info)?.let { bytes -> decode(bytes, if (large) LARGE else SIZE)?.also { save(it, cached) } }
+                    val bytes = if (MStreamPaths.isRemote(path)) remoteSource(info) else source(file, info)
+                    bytes?.let { decode(it, if (large) LARGE else SIZE)?.also { b -> save(b, cached) } }
                 }
                 if (bitmap != null) cache.put(path, bitmap) else missing.put(path, true)
                 bitmap
@@ -78,6 +80,12 @@ class Thumbnails(context: Context, private val tracks: TrackDao, private val fet
         }
         val cover = if (info != null) fetcher.localCovers(listOf(info))[info.path] else fetcher.folderImage(file.parent.orEmpty())
         return cover?.let { runCatching { it.readBytes() }.getOrNull() }
+    }
+
+    /** A server track: its album's cached cover, else the server's art (downloaded once, then cached). */
+    private suspend fun remoteSource(info: TrackEntity?): ByteArray? {
+        val cover = fetcher.coverFor(info ?: return null, allowNetwork = true) ?: return null
+        return runCatching { cover.readBytes() }.getOrNull()
     }
 
     private fun embedded(file: File): ByteArray? {

@@ -37,6 +37,9 @@ object LibraryWork {
     private const val FETCH_PERIODIC = "library-fetch-periodic"
 
     private const val LOUDNESS_PERIODIC = "library-loudness-periodic"
+    private const val SERVER_SYNC = "mstream-sync"
+
+    private val online = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
 
     private val batteryOk = Constraints.Builder().setRequiresBatteryNotLow(true).build()
 
@@ -51,6 +54,7 @@ object LibraryWork {
         wm.beginUniqueWork(INDEX, ExistingWorkPolicy.KEEP, OneTimeWorkRequestBuilder<IndexWorker>().build())
             .then(listOf(fetchRequest(), loudnessRequest()))
             .enqueue()
+        wm.enqueueUniqueWork(SERVER_SYNC, ExistingWorkPolicy.KEEP, serverSyncRequest(force = false))
         wm.enqueueUniquePeriodicWork(
             FETCH_PERIODIC,
             ExistingPeriodicWorkPolicy.KEEP,
@@ -62,6 +66,16 @@ object LibraryWork {
             PeriodicWorkRequestBuilder<LoudnessWorker>(12, TimeUnit.HOURS).setConstraints(batteryOk).build(),
         )
     }
+
+    /** The mStream server's library, now (after logging in, "Sync now"); [force] ignores its revision. */
+    fun syncServer(context: Context, force: Boolean) {
+        WorkManager.getInstance(context).enqueueUniqueWork(SERVER_SYNC, ExistingWorkPolicy.REPLACE, serverSyncRequest(force))
+    }
+
+    private fun serverSyncRequest(force: Boolean) = OneTimeWorkRequestBuilder<ServerSyncWorker>()
+        .setConstraints(online)
+        .setInputData(workDataOf(ServerSyncWorker.FORCE to force))
+        .build()
 
     /** "Scan library now" in settings. */
     fun scanNow(context: Context) {
@@ -154,5 +168,22 @@ class LoudnessWorker(context: Context, params: WorkerParameters) : CoroutineWork
             container.loudness.ensureMeasured(track)
         }
         return Result.success()
+    }
+}
+
+/** Mirrors the mStream server's library (see [app.zenelo.mstream.MStreamSync]); retried on failure. */
+class ServerSyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+    override suspend fun doWork(): Result {
+        val container = (applicationContext as ZeneloApp).container
+        return try {
+            container.mstreamSync.sync(force = inputData.getBoolean(FORCE, false))
+            Result.success()
+        } catch (e: java.io.IOException) {
+            if (runAttemptCount < 3) Result.retry() else Result.failure()
+        }
+    }
+
+    companion object {
+        const val FORCE = "force"
     }
 }

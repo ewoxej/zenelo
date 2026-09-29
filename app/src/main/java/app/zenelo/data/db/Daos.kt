@@ -212,24 +212,15 @@ interface TrackDao {
     @Query("SELECT * FROM tracks")
     fun observeAll(): Flow<List<TrackEntity>>
 
-    @Query(
-        """
-        SELECT albumKey AS `key`, MAX(album) AS album, MAX(COALESCE(albumArtist, artist)) AS artist,
-               COUNT(*) AS tracks, COALESCE(SUM(durationMs), 0) AS durationMs, MAX(modified) AS added,
-               COALESCE(MIN(CASE WHEN hasArtwork = 1 THEN path END), MIN(path)) AS coverPath
-        FROM tracks WHERE albumKey IS NOT NULL AND album IS NOT NULL GROUP BY albumKey
-        """,
-    )
-    fun observeAlbums(): Flow<List<AlbumRow>>
-
-    @Query("SELECT * FROM tracks WHERE albumKey = :albumKey ORDER BY trackNumber IS NULL, trackNumber, path")
-    fun observeAlbumTracks(albumKey: String): Flow<List<TrackEntity>>
-
     @Query("SELECT COUNT(*) AS tracks, COALESCE(SUM(hasArtwork), 0) AS withArtwork FROM tracks")
     fun observeStats(): Flow<LibraryStats>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(tracks: List<TrackEntity>)
+
+    /** The mStream server's tracks (see `MStreamPaths`). */
+    @Query("DELETE FROM tracks WHERE path LIKE 'mstream://%'")
+    suspend fun deleteRemote()
 
     @Query("DELETE FROM tracks WHERE path IN (:paths)")
     suspend fun delete(paths: List<String>)
@@ -304,4 +295,25 @@ interface LyricsDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(lyrics: LyricsEntity)
+}
+
+@Dao
+interface RemoteTrackDao {
+    @Query("SELECT * FROM remote_tracks WHERE path = :path")
+    suspend fun get(path: String): RemoteTrackEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(rows: List<RemoteTrackEntity>)
+
+    @Query("SELECT path FROM remote_tracks")
+    suspend fun paths(): List<String>
+
+    @Query("DELETE FROM remote_tracks WHERE path IN (:paths)")
+    suspend fun delete(paths: List<String>)
+
+    @Query("DELETE FROM remote_tracks")
+    suspend fun deleteAll()
+
+    @Query("SELECT COUNT(*) FROM remote_tracks")
+    fun observeCount(): Flow<Int>
 }

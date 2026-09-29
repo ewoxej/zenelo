@@ -122,8 +122,33 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   track artist spread evenly, neighbours never share an artist where avoidable, plays of the last
   48 h last). Changing the mode reshuffles a shuffled queue. The UI edits the queue directly (same process), not via the controller.
 
+- mStream (stage 1 done): `mstream/` — `MStreamClient` (API, JWT in `x-access-token`; album art needs
+  it too, despite the docs), `MStreamSync` mirrors `POST /api/v1/sync/manifest` (skipped when the
+  revision is unchanged; `ServerSyncWorker` on app start / login / "Sync now") into `tracks` as
+  `mstream://<vpath>/<rel>` rows + `remote_tracks` (art file, rating, lyrics flag). `MStreamPaths`
+  for those paths — never `File(path)` them (`AudioFile.forPath`). `LibraryMerge` (unit-tested)
+  builds the library for the chosen `LibrarySource` (setting; title tap → `SourceMenu`): "All" hides
+  server twins of local files (same title/artist/album/number, or file name + size). Albums are
+  grouped in Kotlin now (`Library.albumsOf`). Playback: MediaItem URI `mstream://server?p=…`,
+  `RemoteMedia` (ResolvingDataSource) turns it into `<server>/media/…` + token. Server tracks:
+  hasArtwork=false, covers/lyrics from the server first (`MetadataFetcher`), never embedded / tag-
+  edited / deleted / loudness-measured. Cleartext HTTP allowed (home servers). Login + token are in
+  settings but not in backups.
+
 ## Roadmap (not done yet)
 1. FFmpeg decoder dependency (verify DSD support in Jellyfin's prebuilt, else build from source).
+2. mStream server support (github.com/IrosTheBeggar/mStream; API in its `docs/openapi.yaml`). Decisions:
+   one server; login URL + credentials (JWT in `x-access-token`); server tracks mirrored into `tracks`
+   from `POST /api/v1/sync/manifest` as `mstream://<vpath>/<rel>`; duplicates (same tags, or file name
+   + size) prefer the local file; icons: cloud = server only, arrow = downloaded, local = none;
+   "mStream" root in the file browser; title tap → source menu All / Local / mStream; server covers
+   and lyrics when missing locally; rating 8–10 of 0–10 = favorite, like sets 10, unlike clears;
+   downloads to a configurable folder (default `/mstream` at the storage root), queue auto-download
+   = separate cache with a limit; transcoding (`/transcode`) off by default; Auto DJ
+   (`db/random-songs`) and Sonic Path (`discovery/local/path`) as on the server. Stages:
+   (1) connect, sync, icons, dedupe, source menu, streaming, covers/lyrics; (2) file explorer,
+   ratings ↔ favorites, server playlists / recent; (3) transcoding, downloads, queue auto-download;
+   (4) Auto DJ, Sonic Path; (5) Quick Connect (iroh tunnel, `mstr1:` code — Rust via NDK). Stage 1 is done.
 
 ## Build
 SDK: `/opt/homebrew/share/android-commandlinetools` (set in `local.properties`). JDK 17 from Homebrew:

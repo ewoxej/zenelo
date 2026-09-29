@@ -7,6 +7,8 @@ import app.zenelo.data.db.ZeneloDatabase
 import app.zenelo.data.settings.SettingsRepository
 import app.zenelo.library.FileSystemBrowser
 import app.zenelo.library.PlaylistFiles
+import app.zenelo.mstream.MStreamClient
+import app.zenelo.mstream.MStreamSync
 import app.zenelo.library.Library
 import app.zenelo.library.LibraryIndexer
 import app.zenelo.library.LoudnessRepository
@@ -62,6 +64,7 @@ class AppContainer(context: Context, upgradedInstall: Boolean) {
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     val http = Http(context)
+    val mstream = MStreamClient(http.client)
     val indexer = LibraryIndexer(db)
 
     /** Tag / cover writes; the playing file's wait for its track to end but show up everywhere at once. */
@@ -75,15 +78,17 @@ class AppContainer(context: Context, upgradedInstall: Boolean) {
         lrcLib = LrcLib(http),
         settings = settings,
         pendingWrites = pendingWrites,
+        mstream = mstream,
     )
     val thumbnails = Thumbnails(context, db.tracks(), metadata)
     val loudness = LoudnessRepository(db)
-    val library = Library(db, settings.settings.map { it.artistSplitter })
+    val library = Library(db, settings.settings.map { it.artistSplitter }, settings.settings.map { it.librarySource }, appScope)
     val queue = PlayQueue(db.tracks(), db.plays(), settings.settings, metadata, File(context.filesDir, "queue.txt"))
     val tagWriter = TagWriter(pendingWrites)
     val playlistPicker = PlaylistPicker()
     val playlistFiles = PlaylistFiles(context, db)
     val backup = Backup(context, db, settings)
+    val mstreamSync = MStreamSync(db, settings, mstream)
     val player = PlayerController(context, queue, coverOverride)
 
     /** Refreshes the queue / Now Playing (tags) and the thumbnails / Now Playing cover after a write. */

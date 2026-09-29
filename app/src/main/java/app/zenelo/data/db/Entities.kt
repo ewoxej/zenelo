@@ -171,6 +171,8 @@ data class AlbumRow(
     val added: Long,
     /** A track to take the cover from, one with embedded art if any. */
     val coverPath: String,
+    /** All its tracks are on the mStream server only (cloud mark). */
+    val remote: Boolean = false,
 )
 
 /** An artist of the library, by album artist (else track artist); [key] is its lowercase name. */
@@ -195,4 +197,18 @@ data class PendingWriteEntity(
     val tagsJson: String?,
     val coverFile: String?,
     val createdAt: Long = System.currentTimeMillis(),
+)
+
+/**
+ * What the mStream server says about one of its tracks beyond the tags in `tracks` (whose row has
+ * the same `mstream://` path): its album-art file, the user's rating (0–10) and whether it
+ * carries lyrics.
+ */
+@Entity(tableName = "remote_tracks")
+data class RemoteTrackEntity(
+    @PrimaryKey val path: String,
+    val artFile: String?,
+    val rating: Int?,
+    val hasLyrics: Boolean,
+    val hash: String?,
 )

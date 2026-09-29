@@ -5,6 +5,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import app.zenelo.data.db.TrackEntity
 import app.zenelo.library.AudioFile
+import app.zenelo.mstream.MStreamPaths
+import app.zenelo.mstream.RemoteMedia
 import java.io.File
 
 /**
@@ -14,7 +16,8 @@ import java.io.File
  */
 /** [cover]: folder image or downloaded cover for files without embedded art (shown in the notification too). */
 fun AudioFile.toMediaItem(info: TrackEntity? = null, cover: File? = null): MediaItem {
-    val uri = Uri.fromFile(File(path))
+    // mStream tracks: resolved to the server's URL (with the login) by RemoteMedia when opened.
+    val uri = if (MStreamPaths.isRemote(path)) RemoteMedia.uri(path) else Uri.fromFile(File(path))
     return MediaItem.Builder()
         .setMediaId(path)
         .setUri(uri)

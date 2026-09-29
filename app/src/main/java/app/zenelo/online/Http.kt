@@ -19,7 +19,8 @@ import java.util.concurrent.TimeUnit
 class Http(context: Context) {
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
 
-    private val client = OkHttpClient.Builder()
+    /** Also the base of other clients (mStream), sharing the connection pool. */
+    val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .addInterceptor { chain ->

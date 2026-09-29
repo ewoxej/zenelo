@@ -16,6 +16,8 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import app.zenelo.mstream.MStreamPaths
+import app.zenelo.mstream.RemoteMedia
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.mp3.Mp3Extractor
 import androidx.media3.exoplayer.audio.AudioSink
@@ -84,12 +86,16 @@ class PlaybackService : MediaSessionService() {
      * track "jumped" to the next one (or, repeating, to its own start) soon after.
      */
     private fun mediaSources() = DefaultMediaSourceFactory(
-        this,
+        remoteMedia.dataSources(this),
         DefaultExtractorsFactory().setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING),
     )
 
+    /** Opens mStream tracks with the current login; kept up to date from settings. */
+    private val remoteMedia by lazy { RemoteMedia(container.mstream) { container.settings.settings.first().mstream } }
+
     override fun onCreate() {
         super.onCreate()
+        scope.launch { container.settings.settings.map { it.mstream }.distinctUntilChanged().collect { remoteMedia.account = it } }
         player = ExoPlayer.Builder(this, ZeneloRenderersFactory(this, normalization))
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -224,7 +230,7 @@ class PlaybackService : MediaSessionService() {
         if (!crossfader.fading) flushPendingWrites()
         metadataJob?.cancel()
         metadataJob = scope.launch {
-            val track = path?.let { container.db.tracks().get(it) ?: container.indexer.indexOne(it) }
+            val track = path?.let { container.db.tracks().get(it) ?: if (MStreamPaths.isRemote(it)) null else container.indexer.indexOne(it) }
             normalization.gainDb = if (track == null) 0f else gainFor(track)
             measureUpcoming()
             if (track == null) return@launch
@@ -263,7 +269,8 @@ class PlaybackService : MediaSessionService() {
         val queue = container.queue.state.value
         val upcoming = (1..2).filter { it < queue.size }.map { queue.pathAt(it) }
         if (upcoming.isEmpty()) return
-        scope.launch(Dispatchers.IO) { upcoming.forEach { container.loudness.ensureMeasured(it) } }
+        // Server tracks can't be measured here (streamed); their ReplayGain tags still apply.
+        scope.launch(Dispatchers.IO) { upcoming.filterNot { MStreamPaths.isRemote(it) }.forEach { container.loudness.ensureMeasured(it) } }
     }
 
     private inner class PlayerListener : Player.Listener {

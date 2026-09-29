@@ -3,6 +3,7 @@ package app.zenelo.library
 import app.zenelo.data.db.LoudnessEntity
 import app.zenelo.data.db.TrackEntity
 import app.zenelo.data.db.ZeneloDatabase
+import app.zenelo.mstream.MStreamPaths
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
@@ -18,7 +19,8 @@ class LoudnessRepository(db: ZeneloDatabase) {
 
     /** Measures [track] if it has no ReplayGain tag and no up-to-date measurement. */
     suspend fun ensureMeasured(track: TrackEntity) {
-        if (track.trackGainDb != null) return
+        // mStream tracks are streamed: only their ReplayGain tags count.
+        if (track.trackGainDb != null || MStreamPaths.isRemote(track.path)) return
         if (loudness.get(track.path)?.fileModified == track.modified) return
         mutex.withLock {
             if (loudness.get(track.path)?.fileModified == track.modified) return

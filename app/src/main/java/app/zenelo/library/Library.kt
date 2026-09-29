@@ -6,7 +6,13 @@ import app.zenelo.data.db.PlayEntity
 import app.zenelo.data.db.RecentPlay
 import app.zenelo.data.db.TrackEntity
 import app.zenelo.data.db.ZeneloDatabase
+import app.zenelo.data.settings.LibrarySource
+import app.zenelo.mstream.MStreamPaths
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -17,35 +23,47 @@ import kotlinx.coroutines.flow.transform
 import java.util.concurrent.TimeUnit
 
 /**
- * The library views over the `tracks` index: albums, artists, all tracks, and the play history
- * behind "Recently played".
+ * The library views over the `tracks` index — local files and the mStream server's tracks,
+ * merged and filtered by the chosen [LibrarySource] (see [LibraryMerge]): albums, artists, all
+ * tracks, and the play history behind "Recently played".
  */
-class Library(db: ZeneloDatabase, splitter: Flow<ArtistSplitter>) {
+class Library(db: ZeneloDatabase, splitter: Flow<ArtistSplitter>, source: Flow<LibrarySource>, scope: CoroutineScope) {
     private val tracks = db.tracks()
     private val plays = db.plays()
     private var pruned = false
+    private val source = source.distinctUntilChanged()
 
-    // Indexing re-emits these after every batch of files: at most one update per interval, so a
-    // library scan doesn't re-sort 7000 rows many times a second.
-    val albums: Flow<List<AlbumRow>> = tracks.observeAlbums().throttleLatest(THROTTLE_MS)
-    val allTracks: Flow<List<TrackEntity>> = tracks.observeAll().throttleLatest(THROTTLE_MS)
+    // Indexing re-emits the table after every batch of files: at most one update per interval, so
+    // a library scan doesn't re-sort 7000 rows many times a second. Shared: every page reads it.
+    val allTracks: Flow<List<TrackEntity>> = combine(tracks.observeAll().throttleLatest(THROTTLE_MS), this.source, LibraryMerge::visible)
+        .flowOn(Dispatchers.Default)
+        .shareIn(scope, SharingStarted.WhileSubscribed(5_000), replay = 1)
+
+    val albums: Flow<List<AlbumRow>> = allTracks.map(::albumsOf).flowOn(Dispatchers.Default)
 
     private val splitter = splitter.distinctUntilChanged()
 
     val artists: Flow<List<ArtistRow>> = combine(allTracks, this.splitter, ::artistsOf).flowOn(Dispatchers.Default)
 
-    fun albumTracks(albumKey: String): Flow<List<TrackEntity>> = tracks.observeAlbumTracks(albumKey)
+    fun albumTracks(albumKey: String): Flow<List<TrackEntity>> =
+        allTracks.map { all -> all.filter { it.albumKey == albumKey }.sortedWith(ALBUM_TRACK_ORDER) }.flowOn(Dispatchers.Default)
 
     fun artistTracks(artistKey: String): Flow<List<TrackEntity>> {
         val key = artistKey(artistKey)
-        return combine(tracks.observeAll(), splitter) { all, split ->
+        return combine(allTracks, splitter) { all, split ->
             all.filter { t -> split.split(t.artistTag).any { artistKey(it) == key } }.sortedWith(ARTIST_TRACK_ORDER)
         }.flowOn(Dispatchers.Default)
     }
 
-    /** Latest play of each track in the last [RECENT_DAYS] days, newest first. */
+    /** Latest play of each track in the last [RECENT_DAYS] days, newest first (of the chosen source). */
     fun recent(now: Long = System.currentTimeMillis()): Flow<List<RecentPlay>> =
-        plays.observeSince(now - TimeUnit.DAYS.toMillis(RECENT_DAYS))
+        combine(plays.observeSince(now - TimeUnit.DAYS.toMillis(RECENT_DAYS)), source) { list, src ->
+            when (src) {
+                LibrarySource.ALL -> list
+                LibrarySource.LOCAL -> list.filterNot { MStreamPaths.isRemote(it.path) }
+                LibrarySource.MSTREAM -> list.filter { MStreamPaths.isRemote(it.path) }
+            }
+        }
 
     suspend fun recordPlay(path: String, at: Long = System.currentTimeMillis()) {
         plays.insert(PlayEntity(path = path, playedAt = at))
@@ -57,6 +75,27 @@ class Library(db: ZeneloDatabase, splitter: Flow<ArtistSplitter>) {
     }
 
     companion object {
+        /**
+         * Albums: tracks sharing an album key (album artist + album) that have an album tag. The
+         * cover comes from a track with embedded art if any; [AlbumRow.remote] when all of them
+         * are on the mStream server only.
+         */
+        fun albumsOf(tracks: List<TrackEntity>): List<AlbumRow> =
+            tracks.filter { it.albumKey != null && it.album != null }.groupBy { it.albumKey!! }.map { (key, group) ->
+                AlbumRow(
+                    key = key,
+                    album = group.maxOf { it.album!! },
+                    artist = group.mapNotNull { it.albumArtist ?: it.artist }.maxOrNull(),
+                    tracks = group.size,
+                    durationMs = group.sumOf { it.durationMs },
+                    added = group.maxOf { it.modified },
+                    coverPath = group.filter { it.hasArtwork }.minOfOrNull { it.path } ?: group.minOf { it.path },
+                    remote = group.all { MStreamPaths.isRemote(it.path) },
+                )
+            }
+
+        private val ALBUM_TRACK_ORDER = compareBy<TrackEntity>({ it.trackNumber == null }, { it.trackNumber }, { it.path })
+
         /**
          * Artists by album artist (else track artist), each name of a multi-artist tag on its own:
          * "A; B" counts for A and for B. The name shown is one spelling of the key.

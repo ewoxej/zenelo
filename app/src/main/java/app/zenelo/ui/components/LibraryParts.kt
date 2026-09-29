@@ -20,18 +20,26 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ViewList
+import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material.icons.outlined.MusicNote
+import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SwapVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -47,12 +55,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.zenelo.data.settings.LibrarySource
 import app.zenelo.data.settings.LibraryView
 import app.zenelo.data.settings.SortField
 import app.zenelo.data.settings.SortOrder
 import app.zenelo.ui.theme.PlexMono
 import app.zenelo.ui.theme.PlexSans
 import app.zenelo.ui.theme.ZeneloColors
+import kotlinx.coroutines.launch
 
 // Pieces of the library pages (Albums, Artists, All tracks, Recently played) and Home, sized
 // after the "Player Home JM21" design.
@@ -116,6 +126,8 @@ fun LibraryHeader(
     onSearchToggle: (Boolean) -> Unit,
     sortOpen: Boolean = false,
     onSort: (() -> Unit)? = null,
+    /** The title opens the library source menu (All / Local / mStream) while a server is connected. */
+    sourceMenu: Boolean = false,
     actions: @Composable () -> Unit = {},
 ) {
     Row(
@@ -132,20 +144,23 @@ fun LibraryHeader(
             IconButton(onClick = { onSearchToggle(false) }) { Icon(Icons.Rounded.Close, "Close search") }
             return@Row
         }
-        Column(Modifier.weight(1f).padding(start = 2.dp)) {
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(
-                    title,
-                    style = TextStyle(fontFamily = PlexSans, fontSize = 17.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.17).sp),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                if (count != null) {
-                    Text(" $count", style = CountStyle.copy(fontSize = 12.sp), modifier = Modifier.padding(bottom = 2.dp))
+        SourceMenu(enabled = sourceMenu, modifier = Modifier.weight(1f).padding(start = 2.dp)) { source ->
+            Column {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        title,
+                        style = TextStyle(fontFamily = PlexSans, fontSize = 17.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.17).sp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (count != null) {
+                        Text(" $count", style = CountStyle.copy(fontSize = 12.sp), modifier = Modifier.padding(bottom = 2.dp))
+                    }
+                    if (source != null) SourceLabel(source, Modifier.padding(start = 6.dp, bottom = 2.dp))
                 }
+                if (caption != null) Text(caption, style = CaptionStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
             }
-            if (caption != null) Text(caption, style = CaptionStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
         }
         actions()
         IconButton(onClick = { onSearchToggle(true) }, modifier = Modifier.size(44.dp)) {
@@ -266,15 +281,18 @@ fun GroupHeader(text: String, modifier: Modifier = Modifier) {
 
 /** Two-line text block of a grid tile: title (celadon when playing) and up to two captions. */
 @Composable
-fun TileText(title: String, subtitle: String?, extra: String? = null, highlighted: Boolean = false, compact: Boolean = false) {
+fun TileText(title: String, subtitle: String?, extra: String? = null, highlighted: Boolean = false, compact: Boolean = false, cloud: Boolean = false) {
     Spacer(Modifier.height(6.dp))
-    Text(
-        title,
-        style = TileTitleStyle.copy(fontSize = if (compact) 12.5.sp else 13.5.sp),
-        color = if (highlighted) ZeneloColors.Celadon else ZeneloColors.TextPrimary,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (cloud) CloudMark(Modifier.padding(end = 4.dp))
+        Text(
+            title,
+            style = TileTitleStyle.copy(fontSize = if (compact) 12.5.sp else 13.5.sp),
+            color = if (highlighted) ZeneloColors.Celadon else ZeneloColors.TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
     if (subtitle != null) Text(subtitle, style = TileSubtitleStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
     if (extra != null && !compact) {
         Text(extra, style = TextStyle(fontFamily = PlexMono, fontSize = 10.sp, color = ZeneloColors.TextMuted), maxLines = 1)
@@ -283,3 +301,61 @@ fun TileText(title: String, subtitle: String?, extra: String? = null, highlighte
 
 /** Keeps a gap as wide as the round buttons at the end of a scrolling page. */
 val FabClearance = 88.dp
+
+/**
+ * Makes [content] (a page title) open the library source menu — All / Local / mStream — while an
+ * mStream server is connected. [content] gets the chosen source when it isn't "All" (to label it).
+ */
+@Composable
+fun SourceMenu(enabled: Boolean, modifier: Modifier = Modifier, content: @Composable (LibrarySource?) -> Unit) {
+    val container = appContainer()
+    val flow = remember { container.settings.settings }
+    val settings by flow.collectAsStateWithLifecycle(initialValue = null)
+    val active = enabled && settings?.mstream != null
+    val source = settings?.librarySource ?: LibrarySource.ALL
+    val scope = rememberCoroutineScope()
+    var open by remember { mutableStateOf(false) }
+    Box(modifier) {
+        Box(if (active) Modifier.clip(RoundedCornerShape(8.dp)).clickable { open = true } else Modifier) {
+            content(source.takeIf { active && it != LibrarySource.ALL })
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            LibrarySource.entries.forEach { choice ->
+                DropdownMenuItem(
+                    text = { Text(choice.label, color = if (choice == source) ZeneloColors.Mustard else ZeneloColors.TextPrimary) },
+                    leadingIcon = {
+                        Icon(
+                            when (choice) {
+                                LibrarySource.ALL -> Icons.Outlined.LibraryMusic
+                                LibrarySource.LOCAL -> Icons.Outlined.PhoneAndroid
+                                LibrarySource.MSTREAM -> Icons.Outlined.Cloud
+                            },
+                            null,
+                            tint = if (choice == source) ZeneloColors.Mustard else ZeneloColors.TextMuted,
+                        )
+                    },
+                    onClick = {
+                        open = false
+                        scope.launch { container.settings.setLibrarySource(choice) }
+                    },
+                )
+            }
+        }
+    }
+}
+
+/** "LOCAL" / "MSTREAM" next to a title while the library shows one source only. */
+@Composable
+fun SourceLabel(source: LibrarySource, modifier: Modifier = Modifier) {
+    Text(
+        source.label.uppercase(),
+        style = CaptionStyle.copy(color = ZeneloColors.Celadon),
+        modifier = modifier,
+    )
+}
+
+/** The small cloud after a title: on the mStream server only (not on the device). */
+@Composable
+fun CloudMark(modifier: Modifier = Modifier) {
+    Icon(Icons.Outlined.Cloud, "On the server", tint = ZeneloColors.TextMuted, modifier = modifier.size(13.dp))
+}

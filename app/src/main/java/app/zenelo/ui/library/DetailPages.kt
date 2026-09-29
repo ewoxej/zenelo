@@ -82,6 +82,7 @@ fun AlbumScreen(vm: LibraryViewModel, key: String, nav: LibraryNav, onBack: () -
     val chosen = { visible.filter { it.path in selection.keys } }
 
     LibraryScaffold(
+        sourceMenu = true,
         title = album?.album ?: "Album",
         count = tracks?.size,
         caption = album?.artist?.uppercase(),
@@ -186,6 +187,7 @@ fun ArtistScreen(vm: LibraryViewModel, key: String, nav: LibraryNav, onBack: () 
     val chosen = { visible.filter { it.path in selection.keys } }
 
     LibraryScaffold(
+        sourceMenu = true,
         title = artist?.name ?: "Artist",
         count = tracks?.size,
         caption = artist?.let { artistDetail(it).uppercase() },

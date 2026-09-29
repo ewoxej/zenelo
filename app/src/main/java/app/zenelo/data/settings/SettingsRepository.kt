@@ -14,6 +14,7 @@ import androidx.datastore.core.DataMigration
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.preferencesDataStoreFile
 import app.zenelo.library.ArtistSplitter
+import app.zenelo.mstream.MStreamAccount
 import app.zenelo.player.ShuffleMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -67,6 +68,13 @@ enum class SelectionMarkerSide(val label: String) {
     RIGHT("Right"),
 }
 
+/** Which tracks the library pages show (the page title's menu). */
+enum class LibrarySource(val label: String) {
+    ALL("All"),
+    LOCAL("Local"),
+    MSTREAM("mStream"),
+}
+
 /** Default file name patterns for covers / lyrics lookups when tags are missing or wrong. */
 val DEFAULT_FILENAME_PATTERNS = listOf(
     "[%number%[.] ][- ]%artist% - %title%",
@@ -110,6 +118,9 @@ data class ZeneloSettings(
     val artistSeparators: List<String> = ArtistSplitter.DEFAULT_SEPARATORS,
     /** Artist names never split although they contain a separator ("AC/DC"). */
     val artistExceptions: List<String> = ArtistSplitter.DEFAULT_EXCEPTIONS,
+    /** The mStream server we're logged in to, if any. */
+    val mstream: MStreamAccount? = null,
+    val librarySource: LibrarySource = LibrarySource.ALL,
 ) {
     val artistSplitter: ArtistSplitter get() = ArtistSplitter(artistSeparators, artistExceptions)
 }
@@ -125,12 +136,16 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
 
     val settings: Flow<ZeneloSettings> = store.data.map { it.toSettings() }
 
-    /** Every stored value by key, for backups. */
-    suspend fun snapshot(): Map<String, Any> = store.data.first().asMap().mapKeys { it.key.name }
+    /** Every stored value by key, for backups; the server login (token) stays out of them. */
+    suspend fun snapshot(): Map<String, Any> =
+        store.data.first().asMap().mapKeys { it.key.name }.filterKeys { it !in PRIVATE_KEYS }
 
-    /** Replaces all settings with a [snapshot]'s values. */
+    /** Replaces all settings with a [snapshot]'s values (the server login is kept). */
     suspend fun restoreSnapshot(values: Map<String, Any>) = store.edit { prefs ->
+        val kept = prefs.asMap().filterKeys { it.name in PRIVATE_KEYS }
         prefs.clear()
+        @Suppress("UNCHECKED_CAST")
+        kept.forEach { (key, value) -> prefs[key as Preferences.Key<Any>] = value }
         values.forEach { (key, value) ->
             @Suppress("UNCHECKED_CAST")
             when (value) {
@@ -146,6 +161,28 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
     }
 
     suspend fun setHomeFolder(path: String) = store.edit { it[HOME_FOLDER] = path }
+
+    suspend fun setMStream(account: MStreamAccount?) = store.edit {
+        if (account == null) {
+            it.remove(MSTREAM_TOKEN)
+            it.remove(MSTREAM_REVISION)
+            it[LIBRARY_SOURCE] = LibrarySource.ALL.name
+        } else {
+            it[MSTREAM_URL] = account.url
+            it[MSTREAM_USER] = account.username
+            it[MSTREAM_TOKEN] = account.token
+            it.remove(MSTREAM_REVISION)
+        }
+    }
+
+    /** The server library revision we last mirrored (`sync/manifest`). */
+    suspend fun mstreamRevision(): String? = store.data.first()[MSTREAM_REVISION]
+
+    suspend fun setMStreamRevision(revision: String?) = store.edit {
+        if (revision == null) it.remove(MSTREAM_REVISION) else it[MSTREAM_REVISION] = revision
+    }
+
+    suspend fun setLibrarySource(source: LibrarySource) = store.edit { it[LIBRARY_SOURCE] = source.name }
 
     suspend fun setSwipe(slot: SwipeSlot, action: SwipeAction) =
         store.edit { it[slotKey(slot)] = action.name }
@@ -242,6 +279,10 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
         selectionMarker = this[SELECTION_MARKER]?.let { enumOrNull<SelectionMarkerSide>(it) } ?: SelectionMarkerSide.RIGHT,
         filenamePatterns = this[FILENAME_PATTERNS]?.split('\n')?.filter(String::isNotBlank) ?: DEFAULT_FILENAME_PATTERNS,
         artistSeparators = this[ARTIST_SEPARATORS]?.split('\n')?.filter(String::isNotBlank) ?: ArtistSplitter.DEFAULT_SEPARATORS,
+        mstream = this[MSTREAM_TOKEN]?.let { token ->
+            MStreamAccount(this[MSTREAM_URL] ?: return@let null, this[MSTREAM_USER].orEmpty(), token)
+        },
+        librarySource = this[LIBRARY_SOURCE]?.let { enumOrNull<LibrarySource>(it) } ?: LibrarySource.ALL,
         artistExceptions = this[ARTIST_EXCEPTIONS]?.split('\n')?.filter(String::isNotBlank) ?: ArtistSplitter.DEFAULT_EXCEPTIONS,
     )
 
@@ -289,6 +330,13 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
         val TABS = stringPreferencesKey("tabs")
         val HOME = stringPreferencesKey("home_sections")
         val LAST_TAB = stringPreferencesKey("last_tab")
+        val MSTREAM_URL = stringPreferencesKey("mstream_url")
+        val MSTREAM_USER = stringPreferencesKey("mstream_user")
+        val MSTREAM_TOKEN = stringPreferencesKey("mstream_token")
+        val MSTREAM_REVISION = stringPreferencesKey("mstream_revision")
+        val LIBRARY_SOURCE = stringPreferencesKey("library_source")
+        /** Not in backups: a login token, and sync state that means nothing elsewhere. */
+        val PRIVATE_KEYS = setOf("mstream_token", "mstream_revision")
         val ARTIST_SEPARATORS = stringPreferencesKey("artist_separators")
         val ARTIST_EXCEPTIONS = stringPreferencesKey("artist_exceptions")
 

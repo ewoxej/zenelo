@@ -22,6 +22,7 @@ import app.zenelo.data.settings.ZeneloSettings
 import app.zenelo.library.AudioFile
 import app.zenelo.library.LibrarySort
 import app.zenelo.library.toAudioFile
+import app.zenelo.mstream.MStreamPaths
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -241,7 +242,8 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
 
     fun delete(files: List<AudioFile>) {
         viewModelScope.launch {
-            val deleted = withContext(Dispatchers.IO) { files.filter { File(it.path).delete() } }
+            // Server tracks aren't deleted from here (the server owns them): they count as failed.
+            val deleted = withContext(Dispatchers.IO) { files.filter { !MStreamPaths.isRemote(it.path) && File(it.path).delete() } }
             // The index follows on the next scan; until then keep them out of the lists.
             hidden.update { it + deleted.map(AudioFile::path) }
             withContext(Dispatchers.IO) { container.db.tracks().delete(deleted.map(AudioFile::path)) }

@@ -2,6 +2,7 @@ package app.zenelo.ui.settings
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Settings
@@ -118,6 +119,7 @@ enum class SettingsPage(val title: String, val summary: String, val icon: ImageV
     PLAYBACK("Playback", "Shuffle · normalization · crossfade", Icons.Outlined.GraphicEq),
     INTERFACE("Interface", "Bottom bar · Home · swipes · lists", Icons.Outlined.Tune),
     OTHER("Other", "Covers & lyrics · library · backup", Icons.Outlined.Settings),
+    MSTREAM("mStream", "Stream your server's library", Icons.Outlined.Cloud),
     ABOUT("About", "Version · author", Icons.Outlined.Info),
 }
 
@@ -156,6 +158,7 @@ fun SettingsPageScreen(
             SettingsPage.PLAYBACK -> PlaybackSettings()
             SettingsPage.INTERFACE -> InterfaceSettings(onOpenSwipeSettings, onCustomizeHome, onCustomizeTabs)
             SettingsPage.OTHER -> OtherSettings(onMessage)
+            SettingsPage.MSTREAM -> MStreamSettings(onMessage)
             SettingsPage.ABOUT -> AboutPage()
         }
         Spacer(Modifier.height(16.dp))

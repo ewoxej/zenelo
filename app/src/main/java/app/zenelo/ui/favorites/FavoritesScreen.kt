@@ -74,7 +74,7 @@ fun FavoritesScreen(
     val visible = remember(favorites, query) {
         if (query.isBlank()) favorites else favorites.filter { it.title.contains(query, true) || it.subtitle?.contains(query, true) == true }
     }
-    val tracks = remember(visible) { visible.filter { it.kind == FavoriteKind.TRACK }.map { AudioFile.of(File(it.path)) } }
+    val tracks = remember(visible) { visible.filter { it.kind == FavoriteKind.TRACK }.map { AudioFile.forPath(it.path) } }
     // An M3U / M3U8 file's tracks become favorites (any file type: pickers rarely know M3U).
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult

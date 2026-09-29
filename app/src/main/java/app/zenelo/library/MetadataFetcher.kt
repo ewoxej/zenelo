@@ -8,6 +8,8 @@ import app.zenelo.data.db.ZeneloDatabase
 import app.zenelo.data.settings.SettingsRepository
 import app.zenelo.online.CoverCandidate
 import app.zenelo.online.CoverSources
+import app.zenelo.mstream.MStreamClient
+import app.zenelo.mstream.MStreamPaths
 import app.zenelo.online.FoundLyrics
 import app.zenelo.online.LyricsSearch
 import app.zenelo.online.Http
@@ -27,6 +29,9 @@ import java.util.concurrent.ConcurrentHashMap
  * its track to end).
  *
  * Lyrics: sibling .lrc → tags (seeded by the indexer) → cached → LRCLIB.
+ *
+ * mStream server tracks (`mstream://`): the server's album art and lyrics first, then the same
+ * online search; nothing is ever written into them.
  */
 class MetadataFetcher(
     context: Context,
@@ -36,7 +41,9 @@ class MetadataFetcher(
     private val lrcLib: LrcLib,
     private val settings: SettingsRepository,
     private val pendingWrites: PendingWrites,
+    private val mstream: MStreamClient,
 ) {
+    private val remoteTracks = db.remoteTracks()
     private val covers = db.covers()
     private val lyrics = db.lyrics()
     private val coverDir = File(context.filesDir, "covers").apply { mkdirs() }
@@ -76,12 +83,15 @@ class MetadataFetcher(
 
     /** Cover to show for a track without embedded art, downloading it if allowed. */
     suspend fun coverFor(track: TrackEntity, allowNetwork: Boolean): File? = withContext(Dispatchers.IO) {
-        folderImage(track.dir)?.let { return@withContext it }
+        val remote = MStreamPaths.isRemote(track.path)
+        if (!remote) folderImage(track.dir)?.let { return@withContext it }
         val key = coverKey(track)
         covers.get(key)?.let { cached ->
             cached.file?.let(::File)?.takeIf { it.exists() }?.let { return@withContext it }
             if (cached.file == null && !expired(cached.fetchedAt)) return@withContext null
         }
+        // The server's own art (the user's server: not limited to Wi-Fi like public catalogs).
+        if (remote && allowNetwork) serverCover(track)?.let { return@withContext saveCover(key, it, SOURCE_MSTREAM) }
         if (!allowNetwork || !onlineAllowed()) return@withContext null
         val found = findCoverOnline(track)
         if (found == null) {
@@ -134,7 +144,8 @@ class MetadataFetcher(
      */
     suspend fun embed(targets: List<TrackEntity>, cover: File, replace: Boolean): Int = withContext(Dispatchers.IO) {
         if (!settings.settings.first().embedCovers) return@withContext 0
-        targets.count { track ->
+        // Server tracks are the server's files: their cover stays in our cache only.
+        targets.filterNot { MStreamPaths.isRemote(it.path) }.count { track ->
             (replace || !track.hasArtwork) && pendingWrites.embedCover(track.path, cover) != PendingWrites.Result.FAILED
         }
     }
@@ -169,6 +180,7 @@ class MetadataFetcher(
         }
         val cached = lyrics.get(track.path)
         if (cached != null && (!cached.isEmpty || !expired(cached.fetchedAt))) return@withContext cached
+        if (allowNetwork && MStreamPaths.isRemote(track.path)) serverLyrics(track)?.let { return@withContext it }
         if (!allowNetwork || !onlineAllowed()) return@withContext cached
         val seconds = (track.durationMs / 1000).toInt()
         // Tags first, then the file name patterns (missing or wrong tags). Each with its title and
@@ -195,6 +207,22 @@ class MetadataFetcher(
         LyricsEntity(track.path, found.synced, found.plain, found.instrumental, SOURCE_LRCLIB, now()).also { lyrics.upsert(it) }
     }
 
+    /** The server's album art for one of its tracks, or null (none, or not reachable). */
+    private suspend fun serverCover(track: TrackEntity): ByteArray? {
+        val account = settings.settings.first().mstream ?: return null
+        val art = remoteTracks.get(track.path)?.artFile ?: return null
+        return mstream.albumArt(account, art)
+    }
+
+    /** Lyrics stored on the server for one of its tracks, saved like any other; null when it has none. */
+    private suspend fun serverLyrics(track: TrackEntity): LyricsEntity? {
+        val account = settings.settings.first().mstream ?: return null
+        if (remoteTracks.get(track.path)?.hasLyrics != true) return null
+        val (synced, plain) = runCatching { mstream.lyrics(account, MStreamPaths.serverPath(track.path)) }.getOrNull() ?: return null
+        if (synced == null && plain == null) return null
+        return LyricsEntity(track.path, synced, plain, false, SOURCE_MSTREAM, now()).also { lyrics.upsert(it) }
+    }
+
     fun coverKey(track: TrackEntity): String = track.albumKey ?: "track:${track.path}"
 
     private suspend fun saveCover(key: String, image: ByteArray, source: String): File {
@@ -219,6 +247,7 @@ class MetadataFetcher(
     companion object {
         const val SOURCE_FILE = "file"
         const val SOURCE_LRCLIB = "lrclib"
+        const val SOURCE_MSTREAM = "mStream"
         /** Suffix of a cover's source when it was found by names guessed from the path. */
         private const val FROM_PATH = " (by path)"
 

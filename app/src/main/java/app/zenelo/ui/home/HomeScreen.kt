@@ -73,6 +73,8 @@ import app.zenelo.ui.library.rememberNowPlaying
 import app.zenelo.ui.theme.PlexMono
 import app.zenelo.ui.theme.PlexSans
 import app.zenelo.ui.theme.ZeneloColors
+import app.zenelo.ui.components.SourceLabel
+import app.zenelo.ui.components.SourceMenu
 import java.io.File
 
 /** Where Home's shortcuts, card headers and tiles lead. */
@@ -101,11 +103,13 @@ fun HomeScreen(vm: LibraryViewModel, nav: HomeNav) {
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
         item(key = "header") {
             Row(Modifier.fillMaxWidth().height(64.dp).padding(start = 18.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "Home",
-                    style = TextStyle(fontFamily = PlexSans, fontSize = 20.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.2).sp),
-                    modifier = Modifier.weight(1f),
-                )
+                // The title picks the library source (All / Local / mStream) while a server is connected.
+                SourceMenu(enabled = true, modifier = Modifier.weight(1f)) { source ->
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text("Home", style = TextStyle(fontFamily = PlexSans, fontSize = 20.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.2).sp))
+                        if (source != null) SourceLabel(source, Modifier.padding(start = 8.dp, bottom = 3.dp))
+                    }
+                }
                 IconButton(onClick = nav.onSearch) { Icon(Icons.Rounded.Search, "Search", Modifier.size(21.dp)) }
                 IconButton(onClick = nav.onCustomize) { Icon(Icons.Rounded.Tune, "Customize home", Modifier.size(21.dp)) }
             }
@@ -395,7 +399,7 @@ private fun FavoritesCard(vm: LibraryViewModel, grid: Boolean, nav: HomeNav) {
     val flow = remember { container.db.favorites().observeAll() }
     val favorites by flow.collectAsStateWithLifecycle(initialValue = null)
     val list = favorites.orEmpty()
-    val tracks = remember(list) { list.filter { it.kind == FavoriteKind.TRACK }.map { AudioFile.of(File(it.path)) } }
+    val tracks = remember(list) { list.filter { it.kind == FavoriteKind.TRACK }.map { AudioFile.forPath(it.path) } }
     val open = { f: FavoriteEntity ->
         when (f.kind) {
             FavoriteKind.TRACK -> vm.play(tracks, start = tracks.indexOfFirst { it.path == f.path })

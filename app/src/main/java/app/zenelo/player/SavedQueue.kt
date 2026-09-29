@@ -1,5 +1,6 @@
 package app.zenelo.player
 
+import app.zenelo.mstream.MStreamPaths
 import java.io.File
 
 /**
@@ -40,7 +41,8 @@ internal data class SavedQueue(
             val current = lines[1].toInt()
             if (order.isEmpty() || current !in order.indices || order.any { it !in paths.indices }) return null
             val currentPath = paths[order[current]]
-            if (!File(currentPath).exists()) return null
+            // A server track isn't a file here: whether it still exists is the server's business.
+            if (!MStreamPaths.isRemote(currentPath) && !File(currentPath).exists()) return null
             // The position only counts if it was saved for this track.
             val position = positionFile.takeIf { it.exists() }?.readLines()
                 ?.takeIf { it.size >= 2 && it[0] == currentPath }?.get(1)?.toLongOrNull() ?: 0L

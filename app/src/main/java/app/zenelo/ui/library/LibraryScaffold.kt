@@ -63,6 +63,8 @@ import app.zenelo.ui.components.formatTotal
 import app.zenelo.ui.theme.PlexMono
 import app.zenelo.ui.theme.PlexSans
 import app.zenelo.ui.theme.ZeneloColors
+import app.zenelo.mstream.MStreamPaths
+import app.zenelo.ui.components.CloudMark
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -142,6 +144,8 @@ fun LibraryScaffold(
     headerActions: @Composable () -> Unit = {},
     onSelectionRemove: (() -> Unit)? = null,
     removeLabel: String = "Remove",
+    /** The title opens the library source menu (library pages, while a server is connected). */
+    sourceMenu: Boolean = false,
     content: @Composable BoxScope.() -> Unit,
 ) {
     var sortOpen by rememberSaveable { mutableStateOf(false) }
@@ -183,6 +187,7 @@ fun LibraryScaffold(
                 onSearchToggle = search::toggle,
                 sortOpen = sortOpen,
                 onSort = if (sortFields != null) ({ sortOpen = !sortOpen }) else null,
+                sourceMenu = sourceMenu,
                 actions = headerActions,
             )
         }
@@ -260,7 +265,7 @@ fun AlbumTile(
             )
             TileMark(selecting, selected, markLeft)
         }
-        TileText(album.album, album.artist, detail, highlighted = isCurrent, compact = compact)
+        TileText(album.album, album.artist, detail, highlighted = isCurrent, compact = compact, cloud = album.remote)
     }
 }
 
@@ -329,6 +334,8 @@ fun LibraryRow(
     selected: Boolean = false,
     markLeft: Boolean = true,
     subtitleMono: Boolean = false,
+    /** Cloud mark: on the mStream server only. A track row's cover path is the track itself. */
+    cloud: Boolean = MStreamPaths.isRemote(coverPath),
     trailing: @Composable () -> Unit = {},
 ) {
     Row(
@@ -359,14 +366,17 @@ fun LibraryRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (!subtitle.isNullOrEmpty()) {
-                Text(
-                    subtitle,
-                    style = if (subtitleMono) TextStyle(fontFamily = PlexMono, fontSize = 11.sp) else TextStyle(fontFamily = PlexSans, fontSize = 11.5.sp),
-                    color = ZeneloColors.TextMuted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            if (!subtitle.isNullOrEmpty() || cloud) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (cloud) CloudMark(Modifier.padding(end = 4.dp))
+                    Text(
+                        subtitle.orEmpty(),
+                        style = if (subtitleMono) TextStyle(fontFamily = PlexMono, fontSize = 11.sp) else TextStyle(fontFamily = PlexSans, fontSize = 11.5.sp),
+                        color = ZeneloColors.TextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
         if (trailingText != null) Text(trailingText, style = CountStyle.copy(fontSize = 11.sp), modifier = Modifier.padding(start = 8.dp, end = 4.dp))

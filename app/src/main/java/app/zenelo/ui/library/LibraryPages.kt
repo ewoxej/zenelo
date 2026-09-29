@@ -45,6 +45,7 @@ import app.zenelo.data.settings.SelectionMarkerSide
 import app.zenelo.data.settings.SortPage
 import app.zenelo.library.Library
 import app.zenelo.library.LibrarySort
+import app.zenelo.mstream.MStreamPaths
 import app.zenelo.library.toAudioFile
 import app.zenelo.ui.components.FabClearance
 import app.zenelo.ui.components.GroupHeader
@@ -96,6 +97,7 @@ fun AlbumsScreen(vm: LibraryViewModel, nav: LibraryNav, onBack: (() -> Unit)?) {
     val chosen = { visible.filter { it.key in selection.keys } }
 
     LibraryScaffold(
+        sourceMenu = true,
         title = "Albums",
         count = albums?.size,
         caption = sort.label,
@@ -173,6 +175,7 @@ fun ArtistsScreen(vm: LibraryViewModel, nav: LibraryNav, onBack: (() -> Unit)?) 
     val chosen = { visible.filter { it.key in selection.keys } }
 
     LibraryScaffold(
+        sourceMenu = true,
         title = "Artists",
         count = artists?.size,
         caption = sort.label,
@@ -269,6 +272,7 @@ fun TracksScreen(vm: LibraryViewModel, onBack: (() -> Unit)?) {
     val listState = rememberLazyListState()
 
     LibraryScaffold(
+        sourceMenu = true,
         title = "All tracks",
         count = tracks?.size,
         caption = sort.label,
@@ -408,6 +412,7 @@ fun TrackRow(
                     onAction = { vm.onTrack(file, title, track.artist, it) },
                     onDownloadCover = { vm.openDialog(TrackDialog.Cover(track.path)) },
                     onEditTags = { vm.openDialog(TrackDialog.EditTags(track.path, it)) },
+                    local = !MStreamPaths.isRemote(track.path),
                 )
             },
         )
@@ -431,6 +436,7 @@ fun RecentScreen(vm: LibraryViewModel, onBack: (() -> Unit)?) {
     val chosen = { visible.filter { it.path in selection.keys } }
 
     LibraryScaffold(
+        sourceMenu = true,
         title = "Recently played",
         count = null,
         caption = "LAST ${Library.RECENT_DAYS} DAYS · ${all.size} TRACK${if (all.size == 1) "" else "S"}",
@@ -476,6 +482,7 @@ fun RecentScreen(vm: LibraryViewModel, onBack: (() -> Unit)?) {
                                     onAction = { vm.onTrack(file, title, play.artist, it) },
                                     onDownloadCover = { vm.openDialog(TrackDialog.Cover(play.path)) },
                                     onEditTags = { vm.openDialog(TrackDialog.EditTags(play.path, it)) },
+                                    local = !MStreamPaths.isRemote(play.path),
                                 )
                             },
                         )

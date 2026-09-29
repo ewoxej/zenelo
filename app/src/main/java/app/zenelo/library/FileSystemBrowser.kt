@@ -6,6 +6,7 @@ import android.util.LruCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import app.zenelo.mstream.MStreamPaths
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
@@ -31,6 +32,15 @@ data class AudioFile(val path: String, val name: String, val extension: String, 
 
     companion object {
         fun of(file: File) = AudioFile(file.absolutePath, file.name, file.extension.lowercase(), file.length(), file.lastModified())
+
+        /** A track by its path: a local file, or an mStream server track (not a `File`). */
+        fun forPath(path: String): AudioFile =
+            if (MStreamPaths.isRemote(path)) {
+                val name = MStreamPaths.fileName(path)
+                AudioFile(path, name, name.substringAfterLast('.', "").lowercase(), 0L)
+            } else {
+                of(File(path))
+            }
     }
 }
 

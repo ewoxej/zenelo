@@ -40,6 +40,7 @@ import app.zenelo.data.db.PlaylistTrack
 import app.zenelo.data.settings.SelectionMarkerSide
 import app.zenelo.data.settings.SwipeAction
 import app.zenelo.library.AudioFile
+import app.zenelo.mstream.MStreamPaths
 import app.zenelo.ui.components.FabClearance
 import app.zenelo.ui.components.SwipeableRow
 import app.zenelo.ui.components.TrackMenu
@@ -192,6 +193,7 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
                                     onAction = act,
                                     onDownloadCover = { vm.openDialog(TrackDialog.Cover(track.path)) },
                                     onEditTags = { vm.openDialog(TrackDialog.EditTags(track.path, it)) },
+                                    local = !MStreamPaths.isRemote(track.path),
                                 )
                                 // Reordering only makes sense over the whole list.
                                 if (search.query.isBlank()) {
