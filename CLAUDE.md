@@ -30,6 +30,11 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   when tags are missing or find nothing.
 - Tags: jaudiotagger in Android mode (`TagReader`). Its `setImageFromData` throws on Android, so FLAC
   pictures go through `FlacTag.createArtworkField`; Ogg/Opus covers are never embedded.
+- MP3 seeking: the players use `Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING` (exact seeks). The default
+  for MP3s without a Xing / VBRI table assumes constant bitrate: on VBR files the length was a guess
+  (12 of 30 min) and seeks landed near the real end, so the track "skipped" soon after. Such files
+  have no player duration until their end: `Mp3Scan` (unit-tested) counts their frames at indexing,
+  the MediaItem carries that length (`MediaMetadata.durationMs`), and the UI / `Crossfader` fall back to it.
 - Library index: `tracks` table, filled by `LibraryIndexer` (WorkManager `IndexWorker` on app start,
   plus on-demand for the folder on screen).
 - Covers & lyrics (`MetadataFetcher`): online only on Wi-Fi. Covers: embedded → folder image →
@@ -56,6 +61,9 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   shuffle, repeat) to `files/queue.txt` 500 ms after each change (`SavedQueue`), the position to
   `queue.txt.position` (on pause, seek, every 10 s, service stop); `PlaybackService.onCreate`
   calls `queue.restore()`, which loads it paused. Never save an empty queue (the pre-restore state).
+  The process outlives the service (a paused app in the background loses its service after
+  ~1 min): `PlayQueue.detach` writes the queue at once and empties it in memory, so the next
+  service's `restore()` reads it back instead of keeping a queue its new empty player never got.
 - Navigation: the bottom bar is a setting (`tabs`, ≤5 `Section`s, may be empty → Home is the only
   page) and so is Home (`home`: each section Off / Icon / Grid / List, ordered). Tabs are pager
   pages; other sections open as `section/{name}` routes with a back arrow. Settings must stay
@@ -75,8 +83,12 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   ExoPlayer stays the only one the queue / session / notification see; a "tail" ExoPlayer (no audio
   focus, own normalization processor) loads the current track at the fade point 4 s ahead, then
   plays the old track's end fading out while main skips to the next track fading in. Only natural
-  ends fade; pause / seek / skip cut the fade. Pending writes wait for the fade's end (the tail
-  still reads the old file).
+  ends fade; pause / seek / skip cut the fade; a track that reaches the fade zone by a seek (tail
+  not ready) plays to its end without fading. Pending writes wait for the fade's end (the tail
+  still reads the old file). `PlaybackService` logs transitions (with reason), seeks and player
+  errors under the `Zenelo` tag: `adb logcat -s Zenelo` when chasing an unexpected skip / rewind.
+- `ZeneloSlider` (seek bar, crossfade, pre-amp) reacts to taps and horizontal drags only: a touch
+  that becomes a vertical gesture (scrolling Settings, swiping Now Playing down) must not set a value.
 - Playlists: `playlist/{id}` screen (play, drag to reorder, remove, rename, delete). "Add to
   playlist" anywhere goes through `AppContainer.playlistPicker`; the root shows the picker dialog.
   Entries are rewritten as a whole on reorder / removal (`PlaylistDao.replace`).

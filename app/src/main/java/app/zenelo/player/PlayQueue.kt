@@ -144,10 +144,29 @@ class PlayQueue(
 
     private var modeJob: Job? = null
 
+    /**
+     * The service is going away, the process may stay (paused app sent to the background). Saves
+     * the queue now and forgets it: the next service's player starts empty, and [restore] only
+     * loads into an empty queue, so it reads it back from the file like after a cold start.
+     */
     fun detach() {
         modeJob?.cancel()
+        saveJob?.cancel()
+        if (order.isNotEmpty()) {
+            val snapshot = SavedQueue(paths, order, (current % order.size).toInt(), shuffled, player?.repeatMode ?: Player.REPEAT_MODE_OFF)
+            runCatching { snapshot.write(stateFile) }
+        }
         player?.removeListener(listener)
         player = null
+        launchLocked {
+            // Queued before a new service's restore (the mutex is fair), so that one reads the file.
+            paths = emptyList()
+            order = emptyList()
+            current = 0
+            window.clear()
+            shuffled = false
+            _state.value = QueueSnapshot.EMPTY
+        }
     }
 
     /** Tags for queue rows; cached, loaded from the index on demand. */

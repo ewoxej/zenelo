@@ -84,7 +84,7 @@ private fun currentAlbumKey(mediaId: String?): String? {
 fun AlbumsScreen(vm: LibraryViewModel, nav: LibraryNav, onBack: (() -> Unit)?) {
     val albums by vm.albums.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
-    val (mediaId, isPlaying) = rememberNowPlaying()
+    val (mediaId, _) = rememberNowPlaying()
     val currentKey = currentAlbumKey(mediaId)
     val search = remember { PageSearch() }
     val selection = rememberSelection<String>()
@@ -111,10 +111,6 @@ fun AlbumsScreen(vm: LibraryViewModel, nav: LibraryNav, onBack: (() -> Unit)?) {
         onSort = { vm.setSort(SortPage.ALBUMS, it) },
         view = view,
         onNextView = { vm.setView(SortPage.ALBUMS, view.next()) },
-        isPlaying = isPlaying,
-        canPlay = visible.isNotEmpty(),
-        onPlay = { vm.playAlbums(visible, it) },
-        onStop = vm::stop,
     ) {
         val onClick = { album: AlbumRow -> if (selection.active) selection.toggle(album.key) else nav.onOpenAlbum(album.key) }
         if (view == LibraryView.LIST) {
@@ -167,7 +163,6 @@ fun AlbumsScreen(vm: LibraryViewModel, nav: LibraryNav, onBack: (() -> Unit)?) {
 fun ArtistsScreen(vm: LibraryViewModel, nav: LibraryNav, onBack: (() -> Unit)?) {
     val artists by vm.artists.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
-    val (_, isPlaying) = rememberNowPlaying()
     val search = remember { PageSearch() }
     val selection = rememberSelection<String>()
     val sort = settings.sorts[SortPage.ARTISTS] ?: SortPage.ARTISTS.default
@@ -193,10 +188,6 @@ fun ArtistsScreen(vm: LibraryViewModel, nav: LibraryNav, onBack: (() -> Unit)?) 
         onSort = { vm.setSort(SortPage.ARTISTS, it) },
         view = view,
         onNextView = { vm.setView(SortPage.ARTISTS, view.next()) },
-        isPlaying = isPlaying,
-        canPlay = visible.isNotEmpty(),
-        onPlay = { vm.playArtists(visible, it) },
-        onStop = vm::stop,
     ) {
         val onClick = { artist: ArtistRow -> if (selection.active) selection.toggle(artist.key) else nav.onOpenArtist(artist.key) }
         if (view == LibraryView.LIST) {

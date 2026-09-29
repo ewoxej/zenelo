@@ -29,6 +29,8 @@ fun AudioFile.toMediaItem(info: TrackEntity? = null, cover: File? = null): Media
                 .setAlbumTitle(info?.album)
                 .setAlbumArtist(info?.albumArtist)
                 .setArtworkUri(cover?.let(Uri::fromFile))
+                // Our length (exact for MP3s the player can only estimate): used while the player has none.
+                .setDurationMs(info?.durationMs?.takeIf { it > 0 })
                 .setIsPlayable(true)
                 .setIsBrowsable(false)
                 .build(),

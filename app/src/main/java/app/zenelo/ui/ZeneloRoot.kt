@@ -393,7 +393,19 @@ private fun MainContent(settings: ZeneloSettings) {
                                 .systemBarsPadding()
                                 .graphicsLayer { alpha = ((0.95f - sheet.fraction) / 0.45f).coerceIn(0f, 1f) },
                         ) {
-                            NowPlayingScreen(sheet, onOpenFolder = openFolderInBrowser)
+                            NowPlayingScreen(
+                                sheet,
+                                onOpenFolder = openFolderInBrowser,
+                                onOpenAlbum = { key ->
+                                    sheet.close()
+                                    libraryNav.onOpenAlbum(key)
+                                },
+                                onOpenArtist = { key ->
+                                    sheet.close()
+                                    libraryNav.onOpenArtist(key)
+                                },
+                                artists = libraryViewModel.artists,
+                            )
                         }
                     }
                     if (playing && miniVisible) {

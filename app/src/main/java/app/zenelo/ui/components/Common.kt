@@ -6,9 +6,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.basicMarquee
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.horizontalDrag
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -59,6 +58,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -387,27 +387,35 @@ fun ZeneloSlider(
     val fraction = ((value - valueRange.start) / span).coerceIn(0f, 1f)
     val onChange by rememberUpdatedState(onValueChange)
     val onFinished by rememberUpdatedState(onValueChangeFinished)
+    val range by rememberUpdatedState(valueRange)
     val radius = 6.dp
 
+    // Only a tap or a horizontal drag moves it. A touch that turns into a vertical gesture (list
+    // scroll, swiping Now Playing down) is left to that gesture and changes nothing: seeking or
+    // setting a value where the finger first landed used to rewind tracks / turn on crossfade.
+    fun PointerInputScope.valueAt(x: Float): Float {
+        val r = radius.toPx()
+        val f = ((x - r) / (size.width - 2 * r)).coerceIn(0f, 1f)
+        return range.start + f * (range.endInclusive - range.start).coerceAtLeast(0f)
+    }
     Canvas(
         modifier
             .fillMaxWidth()
             .height(24.dp)
-            .pointerInput(valueRange) {
-                fun valueAt(x: Float): Float {
-                    val r = radius.toPx()
-                    val f = ((x - r) / (size.width - 2 * r)).coerceIn(0f, 1f)
-                    return valueRange.start + f * span
-                }
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    down.consume()
-                    onChange(valueAt(down.position.x))
-                    horizontalDrag(down.id) { change ->
-                        change.consume()
-                        onChange(valueAt(change.position.x))
-                    }
+            .pointerInput(Unit) {
+                detectTapGestures { offset ->
+                    onChange(valueAt(offset.x))
                     onFinished?.invoke()
+                }
+            }
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragStart = { offset -> onChange(valueAt(offset.x)) },
+                    onDragEnd = { onFinished?.invoke() },
+                    onDragCancel = { onFinished?.invoke() },
+                ) { change, _ ->
+                    change.consume()
+                    onChange(valueAt(change.position.x))
                 }
             },
     ) {

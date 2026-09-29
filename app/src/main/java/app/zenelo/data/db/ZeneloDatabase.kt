@@ -20,13 +20,14 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PendingWriteEntity::class,
         PlayEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
         AutoMigration(from = 3, to = 4),
         AutoMigration(from = 4, to = 5, spec = ZeneloDatabase.ReadPeaks::class),
+        AutoMigration(from = 5, to = 6, spec = ZeneloDatabase.RecountMp3::class),
     ],
 )
 abstract class ZeneloDatabase : RoomDatabase() {
@@ -49,6 +50,13 @@ abstract class ZeneloDatabase : RoomDatabase() {
                 "UPDATE tracks SET modified = 0 WHERE (trackGainDb IS NOT NULL OR albumGainDb IS NOT NULL) " +
                     "AND path NOT IN (SELECT path FROM pending_writes)",
             )
+        }
+    }
+
+    /** 6: MP3 lengths counted from the frames where the headers can't tell (`Mp3Scan`): re-read MP3s once. */
+    class RecountMp3 : AutoMigrationSpec {
+        override fun onPostMigrate(db: SupportSQLiteDatabase) {
+            db.execSQL("UPDATE tracks SET modified = 0 WHERE LOWER(path) LIKE '%.mp3' AND path NOT IN (SELECT path FROM pending_writes)")
         }
     }
 

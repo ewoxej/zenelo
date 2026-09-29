@@ -85,7 +85,11 @@ import app.zenelo.data.db.FavoriteEntity
 import app.zenelo.data.db.FavoriteKind
 import app.zenelo.player.PlayerController
 import app.zenelo.player.PlayerUiState
+import app.zenelo.data.db.ArtistRow
 import app.zenelo.data.db.TrackEntity
+import app.zenelo.library.artistKey
+import app.zenelo.library.artistTag
+import kotlinx.coroutines.flow.StateFlow
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.outlined.Checklist
@@ -133,7 +137,14 @@ private const val PAGE_QUEUE = 2
  * fixed below the pager on every page, as in the design.
  */
 @Composable
-fun NowPlayingScreen(sheet: PlayerSheet, onOpenFolder: (File) -> Unit) {
+fun NowPlayingScreen(
+    sheet: PlayerSheet,
+    onOpenFolder: (File) -> Unit,
+    onOpenAlbum: (String) -> Unit,
+    onOpenArtist: (String) -> Unit,
+    /** Library artists (null until loaded): only those get a "Go to artist" item. */
+    artists: StateFlow<List<ArtistRow>?>,
+) {
     val onBack = sheet::close
     val container = appContainer()
     val player = container.player
@@ -202,7 +213,17 @@ fun NowPlayingScreen(sheet: PlayerSheet, onOpenFolder: (File) -> Unit) {
             .fillMaxSize()
             .then(pullGesture),
     ) {
-        TopBar(state, onBack, onOpenFolder, onDownloadCover = { coverPicker = true }, onEditTags = { tagEditor = true })
+        TopBar(
+            state,
+            track,
+            artists,
+            onBack,
+            onOpenFolder,
+            onOpenAlbum = onOpenAlbum,
+            onOpenArtist = onOpenArtist,
+            onDownloadCover = { coverPicker = true },
+            onEditTags = { tagEditor = true },
+        )
         HorizontalPager(
             pager,
             Modifier.weight(1f),
@@ -237,8 +258,12 @@ fun NowPlayingScreen(sheet: PlayerSheet, onOpenFolder: (File) -> Unit) {
 @Composable
 private fun TopBar(
     state: PlayerUiState,
+    track: TrackEntity?,
+    artists: StateFlow<List<ArtistRow>?>,
     onBack: () -> Unit,
     onOpenFolder: (File) -> Unit,
+    onOpenAlbum: (String) -> Unit,
+    onOpenArtist: (String) -> Unit,
     onDownloadCover: () -> Unit,
     onEditTags: () -> Unit,
     modifier: Modifier = Modifier,
@@ -247,6 +272,21 @@ private fun TopBar(
     val picker = appContainer().playlistPicker
     val folder = state.mediaId?.let { File(it).parentFile }
     val roots = appContainer().fileBrowser.let { fs -> remember { fs.roots() } }
+    val settingsFlow = appContainer().settings.settings
+    val settings by settingsFlow.collectAsStateWithLifecycle(initialValue = null)
+    val known by artists.collectAsStateWithLifecycle()
+    // The album's page needs an album tag; artists: the track's and the album's, each name of a
+    // multi-artist tag on its own, the ones with a page (the album artist's always has one).
+    val albumKey = track?.albumKey?.takeIf { track.album != null }
+    val artistNames = remember(track, settings?.artistSeparators, settings?.artistExceptions, known) {
+        val splitter = settings?.artistSplitter ?: return@remember emptyList()
+        val t = track ?: return@remember emptyList()
+        val grouped = splitter.split(t.artistTag).map(::artistKey).toSet()
+        val pages = known?.mapTo(HashSet()) { it.key }
+        (splitter.split(t.artist) + splitter.split(t.albumArtist))
+            .filter { artistKey(it) in grouped || pages?.contains(artistKey(it)) == true }
+            .distinctBy(::artistKey)
+    }
     // Taller than the icons need: it doubles as the pull-down handle.
     Row(modifier.fillMaxWidth().padding(horizontal = 4.dp).height(64.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onBack) { Icon(Icons.Rounded.KeyboardArrowDown, "Close") }
@@ -276,6 +316,24 @@ private fun TopBar(
                         folder?.let(onOpenFolder)
                     },
                 )
+                if (albumKey != null) {
+                    DropdownMenuItem(
+                        text = { Text("Go to album") },
+                        onClick = {
+                            menu = false
+                            onOpenAlbum(albumKey)
+                        },
+                    )
+                }
+                artistNames.forEach { name ->
+                    DropdownMenuItem(
+                        text = { Text(if (artistNames.size == 1) "Go to artist" else "Go to artist $name", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        onClick = {
+                            menu = false
+                            onOpenArtist(artistKey(name))
+                        },
+                    )
+                }
                 DropdownMenuItem(
                     text = { Text("Add to playlist…") },
                     enabled = state.mediaId != null,

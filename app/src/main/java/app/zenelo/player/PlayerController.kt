@@ -2,6 +2,7 @@ package app.zenelo.player
 
 import android.content.ComponentName
 import android.content.Context
+import androidx.media3.common.C
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -173,7 +174,9 @@ class PlayerController(
             artworkFile = coverOverride.value?.takeIf { it.first == item?.mediaId }?.second
                 ?: metadata.artworkUri?.takeIf { it.scheme == "file" }?.path,
             isPlaying = c.isPlaying,
-            durationMs = c.duration.coerceAtLeast(0L),
+            // MP3s without a seek table: the player learns the length only at their end; ours is exact.
+            durationMs = c.duration.takeIf { it != C.TIME_UNSET && it > 0 }
+                ?: item?.mediaMetadata?.durationMs ?: info?.durationMs ?: 0L,
             shuffle = c.shuffleModeEnabled,
             repeatMode = c.repeatMode,
         )

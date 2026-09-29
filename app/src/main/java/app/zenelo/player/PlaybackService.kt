@@ -3,16 +3,21 @@ package app.zenelo.player
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import android.os.Bundle
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.extractor.mp3.Mp3Extractor
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.session.CommandButton
@@ -72,6 +77,17 @@ class PlaybackService : MediaSessionService() {
     private fun savePosition(now: Boolean = false) =
         container.queue.savePosition(player.currentMediaItem?.mediaId, player.currentPosition, now)
 
+    /**
+     * MP3 seeks by an index of the frames built while reading (exact). The default for MP3s
+     * without a Xing / VBRI seek table assumes a constant bitrate: on VBR files it guessed the
+     * length (12 min for a 30 min mix) and seeks landed minutes off — near the real end, so the
+     * track "jumped" to the next one (or, repeating, to its own start) soon after.
+     */
+    private fun mediaSources() = DefaultMediaSourceFactory(
+        this,
+        DefaultExtractorsFactory().setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING),
+    )
+
     override fun onCreate() {
         super.onCreate()
         player = ExoPlayer.Builder(this, ZeneloRenderersFactory(this, normalization))
@@ -82,6 +98,7 @@ class PlaybackService : MediaSessionService() {
                     .build(),
                 /* handleAudioFocus = */ true,
             )
+            .setMediaSourceFactory(mediaSources())
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_LOCAL)
             .build()
@@ -94,6 +111,7 @@ class PlaybackService : MediaSessionService() {
                 // No audio focus of its own: it would take it from the main player.
                 ExoPlayer.Builder(this, ZeneloRenderersFactory(this, processor))
                     .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), false)
+                    .setMediaSourceFactory(mediaSources())
                     .build()
             },
             currentGainDb = { normalization.gainDb },
@@ -249,7 +267,15 @@ class PlaybackService : MediaSessionService() {
     }
 
     private inner class PlayerListener : Player.Listener {
-        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = onTrackChanged(mediaItem)
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            // Why tracks change and positions jump: `adb logcat -s Zenelo` when chasing a skip / rewind.
+            Log.i(TAG, "track ${mediaItem?.mediaId?.substringAfterLast('/')} reason=${transitionReason(reason)} fading=${crossfader.fading}")
+            onTrackChanged(mediaItem)
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            Log.w(TAG, "player error ${error.errorCodeName} on ${player.currentMediaItem?.mediaId?.substringAfterLast('/')}", error)
+        }
 
         // The notification's shuffle button shows the mode, whoever changed it.
         override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) = updateCustomLayout()
@@ -259,6 +285,9 @@ class PlaybackService : MediaSessionService() {
         }
 
         override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+            if (reason == Player.DISCONTINUITY_REASON_SEEK || reason == Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT) {
+                Log.i(TAG, "seek ${oldPosition.positionMs} -> ${newPosition.positionMs} ms (item ${oldPosition.mediaItemIndex} -> ${newPosition.mediaItemIndex})")
+            }
             if (reason == Player.DISCONTINUITY_REASON_SEEK && !player.isPlaying) savePosition()
         }
 
@@ -325,7 +354,16 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    private fun transitionReason(reason: Int) = when (reason) {
+        Player.MEDIA_ITEM_TRANSITION_REASON_AUTO -> "auto"
+        Player.MEDIA_ITEM_TRANSITION_REASON_SEEK -> "seek"
+        Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT -> "repeat"
+        Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED -> "playlist"
+        else -> reason.toString()
+    }
+
     companion object {
+        private const val TAG = "Zenelo"
         const val ACTION_FAVORITE = "app.zenelo.FAVORITE"
         const val ACTION_SHUFFLE = "app.zenelo.SHUFFLE"
         val CMD_FAVORITE = SessionCommand(ACTION_FAVORITE, Bundle.EMPTY)

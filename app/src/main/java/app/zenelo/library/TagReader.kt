@@ -60,7 +60,9 @@ object TagReader {
             album = album,
             albumArtist = albumArtist,
             trackNumber = tag.field(FieldKey.TRACK)?.substringBefore('/')?.trim()?.toIntOrNull(),
-            durationMs = header?.let { (it.preciseTrackLength * 1000).toLong() } ?: 0L,
+            // VBR MP3 without a Xing / VBRI frame: jaudiotagger's length is a guess, count the frames.
+            durationMs = (if (file.extension.equals("mp3", ignoreCase = true)) Mp3Scan.durationMs(file) else null)
+                ?: header?.let { (it.preciseTrackLength * 1000).toLong() } ?: 0L,
             sampleRate = header?.sampleRateAsNumber ?: 0,
             bitsPerSample = header?.bitsPerSample ?: 0,
             bitrateKbps = header?.bitRateAsNumber?.toInt() ?: 0,

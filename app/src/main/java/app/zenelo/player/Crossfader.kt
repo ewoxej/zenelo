@@ -87,17 +87,21 @@ class Crossfader(
         val fade = fadeMs.toLong()
         if (fade <= 0 || fading) return IDLE_TICK_MS
         if (!main.isPlaying || !main.hasNextMediaItem() || main.repeatMode == Player.REPEAT_MODE_ONE) return IDLE_TICK_MS
-        val duration = main.duration
-        if (duration == C.TIME_UNSET || duration < fade * 2 + MIN_REST_MS) return IDLE_TICK_MS
         val item = main.currentMediaItem ?: return IDLE_TICK_MS
+        // MP3s without a seek table have no player duration until their end: use the index's (exact).
+        val duration = main.duration.takeIf { it != C.TIME_UNSET } ?: item.mediaMetadata.durationMs ?: return IDLE_TICK_MS
+        if (duration < fade * 2 + MIN_REST_MS) return IDLE_TICK_MS
         val fadeAt = duration - fade
         val untilFade = fadeAt - main.currentPosition
         if (untilFade > PREPARE_LEAD_MS) return (untilFade - PREPARE_LEAD_MS).coerceAtMost(IDLE_TICK_MS).coerceAtLeast(FINE_TICK_MS)
-        if (prepared != item.mediaId to fadeAt) prepareTail(item, fadeAt)
+        val key = item.mediaId to fadeAt
         if (untilFade <= 0) {
-            begin(fade)
+            // Only a track that played up to the fade point fades. Past it without the tail ready
+            // (a seek into the last seconds, a restored position there): no skip, it plays to its end.
+            if (prepared == key) begin(fade)
             return IDLE_TICK_MS
         }
+        if (prepared != key) prepareTail(item, fadeAt)
         return if (untilFade < 1_000) FINE_TICK_MS else 250
     }
 
