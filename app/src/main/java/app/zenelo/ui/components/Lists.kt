@@ -10,6 +10,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DriveFileRenameOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Route
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -44,6 +46,8 @@ fun TrackMenu(
     onEditTags: (fromFileName: Boolean) -> Unit,
     /** False for mStream tracks: the server's files aren't ours to rewrite or delete. */
     local: Boolean = true,
+    /** The track, for "Sonic path from / to here" (while logged in to mStream). */
+    path: String? = null,
 ) {
     var menu by remember { mutableStateOf(false) }
     Box {
@@ -51,7 +55,8 @@ fun TrackMenu(
             Icon(Icons.Rounded.MoreVert, "More", tint = ZeneloColors.TextMuted, modifier = Modifier.size(20.dp))
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            SwipeAction.entries.filter { it != SwipeAction.NONE && (local || it != SwipeAction.DELETE_FILE) }.forEach { action ->
+            // Server tracks can be downloaded, not deleted; local files the other way round.
+            SwipeAction.entries.filter { it != SwipeAction.NONE && it != (if (local) SwipeAction.DOWNLOAD else SwipeAction.DELETE_FILE) }.forEach { action ->
                 DropdownMenuItem(
                     text = { Text(action.label) },
                     leadingIcon = { Icon(action.icon, null, tint = action.accent) },
@@ -79,6 +84,7 @@ fun TrackMenu(
                     },
                 )
             }
+            if (path != null) SonicPathItems(path) { menu = false }
             DropdownMenuItem(
                 text = { Text("Download cover…") },
                 leadingIcon = { Icon(Icons.Outlined.Image, null, tint = ZeneloColors.Celadon) },
@@ -89,6 +95,30 @@ fun TrackMenu(
             )
         }
     }
+}
+
+/** "Sonic path from / to here": sets an end of the Sonic Path and opens it (logged in to mStream only). */
+@Composable
+fun SonicPathItems(path: String, icons: Boolean = true, onDone: () -> Unit) {
+    val sonicPath = appContainer().sonicPath
+    val available by sonicPath.available.collectAsStateWithLifecycle()
+    if (!available) return
+    DropdownMenuItem(
+        text = { Text("Sonic path from here") },
+        leadingIcon = if (icons) ({ Icon(Icons.Outlined.Route, null, tint = ZeneloColors.Celadon) }) else null,
+        onClick = {
+            onDone()
+            sonicPath.set(path, start = true)
+        },
+    )
+    DropdownMenuItem(
+        text = { Text("Sonic path to here") },
+        leadingIcon = if (icons) ({ Icon(Icons.Outlined.Route, null, tint = ZeneloColors.Celadon) }) else null,
+        onClick = {
+            onDone()
+            sonicPath.set(path, start = false)
+        },
+    )
 }
 
 /**

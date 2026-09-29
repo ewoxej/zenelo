@@ -60,6 +60,10 @@ import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Switch
+import androidx.compose.ui.draw.scale
+import app.zenelo.ui.components.SonicPathItems
+import app.zenelo.ui.settings.zeneloSwitchColors
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -89,6 +93,7 @@ import app.zenelo.data.db.ArtistRow
 import app.zenelo.data.db.TrackEntity
 import app.zenelo.library.artistKey
 import app.zenelo.mstream.MStreamPaths
+import app.zenelo.mstream.RemoteFolders
 import app.zenelo.library.artistTag
 import kotlinx.coroutines.flow.StateFlow
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -224,6 +229,7 @@ fun NowPlayingScreen(
             onOpenArtist = onOpenArtist,
             onDownloadCover = { coverPicker = true },
             onEditTags = { tagEditor = true },
+            onMessage = { coverMessage = it },
         )
         HorizontalPager(
             pager,
@@ -267,13 +273,16 @@ private fun TopBar(
     onOpenArtist: (String) -> Unit,
     onDownloadCover: () -> Unit,
     onEditTags: () -> Unit,
+    onMessage: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var menu by remember { mutableStateOf(false) }
+    val downloads = appContainer().mstreamDownloads
+    val scope = rememberCoroutineScope()
     val picker = appContainer().playlistPicker
     // mStream tracks have no folder here (yet): the label shows the server's path instead.
     val remote = MStreamPaths.isRemote(state.mediaId)
-    val folder = state.mediaId?.takeUnless { remote }?.let { File(it).parentFile }
+    val folder = state.mediaId?.let { if (remote) RemoteFolders.folder(MStreamPaths.dir(it)) else File(it).parentFile }
     val roots = appContainer().fileBrowser.let { fs -> remember { fs.roots() } }
     val settingsFlow = appContainer().settings.settings
     val settings by settingsFlow.collectAsStateWithLifecycle(initialValue = null)
@@ -349,6 +358,29 @@ private fun TopBar(
                         state.mediaId?.let { picker.pick(listOf(it)) }
                     },
                 )
+                if (remote) {
+                    DropdownMenuItem(
+                        text = { Text("Download") },
+                        onClick = {
+                            menu = false
+                            state.mediaId?.let { path -> scope.launch { onMessage(downloads.request(listOf(path))) } }
+                        },
+                    )
+                }
+                if (settings?.mstream != null) {
+                    val dj = settings?.autoDj?.enabled == true
+                    val container = appContainer()
+                    DropdownMenuItem(
+                        text = { Text("Auto DJ") },
+                        trailingIcon = { Switch(checked = dj, onCheckedChange = null, colors = zeneloSwitchColors(), modifier = Modifier.scale(0.8f)) },
+                        onClick = {
+                            menu = false
+                            container.autoDj.setEnabled(!dj) { container.player.playFiles(it) }
+                            onMessage(if (dj) "Auto DJ off" else "Auto DJ on")
+                        },
+                    )
+                    state.mediaId?.let { path -> SonicPathItems(path, icons = false) { menu = false } }
+                }
                 DropdownMenuItem(
                     text = { Text("Edit tags…") },
                     // The server's files aren't ours to write.

@@ -6,7 +6,9 @@ import android.util.LruCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import app.zenelo.data.db.TrackDao
 import app.zenelo.mstream.MStreamPaths
+import app.zenelo.mstream.RemoteFolders
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
@@ -21,9 +23,13 @@ object AudioFormats {
     fun isAudio(file: File) = file.extension.lowercase() in extensions
 }
 
-data class StorageRoot(val name: String, val dir: File, val removable: Boolean) {
-    /** Breadcrumb / title label: "SD" or "Internal". */
-    val shortName: String get() = if (removable) "SD" else "Internal"
+data class StorageRoot(val name: String, val dir: File, val removable: Boolean, val remote: Boolean = false) {
+    /** Breadcrumb / title label: "SD", "Internal" or "mStream". */
+    val shortName: String get() = when {
+        remote -> "mStream"
+        removable -> "SD"
+        else -> "Internal"
+    }
 }
 
 /** [modified]: file mtime, used as "date added" for sorting (0 when unknown). */
@@ -60,17 +66,18 @@ data class DirListing(
  * Shared storage goes through FUSE, where every stat is a round trip, so listings are cached in
  * memory and revalidated against the directory mtime (one stat) instead of rescanned.
  */
-class FileSystemBrowser(private val context: Context) {
+class FileSystemBrowser(private val context: Context, private val tracks: TrackDao) {
 
     private val cache = LruCache<String, DirListing>(CACHE_SIZE)
 
-    /** Internal storage and SD card(s), in system order. */
-    fun roots(): List<StorageRoot> {
+    /** Internal storage and SD card(s), in system order; then the mStream server when [server] (logged in). */
+    fun roots(server: Boolean = false): List<StorageRoot> {
         val sm = context.getSystemService(StorageManager::class.java)
-        return sm.storageVolumes.mapNotNull { volume ->
+        val local = sm.storageVolumes.mapNotNull { volume ->
             val dir = volume.directory ?: return@mapNotNull null
             StorageRoot(volume.getDescription(context), dir, volume.isRemovable)
         }
+        return if (server) local + StorageRoot("mStream", RemoteFolders.ROOT, removable = false, remote = true) else local
     }
 
     /** Last known listing, possibly stale. Cheap, safe on the main thread. */
@@ -78,6 +85,7 @@ class FileSystemBrowser(private val context: Context) {
 
     /** Fresh listing: served from cache when the directory is unchanged, rescanned otherwise. */
     suspend fun list(dir: File): DirListing = withContext(Dispatchers.IO) {
+        if (RemoteFolders.isRemote(dir)) return@withContext remote(dir).also { cache.put(dir.absolutePath, it) }
         val stamp = dir.lastModified()
         cache.get(dir.absolutePath)?.takeIf { it.stamp == stamp }
             ?: scan(dir, stamp).also { cache.put(dir.absolutePath, it) }
@@ -101,6 +109,27 @@ class FileSystemBrowser(private val context: Context) {
             ensureActive()
             if (cache.get(dir.absolutePath) == null) runCatching { list(dir) }
         }
+    }
+
+    /**
+     * A server folder, from the synced index (no request: works offline, as fast as a local one):
+     * its tracks, and the folders below it that hold any.
+     */
+    private suspend fun remote(dir: File): DirListing {
+        val index = RemoteFolders.indexDir(dir)
+        val prefix = "$index/"
+        val dirs = tracks.dirsIn(prefix, prefix + "\uFFFF")
+        val childModified = HashMap<String, Long>()
+        val children = dirs.map { prefix + it.substring(prefix.length).substringBefore('/') }.distinct()
+        val rows = if (dir == RemoteFolders.ROOT) emptyList() else tracks.inDir(index)
+        val folders = children.map { RemoteFolders.folder(it) to NaturalOrder.key(it.substringAfterLast('/')) }
+            .sortedWith { a, b -> NaturalOrder.compare(a.second, b.second) }
+            .map { it.first }
+        val files = rows.map { t ->
+            val name = MStreamPaths.fileName(t.path)
+            AudioFile(t.path, name, name.substringAfterLast('.', "").lowercase(), t.size, t.modified) to NaturalOrder.key(name)
+        }.sortedWith { a, b -> NaturalOrder.compare(a.second, b.second) }.map { it.first }
+        return DirListing(dir = dir, stamp = 0, folders = folders, files = files, folderModified = childModified)
     }
 
     private fun scan(dir: File, stamp: Long): DirListing {

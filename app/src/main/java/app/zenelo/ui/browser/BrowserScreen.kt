@@ -71,6 +71,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.zenelo.data.db.TrackEntity
 import app.zenelo.data.settings.SwipeAction
 import app.zenelo.library.AudioFile
+import app.zenelo.mstream.MStreamPaths
+import app.zenelo.mstream.RemoteFolders
 import app.zenelo.ui.components.IconTile
 import app.zenelo.ui.components.ListRow
 import app.zenelo.ui.components.PlayFab
@@ -180,7 +182,8 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
                 SelectionBar(
                     count = selected.size,
                     allSelected = all > 0 && selected.size == all,
-                    canDelete = chosenFolders.isEmpty(),
+                    // The server's files aren't deleted from here.
+                    canDelete = chosenFolders.isEmpty() && !RemoteFolders.isRemote(state.dir),
                     onClose = ::exitSelection,
                     onSelectAll = {
                         if (selected.size == all) exitSelection() else selected = (folders.map { it.path } + files.map { it.path }).toSet()
@@ -460,7 +463,7 @@ private fun TrackRow(
             if (selecting) {
                 if (!markLeft) SelectionMark(selected, Modifier.padding(horizontal = 10.dp))
             } else {
-                TrackMenu(onAction, onDownloadCover, onEditTags)
+                TrackMenu(onAction, onDownloadCover, onEditTags, local = !MStreamPaths.isRemote(file.path), path = file.path)
             }
         },
     )

@@ -84,7 +84,7 @@ fun PlaylistsScreen(onOpenPlaylist: (Long) -> Unit, onMessage: (String) -> Unit,
             items(playlists, key = { it.id }) { playlist ->
                 ListRow(
                     title = playlist.name,
-                    subtitle = "${playlist.trackCount} track${if (playlist.trackCount == 1) "" else "s"}",
+                    subtitle = "${playlist.trackCount} track${if (playlist.trackCount == 1) "" else "s"}" + if (playlist.remote) " · mStream" else "",
                     onClick = { onOpenPlaylist(playlist.id) },
                     leading = {
                         if (playlist.coverPath != null) {

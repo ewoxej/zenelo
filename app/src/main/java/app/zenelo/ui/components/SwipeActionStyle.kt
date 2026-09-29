@@ -5,6 +5,7 @@ import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.RemoveCircleOutline
 import androidx.compose.material.icons.outlined.VisibilityOff
@@ -27,6 +28,7 @@ val SwipeAction.icon: ImageVector
         SwipeAction.REMOVE_FROM_LIST -> Icons.Outlined.RemoveCircleOutline
         SwipeAction.HIDE -> Icons.Outlined.VisibilityOff
         SwipeAction.DELETE_FILE -> Icons.Outlined.DeleteOutline
+        SwipeAction.DOWNLOAD -> Icons.Outlined.Download
     }
 
 val SwipeAction.accent: Color
@@ -34,6 +36,7 @@ val SwipeAction.accent: Color
         SwipeAction.NONE, SwipeAction.HIDE -> ZeneloColors.TextMuted
         SwipeAction.ADD_TO_QUEUE, SwipeAction.PLAY_NEXT, SwipeAction.ADD_TO_PLAYLIST -> ZeneloColors.Mustard
         SwipeAction.FAVORITE -> ZeneloColors.Info
+        SwipeAction.DOWNLOAD -> ZeneloColors.Celadon
         SwipeAction.REMOVE_FROM_LIST, SwipeAction.DELETE_FILE -> ZeneloColors.Danger
     }
 

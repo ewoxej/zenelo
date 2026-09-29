@@ -101,7 +101,10 @@ class PlaylistFiles(private val context: Context, private val db: ZeneloDatabase
  * resolving and writing relative playlist paths. Null for other providers.
  */
 fun documentPath(uri: Uri): String? {
-    val id = runCatching { DocumentsContract.getDocumentId(uri) }.getOrNull() ?: return null
+    // A folder picked with OpenDocumentTree is a tree URI: its id is the tree's.
+    val id = runCatching {
+        if (DocumentsContract.isTreeUri(uri) && !DocumentsContract.isDocumentUri(null, uri)) DocumentsContract.getTreeDocumentId(uri) else DocumentsContract.getDocumentId(uri)
+    }.getOrNull() ?: return null
     return when (uri.authority) {
         "com.android.externalstorage.documents" -> {
             val volume = id.substringBefore(':')

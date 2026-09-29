@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import app.zenelo.AppContainer
+import app.zenelo.mstream.MStreamPaths
+import app.zenelo.mstream.RemoteFolders
 import app.zenelo.data.db.FavoriteEntity
 import app.zenelo.data.db.FavoriteKind
 import app.zenelo.data.db.TrackEntity
@@ -36,6 +38,7 @@ import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -150,22 +153,25 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
         // Recursive track counts for the subfolders on screen, straight from the index: folders
         // never opened still show what's inside once the background pass has read them.
         viewModelScope.launch {
+            // Server folders (`/mstream/…`) are the index's `mstream://…` dirs: queried as those,
+            // keyed back by folder path.
             currentDir.filterNotNull()
                 .flatMapLatest { dir ->
-                    val prefix = dir.absolutePath + "/"
+                    val prefix = RemoteFolders.indexPath(dir) + "/"
                     container.db.tracks().observeDirStats(prefix, prefix + "\uFFFF").map { rows -> dir to rows }
                 }
                 .sample(700)
                 .map { (dir, rows) ->
-                    val prefix = dir.absolutePath + "/"
+                    val prefix = RemoteFolders.indexPath(dir) + "/"
                     val byChild = HashMap<String, Pair<Int, Long>>()
                     val direct = HashMap<String, Int>()
                     for (row in rows) {
                         if (!row.dir.startsWith(prefix)) continue
                         val child = prefix + row.dir.substring(prefix.length).substringBefore('/')
-                        val (t, d) = byChild[child] ?: (0 to 0L)
-                        byChild[child] = (t + row.tracks) to (d + row.durationMs)
-                        if (row.dir == child) direct[child] = row.tracks
+                        val key = RemoteFolders.folderPath(child)
+                        val (t, d) = byChild[key] ?: (0 to 0L)
+                        byChild[key] = (t + row.tracks) to (d + row.durationMs)
+                        if (row.dir == child) direct[key] = row.tracks
                     }
                     Triple(dir, byChild, direct)
                 }
@@ -177,13 +183,19 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             // Indexing a big folder re-emits it after every batch: sample, and build the map off the main thread.
             currentDir.filterNotNull()
-                .flatMapLatest { container.db.tracks().observeInDir(it.absolutePath) }
+                .flatMapLatest { container.db.tracks().observeInDir(RemoteFolders.indexPath(it)) }
                 .sample(700)
                 .map { rows -> rows.associateBy(TrackEntity::path) }
                 .flowOn(Dispatchers.Default)
                 .collect { tracks -> _state.update { it.copy(tracks = tracks) } }
         }
         viewModelScope.launch { goHome() }
+        // The server's folders appear as a root while logged in.
+        viewModelScope.launch {
+            container.settings.settings.map { it.mstream != null }.distinctUntilChanged().collect { server ->
+                _state.update { it.copy(roots = fs.roots(server)) }
+            }
+        }
     }
 
     /** Shows the cached listing immediately (if any), then revalidates and prefetches subfolders. */
@@ -217,7 +229,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                 _state.update { if (it.dir != dir) it else it.copy(loading = false) }
             }
             // Tags for the folder on screen right away; the background pass covers the rest.
-            container.indexer.indexFiles(listing.files.map { File(it.path) })
+            if (!RemoteFolders.isRemote(dir)) container.indexer.indexFiles(listing.files.map { File(it.path) })
             fs.prefetch(listing.folders)
             _state.update { if (it.dir != dir) it else it.copy(subfolderCounts = subfolderCounts(listing.folders)) }
         }
@@ -250,7 +262,8 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     suspend fun goHome() {
-        val home = container.settings.settings.first().homeFolder?.let(::File)?.takeIf { it.isDirectory }
+        val home = container.settings.settings.first().homeFolder?.let(::File)
+            ?.takeIf { it.isDirectory || (RemoteFolders.isRemote(it) && container.settings.settings.first().mstream != null) }
         (home ?: _state.value.roots.firstOrNull()?.dir)?.let(::open)
     }
 
@@ -279,7 +292,8 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
     fun playFolder(shuffle: Boolean) {
         val current = player.state.value.mediaId
         val dir = _state.value.dir
-        if (!shuffle && current != null && dir != null && File(current).parentFile == dir) {
+        val currentDir = current?.let { if (MStreamPaths.isRemote(it)) RemoteFolders.folder(MStreamPaths.dir(it)) else File(it).parentFile }
+        if (!shuffle && current != null && dir != null && currentDir == dir) {
             player.play()
         } else {
             player.playFiles(visibleFiles(), shuffle = if (shuffle) true else null)
@@ -334,6 +348,9 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                 }
             }
             SwipeAction.DELETE_FILE -> showMessage("Folders can't be deleted from here")
+            SwipeAction.DOWNLOAD -> viewModelScope.launch {
+                _events.send(BrowserEvent.Message(container.mstreamDownloads.request(fs.listRecursive(folder).map { it.path }), action = action))
+            }
         }
     }
 
@@ -379,6 +396,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                         _events.send(BrowserEvent.Message(action = action, text = "Removed from list", undo = { _state.update { it.copy(files = before) } }))
                     }
                 SwipeAction.DELETE_FILE -> _events.send(BrowserEvent.Confirm(file, deleteFile = true))
+                SwipeAction.DOWNLOAD -> _events.send(BrowserEvent.Message(container.mstreamDownloads.request(listOf(file.path)), action = action))
             }
         }
     }
@@ -432,7 +450,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                     )
                 }
                 SwipeAction.DELETE_FILE -> {
-                    val deleted = withContext(Dispatchers.IO) { files.filter { File(it.path).delete() } }
+                    val deleted = withContext(Dispatchers.IO) { files.filter { !MStreamPaths.isRemote(it.path) && File(it.path).delete() } }
                     _state.update { it.copy(files = it.files - deleted.toSet()) }
                     val failed = files.size - deleted.size
                     _events.send(BrowserEvent.Message("${deleted.size} deleted" + if (failed > 0) " · $failed couldn't be deleted" else ""))
@@ -441,6 +459,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                     val all = expand(folders, files)
                     if (all.isEmpty()) _events.send(BrowserEvent.Message("No music selected")) else container.playlistPicker.pick(all.map { it.path })
                 }
+                SwipeAction.DOWNLOAD -> _events.send(BrowserEvent.Message(container.mstreamDownloads.request(expand(folders, files).map { it.path }), action = action))
                 SwipeAction.NONE -> Unit
             }
         }
@@ -454,7 +473,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
 
     fun deleteFile(file: AudioFile) {
         viewModelScope.launch {
-            val deleted = File(file.path).delete()
+            val deleted = !MStreamPaths.isRemote(file.path) && File(file.path).delete()
             if (deleted) _state.update { it.copy(files = it.files - file) }
             _events.send(BrowserEvent.Message(if (deleted) "File deleted" else "Could not delete file"))
         }

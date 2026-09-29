@@ -118,12 +118,14 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     val total = items.sumOf { it.durationMs ?: 0L }
+    // A copy of a server playlist: remade on every sync, so not edited here.
+    val readOnly = playlist?.remote == true
 
     LibraryScaffold(
         title = playlist?.name ?: "Playlist",
         count = tracks?.size,
         caption = when {
-            total >= 60_000 -> formatTotal(total).uppercase()
+            total >= 60_000 -> formatTotal(total).uppercase() + if (readOnly) " · MSTREAM" else ""
             total > 0 -> formatDuration(total)
             else -> null
         },
@@ -136,7 +138,7 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
             chosen().let { list -> vm.onTracks(list.map(PlaylistTrack::toAudioFile), list.associate { it.path to (it.name() to it.artist) }, action) }
         },
         onSelectionPlay = { vm.play(chosen().map(PlaylistTrack::toAudioFile), shuffle = it) },
-        onSelectionRemove = { remove(selection.keys) },
+        onSelectionRemove = if (readOnly) null else ({ remove(selection.keys) }),
         removeLabel = "Remove from playlist",
         isPlaying = isPlaying,
         canPlay = files.isNotEmpty(),
@@ -146,7 +148,7 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
             Box {
                 IconButton(onClick = { menu = true }, modifier = Modifier.size(44.dp)) { Icon(Icons.Rounded.MoreVert, "More", Modifier.size(20.dp)) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(text = { Text("Rename…") }, onClick = { menu = false; renaming = true })
+                    if (!readOnly) DropdownMenuItem(text = { Text("Rename…") }, onClick = { menu = false; renaming = true })
                     DropdownMenuItem(
                         text = { Text("Export as M3U8…") },
                         onClick = {
@@ -154,7 +156,7 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
                             exporter.launch("${playlist?.name?.replace(Regex("[\\\\/:*?\"<>|]"), "_") ?: "Playlist"}.m3u8")
                         },
                     )
-                    DropdownMenuItem(text = { Text("Delete playlist", color = ZeneloColors.Danger) }, onClick = { menu = false; deleting = true })
+                    if (!readOnly) DropdownMenuItem(text = { Text("Delete playlist", color = ZeneloColors.Danger) }, onClick = { menu = false; deleting = true })
                 }
             }
         },
@@ -166,7 +168,9 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
                     val title = track.name()
                     val act = { action: SwipeAction ->
                         // Here "remove from list" takes the track out of the playlist.
-                        if (action == SwipeAction.REMOVE_FROM_LIST || action == SwipeAction.HIDE) remove(setOf(track.position))
+                        if (action == SwipeAction.REMOVE_FROM_LIST || action == SwipeAction.HIDE) {
+                            if (readOnly) vm.showMessage("Server playlists are edited on the server") else remove(setOf(track.position))
+                        }
                         else vm.onTrack(file, title, track.artist, action)
                     }
                     SwipeableRow(
@@ -194,9 +198,10 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
                                     onDownloadCover = { vm.openDialog(TrackDialog.Cover(track.path)) },
                                     onEditTags = { vm.openDialog(TrackDialog.EditTags(track.path, it)) },
                                     local = !MStreamPaths.isRemote(track.path),
+                                    path = track.path,
                                 )
                                 // Reordering only makes sense over the whole list.
-                                if (search.query.isBlank()) {
+                                if (search.query.isBlank() && !readOnly) {
                                     Icon(
                                         Icons.Rounded.DragHandle,
                                         "Reorder",

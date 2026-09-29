@@ -20,8 +20,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PendingWriteEntity::class,
         PlayEntity::class,
         RemoteTrackEntity::class,
+        PendingRatingEntity::class,
+        PlayOutboxEntity::class,
+        DownloadEntity::class,
     ],
-    version = 8,
+    version = 10,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
@@ -31,6 +34,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AutoMigration(from = 5, to = 6, spec = ZeneloDatabase.RecountMp3::class),
         AutoMigration(from = 6, to = 7, spec = ZeneloDatabase.RetryLyrics::class),
         AutoMigration(from = 7, to = 8),
+        AutoMigration(from = 8, to = 9),
+        AutoMigration(from = 9, to = 10),
     ],
 )
 abstract class ZeneloDatabase : RoomDatabase() {
@@ -43,6 +48,8 @@ abstract class ZeneloDatabase : RoomDatabase() {
     abstract fun pendingWrites(): PendingWriteDao
     abstract fun plays(): PlayDao
     abstract fun remoteTracks(): RemoteTrackDao
+    abstract fun mstreamOutbox(): MStreamOutboxDao
+    abstract fun downloads(): DownloadDao
 
     /**
      * 5 adds ReplayGain peaks: files with ReplayGain tags get a stale stamp so the next scan reads

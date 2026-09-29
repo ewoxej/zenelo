@@ -26,6 +26,8 @@ enum class SwipeAction(val label: String) {
     PLAY_NEXT("Play next"),
     FAVORITE("Add to favorites"),
     ADD_TO_PLAYLIST("Add to playlist"),
+    /** mStream tracks: keep a copy on the device. */
+    DOWNLOAD("Download"),
     REMOVE_FROM_LIST("Remove from list"),
     HIDE("Hide"),
     DELETE_FILE("Delete file"),
@@ -66,6 +68,13 @@ enum class PullDownArea(val label: String, val fraction: Float) {
 enum class SelectionMarkerSide(val label: String) {
     LEFT("Left"),
     RIGHT("Right"),
+}
+
+/** When mStream tracks are streamed transcoded (the server's `/transcode`) instead of as the file. */
+enum class TranscodeMode(val label: String) {
+    OFF("Off · original files"),
+    MOBILE("On mobile data"),
+    ALWAYS("Always"),
 }
 
 /** Which tracks the library pages show (the page title's menu). */
@@ -121,9 +130,51 @@ data class ZeneloSettings(
     /** The mStream server we're logged in to, if any. */
     val mstream: MStreamAccount? = null,
     val librarySource: LibrarySource = LibrarySource.ALL,
+    val transcodeMode: TranscodeMode = TranscodeMode.OFF,
+    /**
+     * mp3 / opus / aac. MP3 by default: the server streams a transcode without a length, and only
+     * MP3 (frame-index seeking) can be seeked in that; Ogg Opus / ADTS AAC can't.
+     */
+    val transcodeCodec: String = "mp3",
+    /** 64k / 96k / 128k / 192k. */
+    val transcodeBitrate: String = "128k",
+    /** Where "Download" puts server tracks; null = `mstream` at the storage root. */
+    val downloadDir: String? = null,
+    /** Download the next queued server tracks ahead of playing them (into a cache). */
+    val autoDownload: Boolean = false,
+    val autoDownloadAhead: Int = 5,
+    val autoDownloadWifiOnly: Boolean = true,
+    /** Size limit of that cache; the least recently played go first. */
+    val cacheLimitMb: Int = 1024,
+    /** Auto DJ over the mStream server's library (see [app.zenelo.mstream.MStreamAutoDj]). */
+    val autoDj: AutoDjSettings = AutoDjSettings(),
+    /** Songs in a Sonic Path, both ends included (the server takes 4–32). */
+    val sonicPathLength: Int = 14,
 ) {
     val artistSplitter: ArtistSplitter get() = ArtistSplitter(artistSeparators, artistExceptions)
 }
+
+/**
+ * Auto DJ: when the queue reaches its last track, the server picks more (`db/random-songs`), the
+ * way its web app does. Defaults = the web app's: everything off but the on switch.
+ */
+data class AutoDjSettings(
+    val enabled: Boolean = false,
+    /** Only tracks the user rated at least this (0–10); 0 = any. */
+    val minRating: Int = 0,
+    /** Songs per request (1–25). */
+    val batch: Int = 1,
+    /** Prefer artists Last.fm calls similar to the playing one (needs Last.fm on the server). */
+    val similarArtists: Boolean = false,
+    /** Keep the tempo: BPM within [bpmTolerance] of the session's (or half / double). */
+    val bpmContinuity: Boolean = false,
+    val bpmTolerance: Int = 8,
+    /** Harmonic mixing: keys next to the session's on the Camelot wheel. */
+    val harmonicMixing: Boolean = false,
+    /** Sound-alike picks: the server's audio embeddings, at least [sonicMinSimilarity] (cosine). */
+    val sonic: Boolean = false,
+    val sonicMinSimilarity: Float = 0.55f,
+)
 
 /**
  * Settings (DataStore "settings"). [upgradedInstall]: the app was installed before this version
@@ -183,6 +234,35 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
     }
 
     suspend fun setLibrarySource(source: LibrarySource) = store.edit { it[LIBRARY_SOURCE] = source.name }
+
+    suspend fun setTranscode(mode: TranscodeMode, codec: String, bitrate: String) = store.edit {
+        it[TRANSCODE_MODE] = mode.name
+        it[TRANSCODE_CODEC] = codec
+        it[TRANSCODE_BITRATE] = bitrate
+    }
+
+    suspend fun setDownloadDir(path: String?) = store.edit { if (path == null) it.remove(DOWNLOAD_DIR) else it[DOWNLOAD_DIR] = path }
+
+    suspend fun setAutoDownload(enabled: Boolean, ahead: Int, wifiOnly: Boolean, cacheLimitMb: Int) = store.edit {
+        it[AUTO_DOWNLOAD] = enabled
+        it[AUTO_DOWNLOAD_AHEAD] = ahead
+        it[AUTO_DOWNLOAD_WIFI] = wifiOnly
+        it[CACHE_LIMIT_MB] = cacheLimitMb
+    }
+
+    suspend fun setAutoDj(value: AutoDjSettings) = store.edit {
+        it[AUTO_DJ] = value.enabled
+        it[AUTO_DJ_MIN_RATING] = value.minRating
+        it[AUTO_DJ_BATCH] = value.batch
+        it[AUTO_DJ_SIMILAR] = value.similarArtists
+        it[AUTO_DJ_BPM] = value.bpmContinuity
+        it[AUTO_DJ_BPM_TOLERANCE] = value.bpmTolerance
+        it[AUTO_DJ_HARMONIC] = value.harmonicMixing
+        it[AUTO_DJ_SONIC] = value.sonic
+        it[AUTO_DJ_SONIC_MIN] = value.sonicMinSimilarity
+    }
+
+    suspend fun setSonicPathLength(length: Int) = store.edit { it[SONIC_PATH_LENGTH] = length }
 
     suspend fun setSwipe(slot: SwipeSlot, action: SwipeAction) =
         store.edit { it[slotKey(slot)] = action.name }
@@ -283,6 +363,26 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
             MStreamAccount(this[MSTREAM_URL] ?: return@let null, this[MSTREAM_USER].orEmpty(), token)
         },
         librarySource = this[LIBRARY_SOURCE]?.let { enumOrNull<LibrarySource>(it) } ?: LibrarySource.ALL,
+        transcodeMode = this[TRANSCODE_MODE]?.let { enumOrNull<TranscodeMode>(it) } ?: TranscodeMode.OFF,
+        transcodeCodec = this[TRANSCODE_CODEC] ?: "mp3",
+        transcodeBitrate = this[TRANSCODE_BITRATE] ?: "128k",
+        downloadDir = this[DOWNLOAD_DIR],
+        autoDownload = this[AUTO_DOWNLOAD] ?: false,
+        autoDownloadAhead = this[AUTO_DOWNLOAD_AHEAD] ?: 5,
+        autoDownloadWifiOnly = this[AUTO_DOWNLOAD_WIFI] ?: true,
+        cacheLimitMb = this[CACHE_LIMIT_MB] ?: 1024,
+        autoDj = AutoDjSettings(
+            enabled = this[AUTO_DJ] ?: false,
+            minRating = this[AUTO_DJ_MIN_RATING] ?: 0,
+            batch = this[AUTO_DJ_BATCH] ?: 1,
+            similarArtists = this[AUTO_DJ_SIMILAR] ?: false,
+            bpmContinuity = this[AUTO_DJ_BPM] ?: false,
+            bpmTolerance = this[AUTO_DJ_BPM_TOLERANCE] ?: 8,
+            harmonicMixing = this[AUTO_DJ_HARMONIC] ?: false,
+            sonic = this[AUTO_DJ_SONIC] ?: false,
+            sonicMinSimilarity = this[AUTO_DJ_SONIC_MIN] ?: 0.55f,
+        ),
+        sonicPathLength = this[SONIC_PATH_LENGTH] ?: 14,
         artistExceptions = this[ARTIST_EXCEPTIONS]?.split('\n')?.filter(String::isNotBlank) ?: ArtistSplitter.DEFAULT_EXCEPTIONS,
     )
 
@@ -335,6 +435,24 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
         val MSTREAM_TOKEN = stringPreferencesKey("mstream_token")
         val MSTREAM_REVISION = stringPreferencesKey("mstream_revision")
         val LIBRARY_SOURCE = stringPreferencesKey("library_source")
+        val TRANSCODE_MODE = stringPreferencesKey("transcode_mode")
+        val TRANSCODE_CODEC = stringPreferencesKey("transcode_codec")
+        val TRANSCODE_BITRATE = stringPreferencesKey("transcode_bitrate")
+        val DOWNLOAD_DIR = stringPreferencesKey("download_dir")
+        val AUTO_DOWNLOAD = booleanPreferencesKey("auto_download")
+        val AUTO_DOWNLOAD_AHEAD = intPreferencesKey("auto_download_ahead")
+        val AUTO_DOWNLOAD_WIFI = booleanPreferencesKey("auto_download_wifi")
+        val CACHE_LIMIT_MB = intPreferencesKey("cache_limit_mb")
+        val AUTO_DJ = booleanPreferencesKey("auto_dj")
+        val AUTO_DJ_MIN_RATING = intPreferencesKey("auto_dj_min_rating")
+        val AUTO_DJ_BATCH = intPreferencesKey("auto_dj_batch")
+        val AUTO_DJ_SIMILAR = booleanPreferencesKey("auto_dj_similar")
+        val AUTO_DJ_BPM = booleanPreferencesKey("auto_dj_bpm")
+        val AUTO_DJ_BPM_TOLERANCE = intPreferencesKey("auto_dj_bpm_tolerance")
+        val AUTO_DJ_HARMONIC = booleanPreferencesKey("auto_dj_harmonic")
+        val AUTO_DJ_SONIC = booleanPreferencesKey("auto_dj_sonic")
+        val AUTO_DJ_SONIC_MIN = floatPreferencesKey("auto_dj_sonic_min")
+        val SONIC_PATH_LENGTH = intPreferencesKey("sonic_path_length")
         /** Not in backups: a login token, and sync state that means nothing elsewhere. */
         val PRIVATE_KEYS = setOf("mstream_token", "mstream_revision")
         val ARTIST_SEPARATORS = stringPreferencesKey("artist_separators")

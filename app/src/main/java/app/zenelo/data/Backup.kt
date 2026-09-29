@@ -106,7 +106,8 @@ class Backup(private val context: Context, private val db: ZeneloDatabase, priva
             appVersion = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty(),
             settings = settings.snapshot(),
             favorites = db.favorites().all(),
-            playlists = db.playlists().all().map { BackupPlaylist(it.name, it.createdAt, entries[it.id].orEmpty()) },
+            // Server playlists are copies, remade on every sync.
+            playlists = db.playlists().all().filterNot { it.remote }.map { BackupPlaylist(it.name, it.createdAt, entries[it.id].orEmpty()) },
             plays = db.plays().all(),
         )
         context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(BackupFormat.toJson(data).toByteArray()) } ?: error("Can't write $uri")

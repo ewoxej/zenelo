@@ -1,5 +1,6 @@
 package app.zenelo.data.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
@@ -25,6 +26,8 @@ data class PlaylistEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val createdAt: Long = System.currentTimeMillis(),
+    /** A copy of one of the user's playlists on the mStream server (read-only here, replaced on sync). */
+    @ColumnInfo(defaultValue = "0") val remote: Boolean = false,
 )
 
 @Entity(
@@ -53,6 +56,7 @@ data class PlaylistWithCount(
     val trackCount: Int,
     /** The first track, for a cover. */
     val coverPath: String? = null,
+    val remote: Boolean = false,
 )
 
 /**
@@ -211,4 +215,29 @@ data class RemoteTrackEntity(
     val rating: Int?,
     val hasLyrics: Boolean,
     val hash: String?,
+)
+
+/** A rating change for a server track not yet accepted by the server (sent on the next sync). */
+@Entity(tableName = "pending_ratings")
+data class PendingRatingEntity(
+    @PrimaryKey val path: String,
+    val rating: Int?,
+)
+
+/** A play of a server track not yet reported to the server. [id] is the report's idempotency key. */
+@Entity(tableName = "play_outbox")
+data class PlayOutboxEntity(
+    @PrimaryKey val id: String,
+    val path: String,
+    val startedAt: Long,
+    val playedMs: Long,
+    val durationMs: Long,
+)
+
+/** A server track waiting for "Download" (see `MStreamDownloads`); [attempts] failed tries so far. */
+@Entity(tableName = "downloads")
+data class DownloadEntity(
+    @PrimaryKey val path: String,
+    val addedAt: Long = System.currentTimeMillis(),
+    val attempts: Int = 0,
 )

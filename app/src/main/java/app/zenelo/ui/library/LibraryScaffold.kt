@@ -65,6 +65,8 @@ import app.zenelo.ui.theme.PlexSans
 import app.zenelo.ui.theme.ZeneloColors
 import app.zenelo.mstream.MStreamPaths
 import app.zenelo.ui.components.CloudMark
+import app.zenelo.ui.components.appContainer
+import app.zenelo.ui.components.DownloadMark
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -336,6 +338,8 @@ fun LibraryRow(
     subtitleMono: Boolean = false,
     /** Cloud mark: on the mStream server only. A track row's cover path is the track itself. */
     cloud: Boolean = MStreamPaths.isRemote(coverPath),
+    /** Download mark: a local copy "Download" made of a server track. */
+    downloaded: Boolean = appContainer().mstreamFiles.isDownload(coverPath),
     trailing: @Composable () -> Unit = {},
 ) {
     Row(
@@ -366,9 +370,10 @@ fun LibraryRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (!subtitle.isNullOrEmpty() || cloud) {
+            if (!subtitle.isNullOrEmpty() || cloud || downloaded) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (cloud) CloudMark(Modifier.padding(end = 4.dp))
+                    if (downloaded) DownloadMark(Modifier.padding(end = 4.dp))
                     Text(
                         subtitle.orEmpty(),
                         style = if (subtitleMono) TextStyle(fontFamily = PlexMono, fontSize = 11.sp) else TextStyle(fontFamily = PlexSans, fontSize = 11.5.sp),

@@ -95,6 +95,9 @@ fun SearchScreen(vm: LibraryViewModel, nav: LibraryNav, onBack: () -> Unit) {
                         title = album.album,
                         subtitle = album.artist,
                         coverPath = album.coverPath,
+                        // The album's marks, not its cover track's.
+                        cloud = album.remote,
+                        downloaded = false,
                         onClick = { nav.onOpenAlbum(album.key) },
                         onLongClick = {},
                         trailing = { Chevron() },

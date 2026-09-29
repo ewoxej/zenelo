@@ -51,8 +51,9 @@ abstract class PlaylistDao {
         """
         SELECT p.id, p.name, p.createdAt,
                (SELECT COUNT(*) FROM playlist_entries e WHERE e.playlistId = p.id) AS trackCount,
-               (SELECT e.path FROM playlist_entries e WHERE e.playlistId = p.id ORDER BY e.position LIMIT 1) AS coverPath
-        FROM playlists p ORDER BY p.createdAt DESC
+               (SELECT e.path FROM playlist_entries e WHERE e.playlistId = p.id ORDER BY e.position LIMIT 1) AS coverPath,
+               p.remote AS remote
+        FROM playlists p ORDER BY p.remote, p.createdAt DESC
         """,
     )
     abstract fun observeWithCounts(): Flow<List<PlaylistWithCount>>
@@ -119,6 +120,23 @@ abstract class PlaylistDao {
 
     @Query("DELETE FROM playlists")
     abstract suspend fun deleteAllPlaylists()
+
+    @Query("SELECT * FROM playlists WHERE remote = 1")
+    abstract suspend fun remotePlaylists(): List<PlaylistEntity>
+
+    @Query("DELETE FROM playlists WHERE remote = 1")
+    abstract suspend fun deleteRemote()
+
+    /** The server's playlists, as they are there now (replaces the previous copies). */
+    @Transaction
+    open suspend fun replaceRemote(playlists: List<Pair<String, List<String>>>) {
+        val old = remotePlaylists().associateBy { it.name }
+        deleteRemote()
+        for ((name, paths) in playlists) {
+            val id = insert(PlaylistEntity(name = name, createdAt = old[name]?.createdAt ?: 0, remote = true))
+            insertEntries(paths.mapIndexed { i, path -> PlaylistEntryEntity(id, i, path) })
+        }
+    }
 
     /** A new playlist holding [paths]; returns its id. */
     @Transaction
@@ -218,6 +236,13 @@ interface TrackDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(tracks: List<TrackEntity>)
 
+    /** Folders at or under a range of dirs (the server's folder tree, see `RemoteFolders`). */
+    @Query("SELECT DISTINCT dir FROM tracks WHERE dir >= :from AND dir < :to")
+    suspend fun dirsIn(from: String, to: String): List<String>
+
+    @Query("SELECT * FROM tracks WHERE dir = :dir")
+    suspend fun inDir(dir: String): List<TrackEntity>
+
     /** The mStream server's tracks (see `MStreamPaths`). */
     @Query("DELETE FROM tracks WHERE path LIKE 'mstream://%'")
     suspend fun deleteRemote()
@@ -253,6 +278,9 @@ interface PlayDao {
 
     @Insert
     suspend fun insertAll(plays: List<PlayEntity>)
+
+    @Query("SELECT COUNT(*) FROM plays WHERE path = :path AND playedAt BETWEEN :from AND :to")
+    suspend fun countNear(path: String, from: Long, to: Long): Int
 
     @Query("DELETE FROM plays WHERE playedAt < :before")
     suspend fun prune(before: Long)
@@ -308,6 +336,12 @@ interface RemoteTrackDao {
     @Query("SELECT path FROM remote_tracks")
     suspend fun paths(): List<String>
 
+    @Query("SELECT * FROM remote_tracks")
+    suspend fun all(): List<RemoteTrackEntity>
+
+    @Query("UPDATE remote_tracks SET rating = :rating WHERE path = :path")
+    suspend fun setRating(path: String, rating: Int?)
+
     @Query("DELETE FROM remote_tracks WHERE path IN (:paths)")
     suspend fun delete(paths: List<String>)
 
@@ -316,4 +350,50 @@ interface RemoteTrackDao {
 
     @Query("SELECT COUNT(*) FROM remote_tracks")
     fun observeCount(): Flow<Int>
+}
+
+@Dao
+interface MStreamOutboxDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun putRating(rating: PendingRatingEntity)
+
+    @Query("SELECT * FROM pending_ratings")
+    suspend fun ratings(): List<PendingRatingEntity>
+
+    @Query("DELETE FROM pending_ratings WHERE path = :path")
+    suspend fun dropRating(path: String)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun putPlay(play: PlayOutboxEntity)
+
+    @Query("SELECT * FROM play_outbox ORDER BY startedAt LIMIT 200")
+    suspend fun plays(): List<PlayOutboxEntity>
+
+    @Query("DELETE FROM play_outbox WHERE id IN (:ids)")
+    suspend fun dropPlays(ids: List<String>)
+}
+
+@Dao
+interface DownloadDao {
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun add(rows: List<DownloadEntity>)
+
+    /** The next one to try (fewest failures first, then oldest). */
+    @Query("SELECT * FROM downloads WHERE attempts < :maxAttempts ORDER BY attempts, addedAt LIMIT 1")
+    suspend fun next(maxAttempts: Int): DownloadEntity?
+
+    @Query("UPDATE downloads SET attempts = attempts + 1 WHERE path = :path")
+    suspend fun failed(path: String)
+
+    @Query("DELETE FROM downloads WHERE path = :path")
+    suspend fun remove(path: String)
+
+    @Query("DELETE FROM downloads")
+    suspend fun clear()
+
+    @Query("SELECT COUNT(*) FROM downloads WHERE attempts < :maxAttempts")
+    fun observePending(maxAttempts: Int): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM downloads WHERE attempts >= :maxAttempts")
+    fun observeFailed(maxAttempts: Int): Flow<Int>
 }

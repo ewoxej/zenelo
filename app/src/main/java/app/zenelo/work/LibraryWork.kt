@@ -38,6 +38,7 @@ object LibraryWork {
 
     private const val LOUDNESS_PERIODIC = "library-loudness-periodic"
     private const val SERVER_SYNC = "mstream-sync"
+    private const val DOWNLOADS = "mstream-downloads"
 
     private val online = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
 
@@ -70,6 +71,15 @@ object LibraryWork {
     /** The mStream server's library, now (after logging in, "Sync now"); [force] ignores its revision. */
     fun syncServer(context: Context, force: Boolean) {
         WorkManager.getInstance(context).enqueueUniqueWork(SERVER_SYNC, ExistingWorkPolicy.REPLACE, serverSyncRequest(force))
+    }
+
+    /** Works through the mStream download queue (appended after a run in progress). */
+    fun downloadNow(context: Context) {
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            DOWNLOADS,
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
+            OneTimeWorkRequestBuilder<DownloadWorker>().setConstraints(online).build(),
+        )
     }
 
     private fun serverSyncRequest(force: Boolean) = OneTimeWorkRequestBuilder<ServerSyncWorker>()
@@ -185,5 +195,13 @@ class ServerSyncWorker(context: Context, params: WorkerParameters) : CoroutineWo
 
     companion object {
         const val FORCE = "force"
+    }
+}
+
+/** Downloads the queued server tracks ([app.zenelo.mstream.MStreamDownloads]); retried when the network drops. */
+class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+    override suspend fun doWork(): Result {
+        val container = (applicationContext as ZeneloApp).container
+        return if (container.mstreamDownloads.drain()) Result.success() else Result.retry()
     }
 }

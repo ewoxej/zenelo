@@ -74,7 +74,8 @@ fun PlaylistPickerDialog(paths: List<String>, onDismiss: () -> Unit, onDone: (St
                         Text("New playlist", style = MaterialTheme.typography.bodyLarge, color = ZeneloColors.Mustard)
                     }
                     LazyColumn(Modifier.heightIn(max = 300.dp)) {
-                        items(playlists, key = { it.id }) { p ->
+                        // Server playlists are read-only copies: not offered.
+                        items(playlists.filterNot { it.remote }, key = { it.id }) { p ->
                             Row(
                                 Modifier.fillMaxWidth().clickable { add(p.id, p.name) }.padding(vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,

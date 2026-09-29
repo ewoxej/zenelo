@@ -134,6 +134,30 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   hasArtwork=false, covers/lyrics from the server first (`MetadataFetcher`), never embedded / tag-
   edited / deleted / loudness-measured. Cleartext HTTP allowed (home servers). Login + token are in
   settings but not in backups.
+- mStream stage 2: folder browser root "mStream" = virtual `/mstream/<vpath>/…` (`RemoteFolders` maps
+  it to the index's `mstream://` dirs; listings come from the synced index, no requests). Each sync
+  round (`MStreamSync.sync`): push the outbox (`pending_ratings`, `play_outbox`), library (manifest),
+  ratings via `db/rated` (not in the manifest revision) → favorites (8–10 = favorite; tracks with a
+  pending change keep ours), server playlists → read-only `playlists.remote` copies (not in backups,
+  not in the picker), server recent plays → `plays`. The other way: a favorites watcher in
+  `AppContainer` → `onFavoritesChanged` (like = 10, unlike clears), counted plays → `onPlayed`;
+  both sent at once, else on the next sync. Favorites ↔ ratings run under one mutex.
+- mStream stage 3: `MStreamFiles` — "Download" (SwipeAction.DOWNLOAD: menus, selection, folder ⋮,
+  Now Playing) saves originals to the download folder (setting, default `/mstream` at the storage
+  root) in the server's layout; they're indexed at once and are ordinary local files (download mark;
+  "All" hides their server twin). Queue: `downloads` table drained by `DownloadWorker`. Queue
+  auto-download (`MStreamDownloads.start`, follows `PlayQueue.state`, not track changes — those
+  come before a new queue is published) fills an app-private cache evicted by size (LRU by use).
+  `RemoteMedia` opens a download / cached copy first, else streams `/media`, or `/transcode` per
+  `TranscodeMode` (default MP3: the server streams transcodes without a length and ignores Range,
+  so only MP3's frame-index seeking works; Opus / AAC can't seek). It logs "open … from / streamed".
+- mStream stage 4: `MStreamAutoDj` (setting `autoDj`; Now Playing ⋮ toggle) — when the queue's last track
+  starts, `db/random-songs` picks more, the body built as the web app's `_buildAutoDjBody` (ignoreList
+  cursor, artist cooldown, BPM windows / Camelot neighbours via `AutoDjRules` (unit-tested), similar
+  artists, `similarTo` = last picks else the playing track); a track the user started resets the
+  anchors; picks with a local twin are queued as the local copy. Logs "Auto DJ asks {body}".
+  `MStreamSonicPath` + `SonicPathScreen` (route `sonicpath`): ends set from track menus / Now Playing
+  ("Sonic path from / to here", local tracks → server twin), `discovery/local/path`, play / queue / save.
 
 ## Roadmap (not done yet)
 1. FFmpeg decoder dependency (verify DSD support in Jellyfin's prebuilt, else build from source).
@@ -148,7 +172,7 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
    (`db/random-songs`) and Sonic Path (`discovery/local/path`) as on the server. Stages:
    (1) connect, sync, icons, dedupe, source menu, streaming, covers/lyrics; (2) file explorer,
    ratings ↔ favorites, server playlists / recent; (3) transcoding, downloads, queue auto-download;
-   (4) Auto DJ, Sonic Path; (5) Quick Connect (iroh tunnel, `mstr1:` code — Rust via NDK). Stage 1 is done.
+   (4) Auto DJ, Sonic Path; (5) Quick Connect (iroh tunnel, `mstr1:` code — Rust via NDK). Stages 1–4 are done.
 
 ## Build
 SDK: `/opt/homebrew/share/android-commandlinetools` (set in `local.properties`). JDK 17 from Homebrew:

@@ -31,7 +31,20 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.zenelo.data.settings.TranscodeMode
 import app.zenelo.data.settings.ZeneloSettings
+import app.zenelo.library.documentPath
+import app.zenelo.mstream.MStreamFiles
+import app.zenelo.ui.components.ZeneloSlider
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.outlined.DeleteSweep
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Route
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import kotlin.math.roundToInt
 import app.zenelo.mstream.MStreamSync
 import app.zenelo.ui.components.IconTile
 import app.zenelo.ui.components.ListRow
@@ -154,6 +167,9 @@ private fun Connected(onMessage: (String) -> Unit) {
             }
         },
     )
+    StreamingSettings(settings)
+    DownloadSettings(settings, onMessage)
+    AutoDjSettings(settings)
     ListRow(
         title = "Log out",
         subtitle = "The server's tracks leave the library",
@@ -180,3 +196,144 @@ private fun Connected(onMessage: (String) -> Unit) {
         )
     }
 }
+
+/** Transcoding: when, which codec and bitrate. */
+@Composable
+private fun StreamingSettings(settings: ZeneloSettings) {
+    val repo = appContainer().settings
+    val scope = rememberCoroutineScope()
+    SectionHeader("Streaming")
+    ChoiceRow("Transcode", settings.transcodeMode, TranscodeMode.entries, { it.label }) {
+        scope.launch { repo.setTranscode(it, settings.transcodeCodec, settings.transcodeBitrate) }
+    }
+    if (settings.transcodeMode != TranscodeMode.OFF) {
+        ChoiceRow("Format", settings.transcodeCodec, listOf("mp3", "opus", "aac"), { codecLabel(it) }) {
+            scope.launch { repo.setTranscode(settings.transcodeMode, it, settings.transcodeBitrate) }
+        }
+        ChoiceRow("Bitrate", settings.transcodeBitrate, listOf("64k", "96k", "128k", "192k"), { it.replace("k", " kbps") }) {
+            scope.launch { repo.setTranscode(settings.transcodeMode, settings.transcodeCodec, it) }
+        }
+    }
+    Text(
+        "Transcoded on the server to save data; downloads are always the original files.",
+        style = MaterialTheme.typography.bodySmall,
+        color = ZeneloColors.TextMuted,
+        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+    )
+}
+
+/** Where downloads go, their progress, and the queue auto-download (cache). */
+@Composable
+private fun DownloadSettings(settings: ZeneloSettings, onMessage: (String) -> Unit) {
+    val container = appContainer()
+    val repo = container.settings
+    val scope = rememberCoroutineScope()
+    val downloads = container.mstreamDownloads
+    val pending by downloads.pending.collectAsStateWithLifecycle(initialValue = 0)
+    val failed by downloads.failed.collectAsStateWithLifecycle(initialValue = 0)
+    val current by downloads.current.collectAsStateWithLifecycle()
+    val folder = settings.downloadDir ?: MStreamFiles.defaultDownloadDir().path
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        val path = uri?.let(::documentPath)
+        if (uri != null && path == null) onMessage("Pick a folder on the device's storage")
+        if (path != null) scope.launch { repo.setDownloadDir(path) }
+    }
+
+    SectionHeader("Downloads")
+    ListRow(
+        title = "Folder",
+        subtitle = folder,
+        onClick = { picker.launch(null) },
+        leading = { IconTile(Icons.Outlined.Folder, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+        trailing = {
+            if (settings.downloadDir != null) {
+                TextButton(onClick = { scope.launch { repo.setDownloadDir(null) } }) { Text("Default") }
+            }
+        },
+    )
+    ListRow(
+        title = when {
+            current != null -> "Downloading ${current!!.substringAfterLast('/')}"
+            pending > 0 -> "$pending waiting"
+            else -> "No downloads running"
+        },
+        subtitle = if (failed > 0) "$failed failed · tap to clear" else "\"Download\" in a track's, folder's or selection's menu",
+        onClick = { if (failed > 0) scope.launch { downloads.clearFailed() } },
+        leading = { IconTile(Icons.Outlined.Download, ZeneloColors.Celadon, ZeneloColors.CeladonTint) },
+        trailing = {
+            if (current != null) CircularProgressIndicator(color = ZeneloColors.Celadon, strokeWidth = 2.dp, modifier = Modifier.padding(12.dp).size(18.dp))
+        },
+    )
+
+    SectionHeader("Queue auto-download")
+    fun save(enabled: Boolean = settings.autoDownload, ahead: Int = settings.autoDownloadAhead, wifi: Boolean = settings.autoDownloadWifiOnly, limit: Int = settings.cacheLimitMb) {
+        scope.launch { repo.setAutoDownload(enabled, ahead, wifi, limit) }
+    }
+    SwitchRow("Download the next tracks", "Server tracks in the queue, ahead of playing them", settings.autoDownload) { save(enabled = it) }
+    if (settings.autoDownload) {
+        var ahead by remember(settings.autoDownloadAhead) { mutableFloatStateOf(settings.autoDownloadAhead.toFloat()) }
+        Text("Up to ${ahead.roundToInt()} tracks ahead", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp))
+        ZeneloSlider(ahead, { ahead = it }, 1f..20f, Modifier.padding(horizontal = 20.dp), onValueChangeFinished = { save(ahead = ahead.roundToInt()) })
+        SwitchRow("Wi-Fi only", "No auto-downloads on mobile data", settings.autoDownloadWifiOnly) { save(wifi = it) }
+        var limit by remember(settings.cacheLimitMb) { mutableFloatStateOf(settings.cacheLimitMb.toFloat()) }
+        Text("Cache up to ${formatMb(limit.roundToInt())}", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp))
+        ZeneloSlider(limit, { limit = (it / 256).roundToInt() * 256f }, 256f..8192f, Modifier.padding(horizontal = 20.dp), onValueChangeFinished = { save(limit = limit.roundToInt()) })
+    }
+    var cacheBytes by remember { mutableLongStateOf(container.mstreamFiles.cacheBytes()) }
+    ListRow(
+        title = "Clear the cache",
+        subtitle = "${formatMb((cacheBytes / (1024 * 1024)).toInt())} used · downloads aren't touched",
+        onClick = {
+            container.mstreamFiles.clearCache()
+            cacheBytes = container.mstreamFiles.cacheBytes()
+            onMessage("Cache cleared")
+        },
+        leading = { IconTile(Icons.Outlined.DeleteSweep, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+    )
+}
+
+/** Auto DJ (on / off and how it picks) and the way to Sonic Path. */
+@Composable
+private fun AutoDjSettings(settings: ZeneloSettings) {
+    val container = appContainer()
+    val repo = container.settings
+    val scope = rememberCoroutineScope()
+    val dj = settings.autoDj
+    fun save(value: app.zenelo.data.settings.AutoDjSettings) = scope.launch { repo.setAutoDj(value) }
+
+    SectionHeader("Auto DJ")
+    SwitchRow("Auto DJ", "When the queue reaches its last track, the server picks more", dj.enabled) { on ->
+        container.autoDj.setEnabled(on) { container.player.playFiles(it) }
+    }
+    ChoiceRow("Minimum rating", dj.minRating, listOf(0, 2, 4, 6, 8, 10), { if (it == 0) "Any track" else "Rated ${it / 2}+ of 5" }) { save(dj.copy(minRating = it)) }
+    ChoiceRow("Tracks per pick", dj.batch, listOf(1, 3, 5, 10), { "$it" }) { save(dj.copy(batch = it)) }
+    SwitchRow("Similar artists", "Prefer artists like the playing one (Last.fm on the server)", dj.similarArtists) { save(dj.copy(similarArtists = it)) }
+    SwitchRow("Keep the tempo", "BPM close to the session's, or half / double", dj.bpmContinuity) { save(dj.copy(bpmContinuity = it)) }
+    if (dj.bpmContinuity) {
+        var tolerance by remember(dj.bpmTolerance) { mutableFloatStateOf(dj.bpmTolerance.toFloat()) }
+        Text("Within ±${tolerance.roundToInt()} BPM", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp))
+        ZeneloSlider(tolerance, { tolerance = it }, 1f..20f, Modifier.padding(horizontal = 20.dp), onValueChangeFinished = { save(dj.copy(bpmTolerance = tolerance.roundToInt())) })
+    }
+    SwitchRow("Harmonic mixing", "Keys next to the session's on the Camelot wheel", dj.harmonicMixing) { save(dj.copy(harmonicMixing = it)) }
+    SwitchRow("Sounds like", "Tracks whose sound is close to the last picks (server's audio analysis)", dj.sonic) { save(dj.copy(sonic = it)) }
+    if (dj.sonic) {
+        var similarity by remember(dj.sonicMinSimilarity) { mutableFloatStateOf(dj.sonicMinSimilarity) }
+        Text("Similarity at least ${(similarity * 100).roundToInt()}%", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp))
+        ZeneloSlider(similarity, { similarity = (it * 20).roundToInt() / 20f }, 0.3f..0.9f, Modifier.padding(horizontal = 20.dp), onValueChangeFinished = { save(dj.copy(sonicMinSimilarity = similarity)) })
+    }
+    ListRow(
+        title = "Sonic Path",
+        subtitle = "A path of tracks morphing from one sound to another",
+        onClick = { container.sonicPath.show() },
+        leading = { IconTile(Icons.Outlined.Route, ZeneloColors.Celadon, ZeneloColors.CeladonTint) },
+    )
+}
+
+/** Only MP3 can be seeked in a stream the server is still transcoding (no length yet). */
+private fun codecLabel(codec: String): String = when (codec) {
+    "mp3" -> "MP3 · seekable"
+    "opus" -> "Opus · smaller, no seeking"
+    else -> "AAC · no seeking"
+}
+
+private fun formatMb(mb: Int): String = if (mb >= 1024) "%.1f GB".format(mb / 1024f) else "$mb MB"

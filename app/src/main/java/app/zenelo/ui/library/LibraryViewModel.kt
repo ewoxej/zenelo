@@ -178,6 +178,7 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
                     _events.send(LibraryEvent.Message("Removed from list", undo = { hidden.update { it - file.path } }, action = action))
                 }
                 SwipeAction.DELETE_FILE -> _events.send(LibraryEvent.ConfirmDelete(listOf(file)))
+                SwipeAction.DOWNLOAD -> _events.send(LibraryEvent.Message(container.mstreamDownloads.request(listOf(file.path)), action = action))
             }
         }
     }
@@ -236,6 +237,7 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
                 _events.send(LibraryEvent.Message("$what added to queue", action = action))
             }
             SwipeAction.ADD_TO_PLAYLIST -> container.playlistPicker.pick(files.map(AudioFile::path))
+            SwipeAction.DOWNLOAD -> _events.send(LibraryEvent.Message(container.mstreamDownloads.request(files.map(AudioFile::path)), action = action))
             else -> Unit
         }
     }

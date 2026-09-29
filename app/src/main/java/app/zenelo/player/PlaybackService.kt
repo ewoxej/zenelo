@@ -91,11 +91,15 @@ class PlaybackService : MediaSessionService() {
     )
 
     /** Opens mStream tracks with the current login; kept up to date from settings. */
-    private val remoteMedia by lazy { RemoteMedia(container.mstream) { container.settings.settings.first().mstream } }
+    private val remoteMedia by lazy { RemoteMedia(this, container.mstream, container.mstreamFiles) { container.settings.settings.first().mstream } }
 
     override fun onCreate() {
         super.onCreate()
         scope.launch { container.settings.settings.map { it.mstream }.distinctUntilChanged().collect { remoteMedia.account = it } }
+        scope.launch {
+            container.settings.settings.map { Triple(it.transcodeMode, it.transcodeCodec, it.transcodeBitrate) }.distinctUntilChanged()
+                .collect { remoteMedia.transcode = it }
+        }
         player = ExoPlayer.Builder(this, ZeneloRenderersFactory(this, normalization))
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -183,7 +187,12 @@ class PlaybackService : MediaSessionService() {
         val path = player.currentMediaItem?.mediaId ?: return
         if (listenedMs >= Library.playThresholdMs(player.duration.coerceAtLeast(0L))) {
             playCounted = true
-            container.appScope.launch { container.library.recordPlay(path) }
+            val played = listenedMs
+            val duration = player.duration.coerceAtLeast(0L)
+            container.appScope.launch {
+                container.library.recordPlay(path)
+                container.mstreamSync.onPlayed(path, played, duration)
+            }
         }
     }
 

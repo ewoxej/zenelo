@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ViewList
 import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.DownloadDone
 import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.PhoneAndroid
@@ -358,4 +359,10 @@ fun SourceLabel(source: LibrarySource, modifier: Modifier = Modifier) {
 @Composable
 fun CloudMark(modifier: Modifier = Modifier) {
     Icon(Icons.Outlined.Cloud, "On the server", tint = ZeneloColors.TextMuted, modifier = modifier.size(13.dp))
+}
+
+/** The small arrow after a title: downloaded from the mStream server. */
+@Composable
+fun DownloadMark(modifier: Modifier = Modifier) {
+    Icon(Icons.Outlined.DownloadDone, "Downloaded", tint = ZeneloColors.Celadon, modifier = modifier.size(13.dp))
 }

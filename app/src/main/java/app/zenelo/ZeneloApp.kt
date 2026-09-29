@@ -7,7 +7,11 @@ import app.zenelo.data.db.ZeneloDatabase
 import app.zenelo.data.settings.SettingsRepository
 import app.zenelo.library.FileSystemBrowser
 import app.zenelo.library.PlaylistFiles
+import app.zenelo.mstream.MStreamAutoDj
 import app.zenelo.mstream.MStreamClient
+import app.zenelo.mstream.MStreamSonicPath
+import app.zenelo.mstream.MStreamDownloads
+import app.zenelo.mstream.MStreamFiles
 import app.zenelo.mstream.MStreamSync
 import app.zenelo.library.Library
 import app.zenelo.library.LibraryIndexer
@@ -27,6 +31,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -50,7 +56,7 @@ class ZeneloApp : Application() {
 class AppContainer(context: Context, upgradedInstall: Boolean) {
     val db = ZeneloDatabase.create(context)
     val settings = SettingsRepository(context, upgradedInstall)
-    val fileBrowser = FileSystemBrowser(context)
+    val fileBrowser = FileSystemBrowser(context, db.tracks())
     /** Path of the track the service is playing; files in use are never rewritten. */
     val nowPlaying = MutableStateFlow<String?>(null)
 
@@ -89,6 +95,21 @@ class AppContainer(context: Context, upgradedInstall: Boolean) {
     val playlistFiles = PlaylistFiles(context, db)
     val backup = Backup(context, db, settings)
     val mstreamSync = MStreamSync(db, settings, mstream)
+    val mstreamFiles = MStreamFiles(context, http.client)
+    val mstreamDownloads = MStreamDownloads(context, db, settings, mstream, mstreamFiles, indexer, queue, appScope).also { it.start() }
+    val autoDj = MStreamAutoDj(db, settings, mstream, queue, appScope).also { it.start() }
+    val sonicPath = MStreamSonicPath(db, settings, mstream, appScope)
+
+    init {
+        // Likes of server tracks become ratings on the server (and unlikes clear them).
+        @OptIn(kotlinx.coroutines.FlowPreview::class)
+        appScope.launch { db.favorites().observeAll().debounce(300).collect { mstreamSync.onFavoritesChanged() } }
+        appScope.launch {
+            settings.settings.map { it.downloadDir }.distinctUntilChanged().collect { dir ->
+                mstreamFiles.downloadDir = dir?.let(::File) ?: MStreamFiles.defaultDownloadDir()
+            }
+        }
+    }
     val player = PlayerController(context, queue, coverOverride)
 
     /** Refreshes the queue / Now Playing (tags) and the thumbnails / Now Playing cover after a write. */

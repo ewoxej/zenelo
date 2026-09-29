@@ -106,4 +106,26 @@ class MStreamTest {
         assertEquals("01 #1?.flac", MStreamPaths.fileName(p))
         assertFalse(MStreamPaths.isRemote("/storage/emulated/0/a.flac"))
     }
+
+    @Test
+    fun remoteFolders() {
+        val root = RemoteFolders.ROOT
+        // Children of the root are "<prefix><vpath>", with prefix = indexDir(root) + "/".
+        assertEquals("mstream://", RemoteFolders.indexDir(root) + "/")
+        val music = java.io.File("/mstream/music/Server Band")
+        assertEquals("mstream://music/Server Band", RemoteFolders.indexDir(music))
+        assertEquals(music, RemoteFolders.folder("mstream://music/Server Band"))
+        assertEquals(root, RemoteFolders.folder("mstream://"))
+        assertTrue(RemoteFolders.isRemote(music))
+        assertFalse(RemoteFolders.isRemote(java.io.File("/mstreamer")))
+        assertEquals("/storage/emulated/0/Music", RemoteFolders.indexPath(java.io.File("/storage/emulated/0/Music")))
+    }
+
+    @Test
+    fun serverTimes() {
+        assertEquals(1_790_709_133_745L, MStreamClient.parseTime("2026-09-29 19:12:13.745"))
+        assertEquals(1_790_709_133_000L, MStreamClient.parseTime("2026-09-29T19:12:13Z"))
+        assertEquals(1_790_709_133_000L, MStreamClient.parseTime(1_790_709_133))
+        assertNull(MStreamClient.parseTime(null))
+    }
 }

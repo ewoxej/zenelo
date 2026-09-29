@@ -122,6 +122,9 @@ fun AlbumsScreen(vm: LibraryViewModel, nav: LibraryNav, onBack: (() -> Unit)?) {
                         title = album.album,
                         subtitle = listOfNotNull(album.artist, albumDetail(album, sort)).joinToString(" · "),
                         coverPath = album.coverPath,
+                        // The album's marks, not its cover track's.
+                        cloud = album.remote,
+                        downloaded = false,
                         coverSize = 48.dp,
                         isCurrent = album.key == currentKey,
                         selecting = selection.active,
@@ -413,6 +416,7 @@ fun TrackRow(
                     onDownloadCover = { vm.openDialog(TrackDialog.Cover(track.path)) },
                     onEditTags = { vm.openDialog(TrackDialog.EditTags(track.path, it)) },
                     local = !MStreamPaths.isRemote(track.path),
+                    path = track.path,
                 )
             },
         )
@@ -483,6 +487,7 @@ fun RecentScreen(vm: LibraryViewModel, onBack: (() -> Unit)?) {
                                     onDownloadCover = { vm.openDialog(TrackDialog.Cover(play.path)) },
                                     onEditTags = { vm.openDialog(TrackDialog.EditTags(play.path, it)) },
                                     local = !MStreamPaths.isRemote(play.path),
+                                    path = play.path,
                                 )
                             },
                         )

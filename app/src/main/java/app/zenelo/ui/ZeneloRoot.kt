@@ -95,6 +95,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import app.zenelo.ui.playlists.PlaylistsScreen
 import app.zenelo.ui.playlists.PlaylistScreen
+import app.zenelo.ui.playlists.SonicPathScreen
 import app.zenelo.ui.playlists.PlaylistPickerDialog
 import app.zenelo.ui.settings.SettingsPage
 import app.zenelo.ui.settings.SettingsPageScreen
@@ -145,6 +146,7 @@ private object Routes {
     const val ALBUM = "album/{key}"
     const val ARTIST = "artist/{key}"
     const val PLAYLIST = "playlist/{id}"
+    const val SONIC_PATH = "sonicpath"
 
     fun section(section: Section) = "section/${section.name}"
     fun album(key: String) = "album/${Uri.encode(key)}"
@@ -363,6 +365,7 @@ private fun MainContent(settings: ZeneloSettings) {
                     val id = entry.arguments?.getString("id")?.toLongOrNull()
                     if (id != null) PlaylistScreen(libraryViewModel, id) { nav.popBackStack() }
                 }
+                composable(Routes.SONIC_PATH) { SonicPathScreen(libraryViewModel::showMessage) { nav.popBackStack() } }
                 composable(Routes.SEARCH) { SearchScreen(libraryViewModel, libraryNav) { nav.popBackStack() } }
                 composable(Routes.SETTINGS_PAGE) { entry ->
                     val page = entry.arguments?.getString("page")?.let { name -> SettingsPage.entries.firstOrNull { it.name == name } }
@@ -384,6 +387,21 @@ private fun MainContent(settings: ZeneloSettings) {
         }
 
         LibraryMessages(libraryViewModel, Modifier.align(Alignment.BottomCenter).padding(bottom = bottomReserved))
+
+        // Sonic Path ends set from any menu open its screen (over Now Playing too); Auto DJ's failures show here.
+        LaunchedEffect(Unit) {
+            container.sonicPath.open.collect { problem ->
+                if (problem != null) {
+                    libraryViewModel.showMessage(problem)
+                } else if (nav.currentDestination?.route != Routes.SONIC_PATH) {
+                    nav.navigate(Routes.SONIC_PATH)
+                    sheet.close()
+                } else {
+                    sheet.close()
+                }
+            }
+        }
+        LaunchedEffect(Unit) { container.autoDj.messages.collect(libraryViewModel::showMessage) }
 
         // The player sheet: collapsed it is just the mini player above the tab bar; dragged up it
         // grows into Now Playing (the mini player fading out), and back. Now Playing is composed

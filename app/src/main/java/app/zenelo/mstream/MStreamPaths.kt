@@ -22,3 +22,27 @@ object MStreamPaths {
     /** Parent folder, in our form: `mstream://music/Artist/Album`. */
     fun dir(path: String): String = path.substringBeforeLast('/')
 }
+
+/**
+ * The server's folders in the folder browser: a virtual root `/mstream`, with `/mstream/<vpath>/…`
+ * standing for the index's `mstream://<vpath>/…` dirs. Only a path holder: never touched on disk.
+ */
+object RemoteFolders {
+    val ROOT = java.io.File("/mstream")
+
+    fun isRemote(dir: java.io.File?): Boolean = dir != null && (dir == ROOT || dir.path.startsWith(ROOT.path + "/"))
+
+    /** `/mstream/music/A` → `mstream://music/A`; the root → `mstream:/` (a prefix only). */
+    fun indexDir(dir: java.io.File): String =
+        if (dir == ROOT) MStreamPaths.SCHEME.dropLast(1) else MStreamPaths.SCHEME + dir.path.removePrefix(ROOT.path + "/")
+
+    /** `mstream://music/A` → `/mstream/music/A`. */
+    fun folder(indexDir: String): java.io.File =
+        if (indexDir.length <= MStreamPaths.SCHEME.length) ROOT else java.io.File(ROOT, indexDir.removePrefix(MStreamPaths.SCHEME))
+
+    /** The index dir for any folder: remote ones mapped, local ones as they are. */
+    fun indexPath(dir: java.io.File): String = if (isRemote(dir)) indexDir(dir) else dir.absolutePath
+
+    /** A folder path for an index dir (inverse of [indexPath]). */
+    fun folderPath(indexDir: String): String = if (MStreamPaths.isRemote(indexDir)) folder(indexDir).path else indexDir
+}

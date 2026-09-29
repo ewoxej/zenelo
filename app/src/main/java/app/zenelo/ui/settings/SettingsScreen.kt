@@ -474,7 +474,7 @@ private fun RadioRow(title: String, subtitle: String, selected: Boolean, onClick
 }
 
 @Composable
-private fun SwitchRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+internal fun SwitchRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(horizontal = 20.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -489,7 +489,7 @@ private fun SwitchRow(title: String, subtitle: String, checked: Boolean, onChang
 
 /** Title + current value; tapping opens the choices. */
 @Composable
-private fun <T> ChoiceRow(title: String, current: T, choices: List<T>, label: (T) -> String, onSelect: (T) -> Unit) {
+internal fun <T> ChoiceRow(title: String, current: T, choices: List<T>, label: (T) -> String, onSelect: (T) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         Row(
@@ -517,7 +517,7 @@ private fun <T> ChoiceRow(title: String, current: T, choices: List<T>, label: (T
 }
 
 @Composable
-private fun zeneloSwitchColors() = SwitchDefaults.colors(
+internal fun zeneloSwitchColors() = SwitchDefaults.colors(
     checkedThumbColor = ZeneloColors.OnMustard,
     checkedTrackColor = ZeneloColors.Mustard,
     uncheckedThumbColor = ZeneloColors.TextMuted,
