@@ -5,6 +5,8 @@ import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
+import app.zenelo.data.db.FavoriteEntity
+import app.zenelo.data.db.FavoriteKind
 import app.zenelo.data.db.ZeneloDatabase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -22,15 +24,43 @@ import java.nio.charset.CodingErrorAction
 class PlaylistFiles(private val context: Context, private val db: ZeneloDatabase) {
     data class Imported(val id: Long?, val name: String, val found: Int, val missing: Int)
 
+    /** The playlist file's tracks that were found, in order, and how many weren't. */
+    private data class Resolved(val name: String, val paths: List<String>, val missing: Int)
+
     /** Reads [uri] into a new playlist named after the file; no playlist when nothing was found. */
     suspend fun import(uri: Uri): Imported? = withContext(Dispatchers.IO) {
-        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext null
+        val r = resolve(uri) ?: return@withContext null
+        val id = if (r.paths.isEmpty()) null else db.playlists().create(r.name, r.paths)
+        Imported(id, r.name, r.paths.size, r.missing)
+    }
+
+    data class Favorited(val name: String, val added: Int, val already: Int, val missing: Int)
+
+    /** Adds [uri]'s tracks to favorites (the ones already there keep their place). */
+    suspend fun importToFavorites(uri: Uri): Favorited? = withContext(Dispatchers.IO) {
+        val r = resolve(uri) ?: return@withContext null
+        val favorites = db.favorites()
+        val paths = r.paths.distinct()
+        val fresh = paths.filterNot { favorites.isFavorite(it) }
+        val tracks = fresh.chunked(900).flatMap { db.tracks().getMany(it) }.associateBy { it.path }
+        // In the file's order: the first track ends up newest, on top of the favorites list.
+        val now = System.currentTimeMillis()
+        favorites.insertAll(
+            fresh.mapIndexed { i, path ->
+                val t = tracks[path]
+                FavoriteEntity(path, FavoriteKind.TRACK, t?.title ?: File(path).nameWithoutExtension, t?.artist, addedAt = now - i)
+            },
+        )
+        Favorited(r.name, fresh.size, paths.size - fresh.size, r.missing)
+    }
+
+    private suspend fun resolve(uri: Uri): Resolved? {
+        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
         val entries = M3u.parse(decode(bytes))
         val base = documentPath(uri)?.substringBeforeLast('/')
         val paths = entries.mapNotNull { locate(it.location, base) }
         val name = (displayName(uri) ?: "Imported").substringBeforeLast('.').ifBlank { "Imported" }
-        val id = if (paths.isEmpty()) null else db.playlists().create(name, paths)
-        Imported(id, name, paths.size, entries.size - paths.size)
+        return Resolved(name, paths, entries.size - paths.size)
     }
 
     /** Writes playlist [id] to [uri] as M3U8; returns the number of tracks. */

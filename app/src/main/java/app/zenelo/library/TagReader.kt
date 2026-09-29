@@ -224,11 +224,15 @@ object Text {
             .trim()
             .replace(Regex("\\s+"), " ")
 
-    /** Same after normalization, or one contains the other (editions, "feat." credits). */
+    /**
+     * Same after normalization (a leading "the" ignored), or one starts the other at a word
+     * boundary: editions ("Album Deluxe"), "feat." credits ("Artist feat X"). Not a word inside
+     * another name: "music" doesn't match "vedicdhvani music".
+     */
     fun matches(a: String?, b: String?): Boolean {
-        val x = a?.let(::normalize).orEmpty()
-        val y = b?.let(::normalize).orEmpty()
+        val x = a?.let(::normalize)?.removePrefix("the ").orEmpty()
+        val y = b?.let(::normalize)?.removePrefix("the ").orEmpty()
         if (x.isEmpty() || y.isEmpty()) return false
-        return x == y || x.contains(y) || y.contains(x)
+        return x == y || x.startsWith("$y ") || y.startsWith("$x ")
     }
 }

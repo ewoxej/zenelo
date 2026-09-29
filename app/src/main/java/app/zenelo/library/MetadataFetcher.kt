@@ -9,6 +9,7 @@ import app.zenelo.data.settings.SettingsRepository
 import app.zenelo.online.CoverCandidate
 import app.zenelo.online.CoverSources
 import app.zenelo.online.FoundLyrics
+import app.zenelo.online.LyricsSearch
 import app.zenelo.online.Http
 import app.zenelo.online.LrcLib
 import kotlinx.coroutines.Dispatchers
@@ -88,28 +89,39 @@ class MetadataFetcher(
             if (http.onWifi()) covers.upsert(CoverEntity(key, null, null, now()))
             return@withContext null
         }
-        saveCover(key, found.second, found.first.source)
+        saveCover(key, found.image, found.candidate.source + if (found.fromPath) FROM_PATH else "")
+    }
+
+    /** A cover found online; [fromPath]: searched by names guessed from the file path, not by tags. */
+    private class Found(val candidate: CoverCandidate, val image: ByteArray, val fromPath: Boolean)
+
+    /**
+     * By the tags: album artist (else artist) + album, or the song when there's no album tag. The
+     * file name patterns are used only when the tags have no artist at all: a path like
+     * "Music/Lyrics/x.flac" read as artist "Music", album "Lyrics" found unrelated albums.
+     */
+    private suspend fun findCoverOnline(track: TrackEntity): Found? {
+        val tagArtist = track.albumArtist ?: track.artist
+        if (tagArtist != null) {
+            if (track.album != null) return coverSources.auto(tagArtist, track.album)?.let { Found(it.first, it.second, fromPath = false) }
+            if (track.title != null) return coverSources.autoBySong(tagArtist, track.title)?.let { Found(it.first, it.second, fromPath = false) }
+            return null
+        }
+        val guess = guess(track)?.takeIf { it.artist != null } ?: return null
+        val found = when {
+            guess.album != null -> coverSources.auto(guess.artist!!, guess.album)
+            guess.title != null -> coverSources.autoBySong(guess.artist!!, guess.title)
+            else -> null
+        } ?: return null
+        return Found(found.first, found.second, fromPath = true)
     }
 
     /**
-     * Tags first; then artist / album / title guessed from the file name by the user's patterns
-     * (for missing or wrong tags). Without an album the cover is found through the song.
+     * Whether the track's cached cover may go into its files: not one found by names guessed
+     * from the path (shown in the app only, it may be wrong).
      */
-    private suspend fun findCoverOnline(track: TrackEntity): Pair<CoverCandidate, ByteArray>? {
-        val tagArtist = track.albumArtist ?: track.artist
-        if (tagArtist != null && track.album != null) coverSources.auto(tagArtist, track.album)?.let { return it }
-        val guess = guess(track)
-        if (guess?.artist != null) {
-            if (guess.album != null && !(Text.matches(guess.artist, tagArtist) && Text.matches(guess.album, track.album))) {
-                coverSources.auto(guess.artist, guess.album)?.let { return it }
-            }
-            if (guess.title != null) coverSources.autoBySong(guess.artist, guess.title)?.let { return it }
-        }
-        if (tagArtist != null && track.album == null && track.title != null) {
-            coverSources.autoBySong(tagArtist, track.title)?.let { return it }
-        }
-        return null
-    }
+    suspend fun coverIsConfident(track: TrackEntity): Boolean =
+        covers.get(coverKey(track))?.source?.endsWith(FROM_PATH) != true
 
     /** Artist / album / title from the file path, by the patterns in settings. */
     suspend fun guess(track: TrackEntity): PathGuess? =
@@ -159,17 +171,23 @@ class MetadataFetcher(
         if (cached != null && (!cached.isEmpty || !expired(cached.fetchedAt))) return@withContext cached
         if (!allowNetwork || !onlineAllowed()) return@withContext cached
         val seconds = (track.durationMs / 1000).toInt()
-        // Tags first, then the file name patterns (missing or wrong tags).
+        // Tags first, then the file name patterns (missing or wrong tags). Each with its title and
+        // artist variants ("Song - Live" → "Song", "A feat. B" → "A"), see LyricsSearch.
+        val splitter = settings.settings.first().artistSplitter
         val attempts = buildList {
-            val artist = track.artist ?: track.albumArtist
-            if (track.title != null && artist != null) add(Triple(track.title, artist, track.album))
-            guess(track)?.let { g -> if (g.title != null && g.artist != null) add(Triple(g.title, g.artist, g.album)) }
+            val artists = LyricsSearch.artistVariants(track.artist, track.albumArtist, splitter)
+            if (track.title != null && artists.isNotEmpty()) add(Triple(LyricsSearch.titleVariants(track.title), artists, track.album))
+            guess(track)?.let { g ->
+                if (g.title != null && g.artist != null) {
+                    add(Triple(LyricsSearch.titleVariants(g.title), LyricsSearch.artistVariants(g.artist, null, splitter), g.album))
+                }
+            }
         }.distinct()
         // Nothing to search by (no tags, no pattern match): as good as not found.
         if (attempts.isEmpty()) return@withContext LyricsEntity(track.path, null, null, false, SOURCE_LRCLIB, now()).also { lyrics.upsert(it) }
         var result: FoundLyrics? = null
-        for ((title, artist, album) in attempts) {
-            val found = lrcLib.find(title, artist, album, seconds) ?: return@withContext cached // offline: retry later
+        for ((titles, artists, album) in attempts) {
+            val found = lrcLib.find(titles, artists, album, seconds) ?: return@withContext cached // offline: retry later
             result = found
             if (found.synced != null || found.plain != null || found.instrumental) break
         }
@@ -201,6 +219,8 @@ class MetadataFetcher(
     companion object {
         const val SOURCE_FILE = "file"
         const val SOURCE_LRCLIB = "lrclib"
+        /** Suffix of a cover's source when it was found by names guessed from the path. */
+        private const val FROM_PATH = " (by path)"
 
         /** Retry "not found" results after a month: catalogs grow. */
         const val RETRY_AFTER_MS = 30L * 24 * 60 * 60 * 1000

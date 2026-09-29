@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PendingWriteEntity::class,
         PlayEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
@@ -28,6 +28,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AutoMigration(from = 3, to = 4),
         AutoMigration(from = 4, to = 5, spec = ZeneloDatabase.ReadPeaks::class),
         AutoMigration(from = 5, to = 6, spec = ZeneloDatabase.RecountMp3::class),
+        AutoMigration(from = 6, to = 7, spec = ZeneloDatabase.RetryLyrics::class),
     ],
 )
 abstract class ZeneloDatabase : RoomDatabase() {
@@ -57,6 +58,16 @@ abstract class ZeneloDatabase : RoomDatabase() {
     class RecountMp3 : AutoMigrationSpec {
         override fun onPostMigrate(db: SupportSQLiteDatabase) {
             db.execSQL("UPDATE tracks SET modified = 0 WHERE LOWER(path) LIKE '%.mp3' AND path NOT IN (SELECT path FROM pending_writes)")
+        }
+    }
+
+    /** 7: LRCLIB is searched harder (`LyricsSearch`): forget the "not found"s so they're looked up again. */
+    class RetryLyrics : AutoMigrationSpec {
+        override fun onPostMigrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "DELETE FROM lyrics WHERE source = 'lrclib' AND instrumental = 0 " +
+                    "AND (synced IS NULL OR synced = '') AND (plain IS NULL OR plain = '')",
+            )
         }
     }
 

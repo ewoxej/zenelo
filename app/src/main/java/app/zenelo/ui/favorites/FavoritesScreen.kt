@@ -47,6 +47,9 @@ import app.zenelo.ui.components.SearchField
 import app.zenelo.ui.components.TrackThumb
 import app.zenelo.ui.components.appContainer
 import app.zenelo.ui.theme.ZeneloColors
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.outlined.FileOpen
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -57,6 +60,7 @@ fun FavoritesScreen(
     onOpenFolder: (String) -> Unit,
     onOpenAlbum: (String) -> Unit,
     onOpenArtist: (String) -> Unit,
+    onMessage: (String) -> Unit,
     onBack: (() -> Unit)? = null,
 ) {
     val container = appContainer()
@@ -71,6 +75,24 @@ fun FavoritesScreen(
         if (query.isBlank()) favorites else favorites.filter { it.title.contains(query, true) || it.subtitle?.contains(query, true) == true }
     }
     val tracks = remember(visible) { visible.filter { it.kind == FavoriteKind.TRACK }.map { AudioFile.of(File(it.path)) } }
+    // An M3U / M3U8 file's tracks become favorites (any file type: pickers rarely know M3U).
+    val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val r = runCatching { container.playlistFiles.importToFavorites(uri) }.getOrNull()
+            onMessage(
+                when {
+                    r == null -> "Couldn't read the file"
+                    r.added == 0 && r.already == 0 -> "No tracks of \"${r.name}\" found in the library"
+                    else -> listOfNotNull(
+                        "${r.added} added to favorites",
+                        r.already.takeIf { it > 0 }?.let { "$it already there" },
+                        r.missing.takeIf { it > 0 }?.let { "$it not found" },
+                    ).joinToString(" · ")
+                },
+            )
+        }
+    }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -84,6 +106,9 @@ fun FavoritesScreen(
                     IconButton(onClick = { searching = false; query = "" }) { Icon(Icons.Rounded.Close, "Close search") }
                 } else {
                     ScreenTitle("Favorites", Modifier.weight(1f), count = favorites.size)
+                    IconButton(onClick = { importer.launch(arrayOf("*/*")) }) {
+                        Icon(Icons.Outlined.FileOpen, "Import M3U playlist into favorites", tint = ZeneloColors.TextSecondary)
+                    }
                     IconButton(onClick = { searching = true }) { Icon(Icons.Rounded.Search, "Search", Modifier.size(22.dp)) }
                 }
             }

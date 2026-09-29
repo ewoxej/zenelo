@@ -129,6 +129,7 @@ class FetchWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
             if (isStopped || !fetcher.onlineAllowed()) return Result.success()
             val cover = fetcher.coverFor(group.first(), allowNetwork = true) ?: continue
             if (fetcher.folderImage(group.first().dir) == cover) continue // folder art is shown, not embedded
+            if (!fetcher.coverIsConfident(group.first())) continue // guessed from the path: shown, not embedded
             fetcher.embed(group, cover, replace = false)
         }
 

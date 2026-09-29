@@ -96,6 +96,8 @@ import androidx.compose.ui.layout.onSizeChanged
 import app.zenelo.ui.playlists.PlaylistsScreen
 import app.zenelo.ui.playlists.PlaylistScreen
 import app.zenelo.ui.playlists.PlaylistPickerDialog
+import app.zenelo.ui.settings.SettingsPage
+import app.zenelo.ui.settings.SettingsPageScreen
 import app.zenelo.ui.settings.SettingsScreen
 import app.zenelo.ui.settings.SwipeSettingsScreen
 import app.zenelo.ui.theme.ZeneloColors
@@ -134,6 +136,7 @@ private object Routes {
     /** The bottom bar tabs, as pages of a horizontal pager. */
     const val MAIN = "main"
     const val SWIPE_SETTINGS = "settings/swipes"
+    const val SETTINGS_PAGE = "settings/page/{page}"
     const val CUSTOMIZE_HOME = "settings/home"
     const val CUSTOMIZE_TABS = "settings/tabs"
     const val SEARCH = "search"
@@ -147,6 +150,7 @@ private object Routes {
     fun album(key: String) = "album/${Uri.encode(key)}"
     fun artist(key: String) = "artist/${Uri.encode(key)}"
     fun playlist(id: Long) = "playlist/$id"
+    fun settingsPage(page: SettingsPage) = "settings/page/${page.name}"
 }
 
 @Composable
@@ -301,16 +305,11 @@ private fun MainContent(settings: ZeneloSettings) {
                 onOpenFolder = { openFolderInBrowser(File(it)) },
                 onOpenAlbum = libraryNav.onOpenAlbum,
                 onOpenArtist = libraryNav.onOpenArtist,
-                onBack = onBack,
-            )
-            Section.PLAYLISTS -> PlaylistsScreen(openPlaylist, libraryViewModel::showMessage, onBack)
-            Section.SETTINGS -> SettingsScreen(
-                onOpenSwipeSettings = { nav.navigate(Routes.SWIPE_SETTINGS) },
-                onCustomizeHome = { nav.navigate(Routes.CUSTOMIZE_HOME) },
-                onCustomizeTabs = { nav.navigate(Routes.CUSTOMIZE_TABS) },
                 onMessage = libraryViewModel::showMessage,
                 onBack = onBack,
             )
+            Section.PLAYLISTS -> PlaylistsScreen(openPlaylist, libraryViewModel::showMessage, onBack)
+            Section.SETTINGS -> SettingsScreen(onOpenPage = { nav.navigate(Routes.settingsPage(it)) }, onBack = onBack)
             Section.ALBUMS -> AlbumsScreen(libraryViewModel, libraryNav, onBack)
             Section.ARTISTS -> ArtistsScreen(libraryViewModel, libraryNav, onBack)
             Section.TRACKS -> TracksScreen(libraryViewModel, onBack)
@@ -365,6 +364,19 @@ private fun MainContent(settings: ZeneloSettings) {
                     if (id != null) PlaylistScreen(libraryViewModel, id) { nav.popBackStack() }
                 }
                 composable(Routes.SEARCH) { SearchScreen(libraryViewModel, libraryNav) { nav.popBackStack() } }
+                composable(Routes.SETTINGS_PAGE) { entry ->
+                    val page = entry.arguments?.getString("page")?.let { name -> SettingsPage.entries.firstOrNull { it.name == name } }
+                    if (page != null) {
+                        SettingsPageScreen(
+                            page,
+                            onBack = { nav.popBackStack() },
+                            onOpenSwipeSettings = { nav.navigate(Routes.SWIPE_SETTINGS) },
+                            onCustomizeHome = { nav.navigate(Routes.CUSTOMIZE_HOME) },
+                            onCustomizeTabs = { nav.navigate(Routes.CUSTOMIZE_TABS) },
+                            onMessage = libraryViewModel::showMessage,
+                        )
+                    }
+                }
                 composable(Routes.SWIPE_SETTINGS) { SwipeSettingsScreen(onBack = { nav.popBackStack() }) }
                 composable(Routes.CUSTOMIZE_HOME) { CustomizeHomeScreen(onBack = { nav.popBackStack() }) }
                 composable(Routes.CUSTOMIZE_TABS) { CustomizeTabsScreen(onBack = { nav.popBackStack() }) }

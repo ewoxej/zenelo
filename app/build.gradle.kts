@@ -5,9 +5,10 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
-// Release version from CI (`-PversionName=1.2.3`); versionCode follows it (1.2.3 → 10203) so it only grows.
-val releaseVersion = (findProperty("versionName") as String?)?.removePrefix("v")
-val releaseVersionCode = releaseVersion?.split('.')?.map { it.toInt() }?.let { (major, minor, patch) ->
+// The version lives in /VERSION (read by the Release workflow too); `-PversionName=1.2.3` overrides it.
+// versionCode follows it (1.2.3 → 10203) so it only grows.
+val releaseVersion = ((findProperty("versionName") as String?) ?: rootProject.file("VERSION").readText()).trim().removePrefix("v")
+val releaseVersionCode = releaseVersion.split('.').map { it.toInt() }.let { (major, minor, patch) ->
     major * 10000 + minor * 100 + patch
 }
 
@@ -23,8 +24,8 @@ android {
         // FiiO JM21 ships Android 13.
         minSdk = 33
         targetSdk = 35
-        versionCode = releaseVersionCode ?: 1
-        versionName = releaseVersion ?: "0.1.0"
+        versionCode = releaseVersionCode
+        versionName = releaseVersion
     }
 
     signingConfigs {

@@ -1,5 +1,12 @@
 package app.zenelo.ui.settings
 
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.material.icons.outlined.GraphicEq
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.ui.text.style.TextAlign
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.outlined.Restore
@@ -106,191 +113,280 @@ private fun rememberSettings(): ZeneloSettings {
     return settings
 }
 
+/** The pages Settings opens (the main screen lists them). */
+enum class SettingsPage(val title: String, val summary: String, val icon: ImageVector) {
+    PLAYBACK("Playback", "Shuffle · normalization · crossfade", Icons.Outlined.GraphicEq),
+    INTERFACE("Interface", "Bottom bar · Home · swipes · lists", Icons.Outlined.Tune),
+    OTHER("Other", "Covers & lyrics · library · backup", Icons.Outlined.Settings),
+    ABOUT("About", "Version · author", Icons.Outlined.Info),
+}
+
 @Composable
-fun SettingsScreen(
+fun SettingsScreen(onOpenPage: (SettingsPage) -> Unit, onBack: (() -> Unit)? = null) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (onBack != null) BackButton(onBack)
+            ScreenTitle("Settings", Modifier.padding(start = if (onBack != null) 0.dp else 20.dp, top = 12.dp, bottom = 12.dp))
+        }
+        SettingsPage.entries.forEach { page ->
+            ListRow(
+                title = page.title,
+                subtitle = page.summary,
+                onClick = { onOpenPage(page) },
+                leading = { IconTile(page.icon, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+                trailing = { Icon(Icons.Rounded.ChevronRight, null, tint = ZeneloColors.TextMuted, modifier = Modifier.padding(12.dp).size(20.dp)) },
+            )
+        }
+    }
+}
+
+/** One settings page, with a back arrow. */
+@Composable
+fun SettingsPageScreen(
+    page: SettingsPage,
+    onBack: () -> Unit,
     onOpenSwipeSettings: () -> Unit,
     onCustomizeHome: () -> Unit,
     onCustomizeTabs: () -> Unit,
     onMessage: (String) -> Unit,
-    onBack: (() -> Unit)? = null,
 ) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        SubScreenHeader(page.title, onBack)
+        when (page) {
+            SettingsPage.PLAYBACK -> PlaybackSettings()
+            SettingsPage.INTERFACE -> InterfaceSettings(onOpenSwipeSettings, onCustomizeHome, onCustomizeTabs)
+            SettingsPage.OTHER -> OtherSettings(onMessage)
+            SettingsPage.ABOUT -> AboutPage()
+        }
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun SubScreenHeader(title: String, onBack: () -> Unit) {
+    Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", Modifier.size(20.dp)) }
+        Text(title, style = MaterialTheme.typography.titleSmall.copy(fontSize = MaterialTheme.typography.titleMedium.fontSize))
+    }
+}
+
+@Composable
+private fun PlaybackSettings() {
     val repo = appContainer().settings
     val settings = rememberSettings()
     val scope = rememberCoroutineScope()
-
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (onBack != null) BackButton(onBack)
-            ScreenTitle("Settings", Modifier.padding(start = if (onBack != null) 0.dp else 20.dp, top = 12.dp, bottom = 4.dp))
+    SectionHeader("Shuffle")
+    ShuffleMode.entries.forEach { mode ->
+        RadioRow(mode.label, mode.description, selected = settings.shuffleMode == mode) {
+            scope.launch { repo.setShuffleMode(mode) }
         }
+    }
 
-        SectionHeader("Navigation")
-        ListRow(
-            title = "Bottom bar",
-            subtitle = settings.tabs.joinToString(" · ") { it.label }.ifEmpty { "Hidden · Home only" },
-            onClick = onCustomizeTabs,
-            leading = { IconTile(Icons.Outlined.Tab, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
-            trailing = { Icon(Icons.Rounded.ChevronRight, null, tint = ZeneloColors.TextMuted, modifier = Modifier.padding(12.dp).size(20.dp)) },
-        )
-        ListRow(
-            title = "Home screen",
-            subtitle = settings.home.let { h ->
-                val icons = h.count { it.mode == HomeMode.ICON }
-                val cards = h.count { it.mode == HomeMode.GRID || it.mode == HomeMode.LIST }
-                "$icons shortcut${if (icons == 1) "" else "s"} · $cards card${if (cards == 1) "" else "s"}"
-            },
-            onClick = onCustomizeHome,
-            leading = { IconTile(Icons.Outlined.Home, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
-            trailing = { Icon(Icons.Rounded.ChevronRight, null, tint = ZeneloColors.TextMuted, modifier = Modifier.padding(12.dp).size(20.dp)) },
-        )
-
-        SectionHeader("Lists")
-        ListRow(
-            title = "List swipe actions",
-            subtitle = "${settings.swipes.getValue(SwipeSlot.RIGHT_SHORT).label} · ${settings.swipes.getValue(SwipeSlot.LEFT_SHORT).label}",
-            onClick = onOpenSwipeSettings,
-            leading = { IconTile(Icons.Outlined.Swipe, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
-            trailing = { Icon(Icons.Rounded.ChevronRight, null, tint = ZeneloColors.TextMuted, modifier = Modifier.padding(12.dp).size(20.dp)) },
-        )
-
-        SwitchRow(
-            title = "Show played tracks in queue",
-            subtitle = "Above the current track, dimmed",
-            checked = settings.queueHistory,
-        ) { scope.launch { repo.setQueueHistory(it) } }
-        ChoiceRow(
-            title = "Swipe down to close player",
-            current = settings.pullDownArea,
-            choices = PullDownArea.entries,
-            label = { it.label },
-        ) { scope.launch { repo.setPullDownArea(it) } }
-        ChoiceRow(
-            title = "Selection mark",
-            current = settings.selectionMarker,
-            choices = SelectionMarkerSide.entries,
-            label = { it.label },
-        ) { scope.launch { repo.setSelectionMarker(it) } }
-
-        SectionHeader("Shuffle")
-        ShuffleMode.entries.forEach { mode ->
-            RadioRow(mode.label, mode.description, selected = settings.shuffleMode == mode) {
-                scope.launch { repo.setShuffleMode(mode) }
-            }
-        }
-
-        SectionHeader("Volume normalization")
-        Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            NormalizationMode.entries.forEach { mode ->
-                FilterChip(
-                    selected = settings.normalization == mode,
-                    onClick = { scope.launch { repo.setNormalization(mode) } },
-                    label = { Text(mode.name.lowercase().replaceFirstChar { it.uppercase() }) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = ZeneloColors.MustardTint,
-                        selectedLabelColor = ZeneloColors.Mustard,
-                    ),
-                )
-            }
-        }
-
-        if (settings.normalization != NormalizationMode.OFF) {
-            // Local value while dragging (0.5 dB steps); persisted once on release.
-            var preamp by remember(settings.preampDb) { mutableFloatStateOf(settings.preampDb) }
-            val shown = (preamp * 2).roundToInt() / 2f
-            Text(
-                "Pre-amp · ${if (shown > 0) "+" else ""}${"%.1f".format(shown)} dB",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp),
-            )
-            Text(
-                "Louder or quieter than the −18 LUFS target. Never pushed past a track's peak.",
-                style = MaterialTheme.typography.bodySmall,
-                color = ZeneloColors.TextMuted,
-                modifier = Modifier.padding(horizontal = 20.dp),
-            )
-            ZeneloSlider(
-                value = preamp,
-                onValueChange = { preamp = it },
-                onValueChangeFinished = { scope.launch { repo.setPreampDb(shown) } },
-                valueRange = -6f..6f,
-                modifier = Modifier.padding(horizontal = 20.dp),
+    SectionHeader("Volume normalization")
+    Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        NormalizationMode.entries.forEach { mode ->
+            FilterChip(
+                selected = settings.normalization == mode,
+                onClick = { scope.launch { repo.setNormalization(mode) } },
+                label = { Text(mode.name.lowercase().replaceFirstChar { it.uppercase() }) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = ZeneloColors.MustardTint,
+                    selectedLabelColor = ZeneloColors.Mustard,
+                ),
             )
         }
+    }
 
-        // Local value while dragging; persisted once on release.
-        var crossfade by remember(settings.crossfadeMs) { mutableFloatStateOf(settings.crossfadeMs / 1000f) }
-        SectionHeader("Crossfade · ${if (crossfade.roundToInt() == 0) "off (gapless)" else "${crossfade.roundToInt()} s"}")
-        ZeneloSlider(
-            value = crossfade,
-            onValueChange = { crossfade = it },
-            onValueChangeFinished = { scope.launch { repo.setCrossfadeMs(crossfade.roundToInt() * 1000) } },
-            valueRange = 0f..12f,
+    if (settings.normalization != NormalizationMode.OFF) {
+        // Local value while dragging (0.5 dB steps); persisted once on release.
+        var preamp by remember(settings.preampDb) { mutableFloatStateOf(settings.preampDb) }
+        val shown = (preamp * 2).roundToInt() / 2f
+        Text(
+            "Pre-amp · ${if (shown > 0) "+" else ""}${"%.1f".format(shown)} dB",
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp),
+        )
+        Text(
+            "Louder or quieter than the −18 LUFS target. Never pushed past a track's peak.",
+            style = MaterialTheme.typography.bodySmall,
+            color = ZeneloColors.TextMuted,
             modifier = Modifier.padding(horizontal = 20.dp),
         )
+        ZeneloSlider(
+            value = preamp,
+            onValueChange = { preamp = it },
+            onValueChangeFinished = { scope.launch { repo.setPreampDb(shown) } },
+            valueRange = -6f..6f,
+            modifier = Modifier.padding(horizontal = 20.dp),
+        )
+    }
 
-        SectionHeader("Covers & lyrics")
-        SwitchRow(
-            title = "Download covers & lyrics",
-            subtitle = "Wi-Fi only · Deezer, iTunes, MusicBrainz, LRCLIB",
-            checked = settings.onlineFetch,
-        ) { scope.launch { repo.setOnlineFetch(it) } }
-        SwitchRow(
-            title = "Write covers into files",
-            subtitle = "Only files without a cover, or when you pick one",
-            checked = settings.embedCovers,
-        ) { scope.launch { repo.setEmbedCovers(it) } }
-        var editingPatterns by remember { mutableStateOf(false) }
-        ListRow(
-            title = "File name patterns",
-            subtitle = "When tags are missing or wrong · ${settings.filenamePatterns.size} patterns",
-            onClick = { editingPatterns = true },
-            leading = { IconTile(Icons.Outlined.TextFields, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
-        )
-        if (editingPatterns) {
-            PatternsDialog(settings.filenamePatterns, onDismiss = { editingPatterns = false }) { patterns ->
-                scope.launch { repo.setFilenamePatterns(patterns) }
-                editingPatterns = false
-            }
-        }
-        var editingKey by remember { mutableStateOf(false) }
-        ListRow(
-            title = "Last.fm API key",
-            subtitle = settings.lastFmApiKey?.let { "Set · ••••${it.takeLast(4)}" } ?: "Optional · not set, key-less sources only",
-            onClick = { editingKey = true },
-            leading = { IconTile(Icons.Outlined.Key, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
-        )
-        if (editingKey) {
-            LastFmKeyDialog(settings.lastFmApiKey, onDismiss = { editingKey = false }) { key ->
-                scope.launch { repo.setLastFmApiKey(key) }
-                editingKey = false
-            }
-        }
+    // Local value while dragging; persisted once on release.
+    var crossfade by remember(settings.crossfadeMs) { mutableFloatStateOf(settings.crossfadeMs / 1000f) }
+    SectionHeader("Crossfade · ${if (crossfade.roundToInt() == 0) "off (gapless)" else "${crossfade.roundToInt()} s"}")
+    ZeneloSlider(
+        value = crossfade,
+        onValueChange = { crossfade = it },
+        onValueChangeFinished = { scope.launch { repo.setCrossfadeMs(crossfade.roundToInt() * 1000) } },
+        valueRange = 0f..12f,
+        modifier = Modifier.padding(horizontal = 20.dp),
+    )
+}
 
-        SectionHeader("Library")
-        LibraryStatus()
-        var editingArtists by remember { mutableStateOf(false) }
-        ListRow(
-            title = "Multiple artists",
-            subtitle = settings.artistSeparators.joinToString("  ").ifEmpty { "Off · tags aren't split" }.let {
-                if (settings.artistSeparators.isEmpty()) it else "Split on  $it"
-            },
-            onClick = { editingArtists = true },
-            leading = { IconTile(Icons.Outlined.Person, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
-        )
-        if (editingArtists) {
-            ArtistSplitDialog(settings.artistSeparators, settings.artistExceptions, onDismiss = { editingArtists = false }) { seps, keep ->
-                scope.launch { repo.setArtistSplitting(seps, keep) }
-                editingArtists = false
-            }
-        }
-        ListRow(
-            title = "Home folder",
-            subtitle = settings.homeFolder ?: "Long-press the home button in Folders",
-            leading = { IconTile(Icons.Outlined.Home, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
-        )
+@Composable
+private fun InterfaceSettings(onOpenSwipeSettings: () -> Unit, onCustomizeHome: () -> Unit, onCustomizeTabs: () -> Unit) {
+    val repo = appContainer().settings
+    val settings = rememberSettings()
+    val scope = rememberCoroutineScope()
+    SectionHeader("Navigation")
+    ListRow(
+        title = "Bottom bar",
+        subtitle = settings.tabs.joinToString(" · ") { it.label }.ifEmpty { "Hidden · Home only" },
+        onClick = onCustomizeTabs,
+        leading = { IconTile(Icons.Outlined.Tab, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+        trailing = { Icon(Icons.Rounded.ChevronRight, null, tint = ZeneloColors.TextMuted, modifier = Modifier.padding(12.dp).size(20.dp)) },
+    )
+    ListRow(
+        title = "Home screen",
+        subtitle = settings.home.let { h ->
+            val icons = h.count { it.mode == HomeMode.ICON }
+            val cards = h.count { it.mode == HomeMode.GRID || it.mode == HomeMode.LIST }
+            "$icons shortcut${if (icons == 1) "" else "s"} · $cards card${if (cards == 1) "" else "s"}"
+        },
+        onClick = onCustomizeHome,
+        leading = { IconTile(Icons.Outlined.Home, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+        trailing = { Icon(Icons.Rounded.ChevronRight, null, tint = ZeneloColors.TextMuted, modifier = Modifier.padding(12.dp).size(20.dp)) },
+    )
 
-        SectionHeader("Backup")
-        BackupRows(onMessage)
+    SectionHeader("Lists")
+    ListRow(
+        title = "List swipe actions",
+        subtitle = "${settings.swipes.getValue(SwipeSlot.RIGHT_SHORT).label} · ${settings.swipes.getValue(SwipeSlot.LEFT_SHORT).label}",
+        onClick = onOpenSwipeSettings,
+        leading = { IconTile(Icons.Outlined.Swipe, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+        trailing = { Icon(Icons.Rounded.ChevronRight, null, tint = ZeneloColors.TextMuted, modifier = Modifier.padding(12.dp).size(20.dp)) },
+    )
+
+    SwitchRow(
+        title = "Show played tracks in queue",
+        subtitle = "Above the current track, dimmed",
+        checked = settings.queueHistory,
+    ) { scope.launch { repo.setQueueHistory(it) } }
+    ChoiceRow(
+        title = "Swipe down to close player",
+        current = settings.pullDownArea,
+        choices = PullDownArea.entries,
+        label = { it.label },
+    ) { scope.launch { repo.setPullDownArea(it) } }
+    ChoiceRow(
+        title = "Selection mark",
+        current = settings.selectionMarker,
+        choices = SelectionMarkerSide.entries,
+        label = { it.label },
+    ) { scope.launch { repo.setSelectionMarker(it) } }
+}
+
+@Composable
+private fun OtherSettings(onMessage: (String) -> Unit) {
+    val repo = appContainer().settings
+    val settings = rememberSettings()
+    val scope = rememberCoroutineScope()
+    SectionHeader("Covers & lyrics")
+    SwitchRow(
+        title = "Download covers & lyrics",
+        subtitle = "Wi-Fi only · Deezer, iTunes, MusicBrainz, LRCLIB",
+        checked = settings.onlineFetch,
+    ) { scope.launch { repo.setOnlineFetch(it) } }
+    SwitchRow(
+        title = "Write covers into files",
+        subtitle = "Only files without a cover, or when you pick one",
+        checked = settings.embedCovers,
+    ) { scope.launch { repo.setEmbedCovers(it) } }
+    var editingPatterns by remember { mutableStateOf(false) }
+    ListRow(
+        title = "File name patterns",
+        subtitle = "When tags are missing or wrong · ${settings.filenamePatterns.size} patterns",
+        onClick = { editingPatterns = true },
+        leading = { IconTile(Icons.Outlined.TextFields, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+    )
+    if (editingPatterns) {
+        PatternsDialog(settings.filenamePatterns, onDismiss = { editingPatterns = false }) { patterns ->
+            scope.launch { repo.setFilenamePatterns(patterns) }
+            editingPatterns = false
+        }
+    }
+    var editingKey by remember { mutableStateOf(false) }
+    ListRow(
+        title = "Last.fm API key",
+        subtitle = settings.lastFmApiKey?.let { "Set · ••••${it.takeLast(4)}" } ?: "Optional · not set, key-less sources only",
+        onClick = { editingKey = true },
+        leading = { IconTile(Icons.Outlined.Key, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+    )
+    if (editingKey) {
+        LastFmKeyDialog(settings.lastFmApiKey, onDismiss = { editingKey = false }) { key ->
+            scope.launch { repo.setLastFmApiKey(key) }
+            editingKey = false
+        }
+    }
+
+    SectionHeader("Library")
+    LibraryStatus()
+    var editingArtists by remember { mutableStateOf(false) }
+    ListRow(
+        title = "Multiple artists",
+        subtitle = settings.artistSeparators.joinToString("  ").ifEmpty { "Off · tags aren't split" }.let {
+            if (settings.artistSeparators.isEmpty()) it else "Split on  $it"
+        },
+        onClick = { editingArtists = true },
+        leading = { IconTile(Icons.Outlined.Person, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+    )
+    if (editingArtists) {
+        ArtistSplitDialog(settings.artistSeparators, settings.artistExceptions, onDismiss = { editingArtists = false }) { seps, keep ->
+            scope.launch { repo.setArtistSplitting(seps, keep) }
+            editingArtists = false
+        }
+    }
+    ListRow(
+        title = "Home folder",
+        subtitle = settings.homeFolder ?: "Long-press the home button in Folders",
+        leading = { IconTile(Icons.Outlined.Home, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+    )
+
+    SectionHeader("Backup")
+    BackupRows(onMessage)
+}
+
+/** Name, version, author (the GitHub link opens the browser) and the font's licence. */
+@Composable
+private fun AboutPage() {
+    val context = LocalContext.current
+    val version = remember {
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty()
+    }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("Zenelo", style = MaterialTheme.typography.displaySmall, color = ZeneloColors.Mustard)
+        Text("Version $version", style = MaterialTheme.typography.bodySmall, color = ZeneloColors.TextMuted, modifier = Modifier.padding(top = 4.dp))
+        Text("Audio player for Android", style = MaterialTheme.typography.bodyMedium, color = ZeneloColors.TextSecondary, modifier = Modifier.padding(top = 16.dp))
+        Text("by Illia Chaparyn", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 24.dp))
+        Text(
+            "github.com/ewoxej",
+            style = MaterialTheme.typography.bodyMedium,
+            color = ZeneloColors.Celadon,
+            modifier = Modifier
+                .padding(top = 4.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .clickable {
+                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/ewoxej"))) }
+                }
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+        )
+        Text(
+            "Fonts: IBM Plex Sans & IBM Plex Mono, SIL Open Font License 1.1",
+            style = MaterialTheme.typography.bodySmall,
+            color = ZeneloColors.TextMuted,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 32.dp),
+        )
     }
 }
 

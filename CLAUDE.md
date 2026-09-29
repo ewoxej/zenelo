@@ -39,8 +39,16 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   plus on-demand for the folder on screen).
 - Covers & lyrics (`MetadataFetcher`): online only on Wi-Fi. Covers: embedded → folder image →
   cached → Deezer/iTunes/MusicBrainz (+ Last.fm if the user set an API key). Downloaded covers are
-  embedded into files without art. Lyrics: sibling .lrc → tags → LRCLIB. Background `FetchWorker`
-  on unmetered network.
+  embedded into files without art. Online search is by tags (album artist + album, else the song);
+  names guessed from the path (file name patterns) only when the tags have no artist — then the
+  cover is shown but never embedded (its source ends in " (by path)"). `Text.matches` (unit-tested)
+  is equality or a word-boundary prefix, not "contains": folder names like "Music" / "Lyrics" once
+  matched "VedicDhvani Music" and got its cover written into files. Lyrics: sibling .lrc → tags → LRCLIB. Background `FetchWorker`
+  on unmetered network. LRCLIB queries go from the tags as they are to cleaned-up variants
+  (`LyricsSearch`, unit-tested: "Song - Live" / "(feat. …)" / "[site.net]" dropped, first artist of
+  a multi-artist tag): exact get → searches by title × artist → free-text search. A record counts only
+  when title and artist match after clean-up; same length (±3 s) → synced, else the closest version's
+  text as plain (its timing wouldn't fit).
 - Never `replaceMediaItem` the playing item (ExoPlayer re-buffers): covers found mid-track go to
   `AppContainer.coverOverride` (UI only).
 - All tag / cover writes go through `PendingWrites`. The playing file is written when its track
@@ -96,6 +104,9 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   playlist's ⋮, both via the system picker (SAF). `documentPath` maps local-storage picker URIs to
   real paths, so relative entries resolve and exports write paths relative to the playlist file
   (same volume only). Entries that don't resolve are matched in the index by their path's tail.
+- Settings: the main screen lists pages (`SettingsPage`: Playback, Interface, Other, About), each
+  a `settings/page/{page}` route. Favorites can import an M3U too (`PlaylistFiles.importToFavorites`,
+  tracks already there are kept).
 - Backup (`Backup`, format `BackupFormat` = one JSON, unit-tested with org.json as a test dep):
   DataStore values (raw, typed), favorites, playlists, plays. Restore replaces all of them.
 - Fonts: IBM Plex (OFL) TTFs in `res/font`, built from the Home design bundle's woff2 subsets
@@ -122,9 +133,11 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ./gradl
 APK: `app/build/outputs/apk/debug/app-debug.apk`. Judge performance on `assembleRelease` (R8, signed
 with the debug key), not on debug — Compose debug builds are several times slower.
 
-Releases: GitHub Actions `Release` workflow (manual, input `version` → tag `v<version>`, APK attached to
-the GitHub release). It signs with the key from secrets (`KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`,
-`KEY_ALIAS`, `KEY_PASSWORD` → env `ZENELO_KEYSTORE*`); `-PversionName=1.2.3` sets versionCode 10203.
+Version: the `VERSION` file at the repo root (e.g. `1.2.0`) is the only place it's set: Gradle reads it
+(versionName, versionCode 10200), and so does the `Release` workflow. `-PversionName=` still overrides.
+Releases: GitHub Actions `Release` workflow (manual; tag `v<VERSION>`, APK attached to the GitHub
+release; fails if that tag exists, i.e. VERSION wasn't bumped). It signs with the key from secrets
+(`KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD` → env `ZENELO_KEYSTORE*`).
 Local builds without those env vars stay signed with the debug key.
 
 Emulator: AVD `zenelo_jm21` (720×1280 @ 320dpi ≈ the JM21's 360×640dp). Grant file access with
