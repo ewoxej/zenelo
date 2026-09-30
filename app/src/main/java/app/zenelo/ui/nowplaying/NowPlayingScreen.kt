@@ -61,6 +61,9 @@ import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Switch
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.ui.draw.scale
 import app.zenelo.ui.components.SonicPathItems
 import app.zenelo.ui.settings.zeneloSwitchColors
@@ -175,27 +178,34 @@ fun NowPlayingScreen(
     val areaFlow = remember { container.settings.settings.map { it.pullDownArea } }
     val area by areaFlow.collectAsStateWithLifecycle(initialValue = PullDownArea.TOP_THIRD)
     val density = LocalDensity.current
-    val threshold = with(density) { 90.dp.toPx() }
+    // As easy as pulling the mini player up.
+    val threshold = with(density) { 40.dp.toPx() }
     val topBarHeight = with(density) { 64.dp.toPx() }
     val pullGesture = Modifier.pointerInput(area) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
             val zone = maxOf(topBarHeight, size.height * area.fraction)
             if (down.position.y > zone) return@awaitEachGesture
+            // This page moves with the sheet: positions on the screen, not in the moving page, else the
+            // sheet lags behind the finger and the fling's speed reads as almost nothing.
+            fun screen(position: Offset) = Offset(position.x, position.y + sheet.drawnOffsetPx)
             val tracker = VelocityTracker()
-            tracker.addPosition(down.uptimeMillis, down.position)
+            tracker.addPosition(down.uptimeMillis, screen(down.position))
+            var lastY = 0f
             val start = awaitVerticalTouchSlopOrCancellation(down.id) { change, over ->
                 if (over > 0) {
                     change.consume()
                     sheet.dragStart()
                     sheet.dragBy(over)
+                    lastY = screen(change.position).y
                 }
             } ?: return@awaitEachGesture
             verticalDrag(start.id) { change ->
-                val dy = change.positionChange().y
+                val y = screen(change.position).y
                 change.consume()
-                tracker.addPosition(change.uptimeMillis, change.position)
-                sheet.dragBy(dy)
+                tracker.addPosition(change.uptimeMillis, screen(change.position))
+                sheet.dragBy(y - lastY)
+                lastY = y
             }
             sheet.dragEnd(tracker.calculateVelocity().y, threshold)
         }
@@ -456,15 +466,24 @@ private fun SyncedLyrics(lines: List<LyricLine>, player: PlayerController) {
     val current = remember(lines, position) { lines.indexOfLast { it.timeMs <= position + 150 } }
     val listState = rememberLazyListState()
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        // Top padding of a third of the page puts the scrolled-to line there.
-        val topPad = maxHeight / 3
+        // The current line is kept a third of the way down. Only a small gap above the first line:
+        // near the start the lines can't scroll that far, so the current one moves down to there.
+        val topPad = 16.dp
+        val anchor = with(LocalDensity.current) { (maxHeight / 3 - topPad).roundToPx() }
         LaunchedEffect(current) {
-            if (current >= 0) listState.animateScrollToItem(current)
+            if (current < 0) return@LaunchedEffect
+            val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == current }
+            if (item != null) {
+                listState.animateScrollBy((item.offset - anchor).toFloat())
+            } else {
+                listState.scrollToItem(current)
+                listState.scrollBy(-anchor.toFloat())
+            }
         }
         LazyColumn(
             Modifier.fillMaxSize(),
             state = listState,
-            contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = topPad, bottom = maxHeight - topPad),
+            contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = topPad, bottom = maxHeight * 2 / 3),
         ) {
             itemsIndexed(lines) { index, line ->
                 Text(

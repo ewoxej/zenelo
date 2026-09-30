@@ -49,8 +49,14 @@ class MStreamSync(
      * when unchanged), ratings → favorites, its playlists and recent plays. Returns the number of
      * server tracks, or null when not logged in.
      */
+    /** When the last round started (0 = not in this process): the app coming to the front syncs if it's old. */
+    @Volatile
+    var lastSyncAt = 0L
+        private set
+
     suspend fun sync(force: Boolean = false): Int? = mutex.withLock {
         val account = settings.settings.first().mstream ?: return null
+        lastSyncAt = System.currentTimeMillis()
         _state.value = State.Running(0)
         try {
             pushOutbox(account)

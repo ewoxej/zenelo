@@ -8,6 +8,7 @@ import app.zenelo.library.AudioFile
 import app.zenelo.library.LibraryMerge
 import app.zenelo.player.PlayQueue
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -70,6 +71,10 @@ class MStreamAutoDj(
     /** The track a pick failed on: not retried until the track or the options change. */
     private var failedOn: Pair<String, AutoDjSettings>? = null
 
+    /** The last pick failed on the network (not on the server's answer). */
+    @Volatile
+    private var unreachable = false
+
     fun start() {
         scope.launch {
             // Current track and how many are left (tag refreshes of the queue don't count).
@@ -82,8 +87,22 @@ class MStreamAutoDj(
                     mutex.withLock { onCurrent(current) }
                     // The last track is playing: time for more (the web app asks at the same point).
                     if (left > 1 || failedOn == current to dj) return@collectLatest
-                    val files = pick(account, dj, current)
-                    if (files == null) failedOn = current to dj else queue.add(files)
+                    // Server out of reach: retried quietly while this track plays, so the music
+                    // goes on once it's back. Other failures wait for another track or options.
+                    var quiet = false
+                    while (true) {
+                        val files = pick(account, dj, current, quiet)
+                        if (files != null) {
+                            queue.add(files)
+                            break
+                        }
+                        if (!unreachable) {
+                            failedOn = current to dj
+                            break
+                        }
+                        quiet = true
+                        delay(RETRY_MS)
+                    }
                 }
         }
     }
@@ -105,8 +124,14 @@ class MStreamAutoDj(
     }
 
     /** Asks the server for the next picks; null (and a message) when it has none. */
-    private suspend fun pick(account: MStreamAccount, dj: AutoDjSettings, current: String?): List<AudioFile>? {
+    private suspend fun pick(account: MStreamAccount, dj: AutoDjSettings, current: String?, quiet: Boolean = false): List<AudioFile>? {
         _busy.value = true
+        unreachable = false
+        fun fail(message: String): List<AudioFile>? {
+            Log.w(TAG, message)
+            if (!quiet) _messages.tryEmit(message)
+            return null
+        }
         try {
             val all = db.tracks().observeAll().first()
             val twins = LibraryMerge.twins(all)
@@ -157,16 +182,12 @@ class MStreamAutoDj(
             Log.i(TAG, "Auto DJ queued " + songs.joinToString { it.title ?: it.filepath })
             return queued.map { (_, path) -> AudioFile.forPath(path) }
         } catch (e: IOException) {
-            return fail("Auto DJ: ${e.message ?: "server unreachable"}")
+            if (e is MStreamException) return fail("Auto DJ: ${e.message}")
+            unreachable = true
+            return fail("Auto DJ: can't reach the server — trying again")
         } finally {
             _busy.value = false
         }
-    }
-
-    private fun fail(message: String): List<AudioFile>? {
-        Log.w(TAG, message)
-        _messages.tryEmit(message)
-        return null
     }
 
     private data class Request(val body: JSONObject, val refBpm: Double?, val keys: Set<String>?)
@@ -245,6 +266,7 @@ class MStreamAutoDj(
     private companion object {
         const val TAG = "Zenelo"
         const val MAX_TRIES = 5
+        const val RETRY_MS = 30_000L
         const val ARTIST_COOLDOWN = 15
         const val BPM_HISTORY = 8
         const val SONIC_HISTORY = 5

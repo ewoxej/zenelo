@@ -7,6 +7,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import app.zenelo.ui.ZeneloRoot
+import app.zenelo.work.LibraryWork
 import app.zenelo.ui.theme.ZeneloTheme
 
 class MainActivity : ComponentActivity() {
@@ -30,6 +31,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         container.player.connect()
+        LibraryWork.syncServerIfStale(this)
     }
 
     override fun onStop() {

@@ -38,6 +38,10 @@ object LibraryWork {
 
     private const val LOUDNESS_PERIODIC = "library-loudness-periodic"
     private const val SERVER_SYNC = "mstream-sync"
+    private const val SERVER_SYNC_PERIODIC = "mstream-sync-periodic"
+
+    /** A sync older than this is repeated when the app comes to the front. */
+    private val STALE_MS = TimeUnit.MINUTES.toMillis(15)
     private const val DOWNLOADS = "mstream-downloads"
 
     private val online = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
@@ -66,6 +70,21 @@ object LibraryWork {
             ExistingPeriodicWorkPolicy.KEEP,
             PeriodicWorkRequestBuilder<LoudnessWorker>(12, TimeUnit.HOURS).setConstraints(batteryOk).build(),
         )
+        // The server changes meanwhile (new files, ratings / playlists from its web app, other
+        // devices' plays), and what we couldn't send offline waits in the outbox: a round every
+        // few hours even while the app stays in the background. Not logged in, it returns at once.
+        wm.enqueueUniquePeriodicWork(
+            SERVER_SYNC_PERIODIC,
+            ExistingPeriodicWorkPolicy.KEEP,
+            PeriodicWorkRequestBuilder<ServerSyncWorker>(3, TimeUnit.HOURS).setConstraints(online).build(),
+        )
+    }
+
+    /** The app came to the front: sync again if the last round is older than [STALE_MS]. */
+    fun syncServerIfStale(context: Context) {
+        val sync = (context.applicationContext as ZeneloApp).container.mstreamSync
+        if (System.currentTimeMillis() - sync.lastSyncAt < STALE_MS) return
+        WorkManager.getInstance(context).enqueueUniqueWork(SERVER_SYNC, ExistingWorkPolicy.KEEP, serverSyncRequest(force = false))
     }
 
     /** The mStream server's library, now (after logging in, "Sync now"); [force] ignores its revision. */

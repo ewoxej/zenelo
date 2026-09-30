@@ -24,6 +24,12 @@ class PlayerSheet(private val scope: CoroutineScope) {
     /** How far the sheet travels, in px: from the mini player's place (above the tab bar) to the top. */
     var heightPx = 1f
 
+    /**
+     * The sheet's translation as last drawn (set by its graphicsLayer). Touches inside it arrive in
+     * its moving coordinates; adding this gives fixed ones, so a drag follows the finger 1:1.
+     */
+    var drawnOffsetPx = 0f
+
     /** A finger is on it (a drag in progress). */
     var held by mutableStateOf(false)
         private set

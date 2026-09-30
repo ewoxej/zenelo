@@ -412,7 +412,10 @@ private fun MainContent(settings: ZeneloSettings) {
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .graphicsLayer { translationY = sheet.fraction * collapsedTop }
+                        .graphicsLayer {
+                            translationY = sheet.fraction * collapsedTop
+                            sheet.drawnOffsetPx = translationY
+                        }
                         .drawBehind { drawRect(lerp(ZeneloColors.Background, ZeneloColors.Bar, sheet.fraction)) }
                         // Keeps taps from reaching the tabs underneath, like a Surface.
                         .pointerInput(Unit) {},

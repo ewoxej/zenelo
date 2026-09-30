@@ -61,7 +61,9 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   Scaffold's bottomBar only reserves their measured height). Dragging moves the sheet under the
   finger, crossfades mini player → Now Playing and slides the tab bar away. Now Playing is composed
   only while any of it shows; the mini player stays composed while a finger is down (removing it
-  would cancel the drag it started). Outside the Scaffold → provide LocalContentColor yourself.
+  would cancel the drag it started). Touches inside the sheet arrive in its moving coordinates: the pull-down adds
+  `PlayerSheet.drawnOffsetPx` (the translation as drawn) — without it the sheet lagged the finger
+  and flings read as zero speed, so collapsing needed a pull to mid-screen. Outside the Scaffold → provide LocalContentColor yourself.
 - Multi-select (browser: folders + files, queue): long-press selects; the check mark side is a
   setting (`SelectionMarkerSide`). Queue drag handles swallow their down event so holding one
   still doesn't long-press the row.
@@ -142,6 +144,9 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   not in the picker), server recent plays → `plays`. The other way: a favorites watcher in
   `AppContainer` → `onFavoritesChanged` (like = 10, unlike clears), counted plays → `onPlayed`;
   both sent at once, else on the next sync. Favorites ↔ ratings run under one mutex.
+  Sync rounds run on app start / login / "Sync now", every 3 h in the background (periodic
+  `ServerSyncWorker`, any network), and when the app comes to the front after 15 min
+  (`LibraryWork.syncServerIfStale` from `MainActivity.onStart`).
 - mStream stage 3: `MStreamFiles` — "Download" (SwipeAction.DOWNLOAD: menus, selection, folder ⋮,
   Now Playing) saves originals to the download folder (setting, default `/mstream` at the storage
   root) in the server's layout; they're indexed at once and are ordinary local files (download mark;
@@ -156,6 +161,7 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   cursor, artist cooldown, BPM windows / Camelot neighbours via `AutoDjRules` (unit-tested), similar
   artists, `similarTo` = last picks else the playing track); a track the user started resets the
   anchors; picks with a local twin are queued as the local copy. Logs "Auto DJ asks {body}".
+  Server out of reach: one message, then quiet retries every 30 s while the same track plays.
   `MStreamSonicPath` + `SonicPathScreen` (route `sonicpath`): ends set from track menus / Now Playing
   ("Sonic path from / to here", local tracks → server twin), `discovery/local/path`, play / queue / save.
 
@@ -172,7 +178,7 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
    (`db/random-songs`) and Sonic Path (`discovery/local/path`) as on the server. Stages:
    (1) connect, sync, icons, dedupe, source menu, streaming, covers/lyrics; (2) file explorer,
    ratings ↔ favorites, server playlists / recent; (3) transcoding, downloads, queue auto-download;
-   (4) Auto DJ, Sonic Path; (5) Quick Connect (iroh tunnel, `mstr1:` code — Rust via NDK). Stages 1–4 are done.
+   (4) Auto DJ, Sonic Path; (5) Quick Connect (iroh tunnel, `mstr1:` code — Rust via NDK). Stages 1–4 are done; Quick Connect is postponed.
 
 ## Build
 SDK: `/opt/homebrew/share/android-commandlinetools` (set in `local.properties`). JDK 17 from Homebrew:
