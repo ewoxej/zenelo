@@ -95,13 +95,13 @@ class PlayerController(
     }
 
     /**
-     * Plays [files] from [startIndex]. [shuffle]: true shuffles (random start), false plays in
+     * Plays [files] from [startIndex] (a tapped track); null plays the whole list: from the top,
+     * or shuffled from a random track when shuffle is on. [shuffle]: true shuffles, false plays in
      * order, null keeps the user's current shuffle mode.
      */
-    fun playFiles(files: List<AudioFile>, startIndex: Int = 0, shuffle: Boolean? = null) {
+    fun playFiles(files: List<AudioFile>, startIndex: Int? = null, shuffle: Boolean? = null) {
         if (files.isEmpty()) return
-        val start = if (shuffle == true) files.indices.random() else startIndex
-        queue.play(files, start, shuffle)
+        queue.play(files, startIndex, shuffle)
     }
 
     /** Returns the (first) track's position in the queue as shown (current track = 1). */

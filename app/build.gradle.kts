@@ -26,6 +26,13 @@ android {
         targetSdk = 35
         versionCode = releaseVersionCode
         versionName = releaseVersion
+        // `-PappIdSuffix=.debug`: a build (debug or release) that installs beside the real app, for
+        // trying things on a phone.
+        (findProperty("appIdSuffix") as String?)?.let { suffix ->
+            applicationIdSuffix = suffix
+            versionNameSuffix = "-test"
+            resValue("string", "app_name", "Zenelo test")
+        }
     }
 
     signingConfigs {

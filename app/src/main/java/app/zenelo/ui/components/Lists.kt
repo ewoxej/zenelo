@@ -55,8 +55,12 @@ fun TrackMenu(
             Icon(Icons.Rounded.MoreVert, "More", tint = ZeneloColors.TextMuted, modifier = Modifier.size(20.dp))
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            // Server tracks can be downloaded, not deleted; local files the other way round.
-            SwipeAction.entries.filter { it != SwipeAction.NONE && it != (if (local) SwipeAction.DOWNLOAD else SwipeAction.DELETE_FILE) }.forEach { action ->
+            // Server tracks can be downloaded (once), not deleted; local files the other way round.
+            val downloaded = rememberDownloaded(path)
+            SwipeAction.entries.filter {
+                it != SwipeAction.NONE && it != (if (local) SwipeAction.DOWNLOAD else SwipeAction.DELETE_FILE) &&
+                    !(it == SwipeAction.DOWNLOAD && downloaded)
+            }.forEach { action ->
                 DropdownMenuItem(
                     text = { Text(action.label) },
                     leadingIcon = { Icon(action.icon, null, tint = action.accent) },
@@ -102,7 +106,8 @@ fun TrackMenu(
 fun SonicPathItems(path: String, icons: Boolean = true, onDone: () -> Unit) {
     val sonicPath = appContainer().sonicPath
     val available by sonicPath.available.collectAsStateWithLifecycle()
-    if (!available) return
+    // Server tracks only: the path runs through the server's library.
+    if (!available || !app.zenelo.mstream.MStreamPaths.isRemote(path)) return
     DropdownMenuItem(
         text = { Text("Sonic path from here") },
         leadingIcon = if (icons) ({ Icon(Icons.Outlined.Route, null, tint = ZeneloColors.Celadon) }) else null,

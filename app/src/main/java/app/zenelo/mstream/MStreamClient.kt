@@ -102,6 +102,7 @@ class MStreamClient(base: OkHttpClient) {
             .build()
         client.newCall(request).execute().use { response ->
             if (response.code == 304) return@withContext null
+            if (response.code == 404) throw MStreamException("This mStream server has no library sync API — update it", 404)
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw error(response.code, text)
             val json = JSONObject(text)
@@ -293,6 +294,7 @@ class MStreamClient(base: OkHttpClient) {
     }
 
     private fun error(code: Int, body: String): MStreamException {
+        android.util.Log.w("Zenelo", "mStream answered $code: ${body.take(300)}")
         val message = runCatching { JSONObject(body).optString("error") }.getOrNull()?.takeIf { it.isNotBlank() }
         return MStreamException(
             when (code) {

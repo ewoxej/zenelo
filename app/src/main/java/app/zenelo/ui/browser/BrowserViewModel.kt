@@ -349,7 +349,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
             }
             SwipeAction.DELETE_FILE -> showMessage("Folders can't be deleted from here")
             SwipeAction.DOWNLOAD -> viewModelScope.launch {
-                _events.send(BrowserEvent.Message(container.mstreamDownloads.request(fs.listRecursive(folder).map { it.path }), action = action))
+                container.mstreamDownloads.request(fs.listRecursive(folder).map { it.path })?.let { _events.send(BrowserEvent.Message(it, action = action)) }
             }
         }
     }
@@ -396,7 +396,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                         _events.send(BrowserEvent.Message(action = action, text = "Removed from list", undo = { _state.update { it.copy(files = before) } }))
                     }
                 SwipeAction.DELETE_FILE -> _events.send(BrowserEvent.Confirm(file, deleteFile = true))
-                SwipeAction.DOWNLOAD -> _events.send(BrowserEvent.Message(container.mstreamDownloads.request(listOf(file.path)), action = action))
+                SwipeAction.DOWNLOAD -> container.mstreamDownloads.request(listOf(file.path))?.let { _events.send(BrowserEvent.Message(it, action = action)) }
             }
         }
     }
@@ -459,7 +459,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                     val all = expand(folders, files)
                     if (all.isEmpty()) _events.send(BrowserEvent.Message("No music selected")) else container.playlistPicker.pick(all.map { it.path })
                 }
-                SwipeAction.DOWNLOAD -> _events.send(BrowserEvent.Message(container.mstreamDownloads.request(expand(folders, files).map { it.path }), action = action))
+                SwipeAction.DOWNLOAD -> container.mstreamDownloads.request(expand(folders, files).map { it.path })?.let { _events.send(BrowserEvent.Message(it, action = action)) }
                 SwipeAction.NONE -> Unit
             }
         }
@@ -474,7 +474,10 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
     fun deleteFile(file: AudioFile) {
         viewModelScope.launch {
             val deleted = !MStreamPaths.isRemote(file.path) && File(file.path).delete()
-            if (deleted) _state.update { it.copy(files = it.files - file) }
+            if (deleted) {
+                _state.update { it.copy(files = it.files - file) }
+                container.mstreamFiles.forgetDeleted(listOf(file.path))
+            }
             _events.send(BrowserEvent.Message(if (deleted) "File deleted" else "Could not delete file"))
         }
     }

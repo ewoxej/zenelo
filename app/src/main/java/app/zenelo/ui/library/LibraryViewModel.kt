@@ -114,9 +114,10 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
     // --- Playing
 
     /** [shuffle]: shuffled from a random track; otherwise from [start] in the user's shuffle mode. */
-    fun play(files: List<AudioFile>, start: Int = 0, shuffle: Boolean = false) {
+    /** [start]: the tapped track; null = "Play" on the whole list (random track first under shuffle). */
+    fun play(files: List<AudioFile>, start: Int? = null, shuffle: Boolean = false) {
         if (files.isEmpty()) return
-        player.playFiles(files, startIndex = start.coerceIn(files.indices), shuffle = if (shuffle) true else null)
+        player.playFiles(files, startIndex = start?.coerceIn(files.indices), shuffle = if (shuffle) true else null)
     }
 
     fun stop() = player.stop()
@@ -178,7 +179,7 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
                     _events.send(LibraryEvent.Message("Removed from list", undo = { hidden.update { it - file.path } }, action = action))
                 }
                 SwipeAction.DELETE_FILE -> _events.send(LibraryEvent.ConfirmDelete(listOf(file)))
-                SwipeAction.DOWNLOAD -> _events.send(LibraryEvent.Message(container.mstreamDownloads.request(listOf(file.path)), action = action))
+                SwipeAction.DOWNLOAD -> container.mstreamDownloads.request(listOf(file.path))?.let { _events.send(LibraryEvent.Message(it, action = action)) }
             }
         }
     }
@@ -237,7 +238,7 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
                 _events.send(LibraryEvent.Message("$what added to queue", action = action))
             }
             SwipeAction.ADD_TO_PLAYLIST -> container.playlistPicker.pick(files.map(AudioFile::path))
-            SwipeAction.DOWNLOAD -> _events.send(LibraryEvent.Message(container.mstreamDownloads.request(files.map(AudioFile::path)), action = action))
+            SwipeAction.DOWNLOAD -> container.mstreamDownloads.request(files.map(AudioFile::path))?.let { _events.send(LibraryEvent.Message(it, action = action)) }
             else -> Unit
         }
     }
@@ -248,6 +249,7 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
             val deleted = withContext(Dispatchers.IO) { files.filter { !MStreamPaths.isRemote(it.path) && File(it.path).delete() } }
             // The index follows on the next scan; until then keep them out of the lists.
             hidden.update { it + deleted.map(AudioFile::path) }
+            container.mstreamFiles.forgetDeleted(deleted.map(AudioFile::path))
             withContext(Dispatchers.IO) { container.db.tracks().delete(deleted.map(AudioFile::path)) }
             val failed = files.size - deleted.size
             _events.send(

@@ -66,6 +66,7 @@ import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.ui.draw.scale
 import app.zenelo.ui.components.SonicPathItems
+import app.zenelo.ui.components.rememberDownloaded
 import app.zenelo.ui.settings.zeneloSwitchColors
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -368,12 +369,12 @@ private fun TopBar(
                         state.mediaId?.let { picker.pick(listOf(it)) }
                     },
                 )
-                if (remote) {
+                if (remote && !rememberDownloaded(state.mediaId)) {
                     DropdownMenuItem(
                         text = { Text("Download") },
                         onClick = {
                             menu = false
-                            state.mediaId?.let { path -> scope.launch { onMessage(downloads.request(listOf(path))) } }
+                            state.mediaId?.let { path -> scope.launch { downloads.request(listOf(path))?.let(onMessage) } }
                         },
                     )
                 }

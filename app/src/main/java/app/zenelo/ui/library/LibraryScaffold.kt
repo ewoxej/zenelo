@@ -67,6 +67,7 @@ import app.zenelo.mstream.MStreamPaths
 import app.zenelo.ui.components.CloudMark
 import app.zenelo.ui.components.appContainer
 import app.zenelo.ui.components.DownloadMark
+import app.zenelo.ui.components.rememberDownloaded
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -337,9 +338,9 @@ fun LibraryRow(
     markLeft: Boolean = true,
     subtitleMono: Boolean = false,
     /** Cloud mark: on the mStream server only. A track row's cover path is the track itself. */
-    cloud: Boolean = MStreamPaths.isRemote(coverPath),
-    /** Download mark: a local copy "Download" made of a server track. */
-    downloaded: Boolean = appContainer().mstreamFiles.isDownload(coverPath),
+    cloud: Boolean = MStreamPaths.isRemote(coverPath) && !rememberDownloaded(coverPath),
+    /** Download mark: a local copy "Download" made of a server track, or a server track that has one. */
+    downloaded: Boolean = appContainer().mstreamFiles.isDownload(coverPath) || rememberDownloaded(coverPath),
     trailing: @Composable () -> Unit = {},
 ) {
     Row(

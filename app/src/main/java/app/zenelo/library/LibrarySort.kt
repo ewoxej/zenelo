@@ -59,9 +59,15 @@ object LibrarySort {
     /** Headers that are single letters get the A–Z rail. */
     fun hasLetterHeaders(order: SortOrder) = order.sortBy in setOf(SortField.NAME, SortField.ARTIST, SortField.ALBUM)
 
+    /**
+     * The first letter without accents, as the collator compares ("É" and "Ё" sort with "E" / "Е":
+     * headers of their own would repeat a letter further down), else "#".
+     */
     fun letter(text: String?): String {
         val c = text?.trimStart()?.firstOrNull() ?: return "#"
-        return if (c.isLetter()) c.uppercase() else "#"
+        if (!c.isLetter()) return "#"
+        val base = java.text.Normalizer.normalize(c.toString(), java.text.Normalizer.Form.NFD).first()
+        return base.uppercase()
     }
 
     private val monthFormat = SimpleDateFormat("MMM yyyy", Locale.ENGLISH)

@@ -42,7 +42,7 @@ class LibrarySortTest {
     @Test
     fun headersFollowTheSort() {
         val t = track("/m/1", "échos", "123 Band", "Zoo")
-        assertEquals("É", LibrarySort.trackHeader(t, SortOrder(SortField.NAME)))
+        assertEquals("E", LibrarySort.trackHeader(t, SortOrder(SortField.NAME)))
         assertEquals("#", LibrarySort.trackHeader(t, SortOrder(SortField.ARTIST)))
         assertEquals("Z", LibrarySort.trackHeader(t, SortOrder(SortField.ALBUM)))
         assertNull(LibrarySort.trackHeader(t, SortOrder(SortField.DURATION)))
@@ -53,5 +53,15 @@ class LibrarySortTest {
         assertEquals(30_000L, Library.playThresholdMs(240_000))
         assertEquals(20_000L, Library.playThresholdMs(40_000))
         assertEquals(30_000L, Library.playThresholdMs(0))
+    }
+
+    @Test
+    fun letterHeadersIgnoreAccentsLikeTheSort() {
+        // The collator sorts "Élan" among the E's: its own "É" header would split them.
+        assertEquals("E", LibrarySort.letter("Élan"))
+        assertEquals("Е", LibrarySort.letter("ёлка"))
+        assertEquals("A", LibrarySort.letter(" ångström"))
+        assertEquals("#", LibrarySort.letter("!L!VE!"))
+        assertEquals("#", LibrarySort.letter(null))
     }
 }

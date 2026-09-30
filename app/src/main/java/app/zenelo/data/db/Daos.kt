@@ -394,6 +394,9 @@ interface DownloadDao {
     @Query("SELECT COUNT(*) FROM downloads WHERE attempts < :maxAttempts")
     fun observePending(maxAttempts: Int): Flow<Int>
 
+    @Query("SELECT COUNT(*) FROM downloads WHERE attempts < :maxAttempts")
+    suspend fun pendingCount(maxAttempts: Int): Int
+
     @Query("SELECT COUNT(*) FROM downloads WHERE attempts >= :maxAttempts")
     fun observeFailed(maxAttempts: Int): Flow<Int>
 }

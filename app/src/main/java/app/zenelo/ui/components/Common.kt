@@ -36,6 +36,11 @@ import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Icon
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.DownloadDone
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.material3.IconButton
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.MaterialTheme
@@ -436,3 +441,71 @@ fun Modifier.marquee(): Modifier = basicMarquee(iterations = Int.MAX_VALUE, init
 /** Vertical gap helper used between stacked blocks. */
 @Composable
 fun VSpace(height: Dp) = Spacer(Modifier.height(height))
+
+/**
+ * Downloads from the mStream server, in the snackbar's place: which track of how many, its name
+ * and a progress bar; then "Downloaded N tracks" for a moment. Tap hides it (downloads go on).
+ */
+@Composable
+fun DownloadPopup(modifier: Modifier = Modifier) {
+    val downloads = appContainer().mstreamDownloads
+    val progress by downloads.progress.collectAsStateWithLifecycle()
+    var hiddenRun by remember { mutableStateOf<Int?>(null) }
+    val p = progress
+    // Shown again when a new run starts (its count restarts from the first track).
+    LaunchedEffect(p == null) { if (p == null) hiddenRun = null }
+    LaunchedEffect(p?.finished) {
+        if (p?.finished == true) {
+            kotlinx.coroutines.delay(2500)
+            downloads.dismiss()
+        }
+    }
+    if (p == null || hiddenRun == p.count) return
+    Column(
+        modifier
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(ZeneloColors.Mustard.copy(alpha = 0.32f).compositeOver(ZeneloColors.Bar))
+            .clickable { hiddenRun = p.count }
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Icon(
+                if (p.finished) Icons.Outlined.DownloadDone else Icons.Outlined.Download,
+                null,
+                tint = ZeneloColors.Mustard,
+                modifier = Modifier.size(18.dp),
+            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    when {
+                        p.finished && p.failed > 0 -> "Downloaded ${p.done} of ${p.count} · ${p.failed} failed"
+                        p.finished -> if (p.done == 1) "Downloaded 1 track" else "Downloaded ${p.done} tracks"
+                        p.count == 1 -> "Downloading"
+                        else -> "Downloading ${minOf(p.done + 1, p.count)} of ${p.count}"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (!p.finished && p.title != null) {
+                    Text(p.title, style = MaterialTheme.typography.bodySmall, color = ZeneloColors.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            if (!p.finished && p.size > 0) {
+                Text("${(p.bytes * 100 / p.size).coerceIn(0, 100)}%", style = MaterialTheme.typography.labelMedium, color = ZeneloColors.TextSecondary)
+            }
+        }
+        if (!p.finished) {
+            // The whole run: finished tracks plus the part of the current one.
+            val part = if (p.size > 0) p.bytes.toFloat() / p.size else 0f
+            LinearProgressIndicator(
+                progress = { ((p.done + part) / p.count).coerceIn(0f, 1f) },
+                color = ZeneloColors.Mustard,
+                trackColor = ZeneloColors.Mustard.copy(alpha = 0.2f),
+                drawStopIndicator = {},
+                modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)),
+            )
+        }
+    }
+}

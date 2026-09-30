@@ -243,7 +243,8 @@ fun ArtistsScreen(vm: LibraryViewModel, nav: LibraryNav, onBack: (() -> Unit)?) 
 }
 
 private sealed interface TrackItem {
-    data class Header(val text: String) : TrackItem
+    /** [first]: index of its first track, so the key stays unique if a header comes up twice. */
+    data class Header(val text: String, val first: Int) : TrackItem
     data class Track(val track: TrackEntity, val index: Int) : TrackItem
 }
 
@@ -265,7 +266,7 @@ fun TracksScreen(vm: LibraryViewModel, onBack: (() -> Unit)?) {
             var last: String? = null
             visible.forEachIndexed { i, t ->
                 val header = LibrarySort.trackHeader(t, sort)
-                if (header != null && header != last) add(TrackItem.Header(header))
+                if (header != null && header != last) add(TrackItem.Header(header, i))
                 last = header
                 add(TrackItem.Track(t, i))
             }
@@ -300,7 +301,7 @@ fun TracksScreen(vm: LibraryViewModel, onBack: (() -> Unit)?) {
             state = listState,
             contentPadding = PaddingValues(end = if (rail) 18.dp else 0.dp, bottom = FabClearance),
         ) {
-            items(items, key = { if (it is TrackItem.Header) "h:${it.text}" else (it as TrackItem.Track).track.path }) { item ->
+            items(items, key = { if (it is TrackItem.Header) "h:${it.first}" else (it as TrackItem.Track).track.path }) { item ->
                 when (item) {
                     is TrackItem.Header -> GroupHeader(item.text)
                     is TrackItem.Track -> TrackRow(

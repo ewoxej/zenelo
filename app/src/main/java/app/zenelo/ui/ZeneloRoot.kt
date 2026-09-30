@@ -79,6 +79,7 @@ import app.zenelo.ui.browser.BrowserScreen
 import app.zenelo.ui.browser.BrowserViewModel
 import app.zenelo.ui.components.Artwork
 import app.zenelo.ui.components.appContainer
+import app.zenelo.ui.components.DownloadPopup
 import app.zenelo.ui.components.marquee
 import app.zenelo.ui.favorites.FavoritesScreen
 import app.zenelo.ui.nowplaying.NowPlayingScreen
@@ -386,6 +387,8 @@ private fun MainContent(settings: ZeneloSettings) {
             }
         }
 
+        // Under the messages: a short one covers the popup for a moment.
+        DownloadPopup(Modifier.align(Alignment.BottomCenter).padding(bottom = bottomReserved))
         LibraryMessages(libraryViewModel, Modifier.align(Alignment.BottomCenter).padding(bottom = bottomReserved))
 
         // Sonic Path ends set from any menu open its screen (over Now Playing too); Auto DJ's failures show here.

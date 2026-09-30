@@ -21,7 +21,9 @@ data class ShuffleItem(
 )
 
 /**
- * Shuffled orders of a queue: permutations of its indices, [start] first.
+ * Shuffled orders of a queue: permutations of its indices, [start] first — or, with no start
+ * ("Play" on a whole album / folder / playlist), a random beginning that suits the mode: any
+ * track, the first track of a random album, a track not played lately.
  * - [ShuffleMode.TRACKS]: uniform.
  * - [ShuffleMode.ALBUMS]: albums shuffled, tracks by number inside each. The start track's album
  *   plays from the start track on; that album's earlier tracks come last.
@@ -33,14 +35,23 @@ object Shuffle {
     const val RECENT_MS = 48L * 60 * 60 * 1000
     private const val SWAP_LOOKAHEAD = 500
 
-    fun order(items: List<ShuffleItem>, start: Int, mode: ShuffleMode, random: Random = Random): List<Int> {
+    fun order(items: List<ShuffleItem>, start: Int?, mode: ShuffleMode, random: Random = Random): List<Int> {
         if (items.isEmpty()) return emptyList()
-        val first = start.coerceIn(items.indices)
+        val first = start?.coerceIn(items.indices) ?: randomStart(items, mode, random)
         return when (mode) {
             ShuffleMode.TRACKS -> listOf(first) + (items.indices - first).shuffled(random)
             ShuffleMode.ALBUMS -> albums(items, first, random)
             ShuffleMode.SMART -> smart(items, first, random)
         }
+    }
+
+    /** A beginning for [order] without a start track. */
+    private fun randomStart(items: List<ShuffleItem>, mode: ShuffleMode, random: Random): Int = when (mode) {
+        ShuffleMode.TRACKS -> items.indices.random(random)
+        // The first track of a random album, so it plays through from its beginning.
+        ShuffleMode.ALBUMS -> items.indices.groupBy { items[it].album }.values.random(random)
+            .minWith(compareBy({ items[it].trackNumber == null }, { items[it].trackNumber }, { it }))
+        ShuffleMode.SMART -> items.indices.filter { !items[it].recent }.ifEmpty { items.indices.toList() }.random(random)
     }
 
     private fun albums(items: List<ShuffleItem>, start: Int, random: Random): List<Int> {

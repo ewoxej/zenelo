@@ -185,17 +185,18 @@ class PlayQueue(
     }
 
     /**
-     * Replaces the queue. [shuffle]: true / false to set it, null to keep the current mode
-     * (the start track plays first either way).
+     * Replaces the queue. [shuffle]: true / false to set it, null to keep the current mode.
+     * [startIndex] plays first; null ("Play" on the whole list) starts at the top, or shuffled at
+     * a random track (see [Shuffle.order]).
      */
-    fun play(files: List<AudioFile>, startIndex: Int, shuffle: Boolean?) = launchLocked {
+    fun play(files: List<AudioFile>, startIndex: Int?, shuffle: Boolean?) = launchLocked {
         val p = player ?: return@launchLocked
         if (files.isEmpty()) return@launchLocked
-        val start = startIndex.coerceIn(files.indices)
+        val start = startIndex?.coerceIn(files.indices)
         val shuffleOn = shuffle ?: p.shuffleModeEnabled
         paths = files.map { it.path }
         order = if (shuffleOn) shuffledOrder(start) else paths.indices.toList()
-        current = order.indexOf(start).toLong()
+        current = if (start == null) 0L else order.indexOf(start).toLong()
 
         val positions = windowAround(current)
         val items = buildItems(positions)
@@ -395,10 +396,10 @@ class PlayQueue(
         rebuildAroundCurrent()
     }
 
-    /** A shuffled order of [paths] in the chosen [ShuffleMode], [start] first. */
-    private suspend fun shuffledOrder(start: Int): List<Int> {
+    /** A shuffled order of [paths] in the chosen [ShuffleMode], [start] first (null: a random beginning). */
+    private suspend fun shuffledOrder(start: Int?): List<Int> {
         val s = settings.first()
-        if (s.shuffleMode == ShuffleMode.TRACKS) return listOf(start) + (paths.indices - start).shuffled()
+        if (s.shuffleMode == ShuffleMode.TRACKS) return if (start == null) paths.indices.shuffled() else listOf(start) + (paths.indices - start).shuffled()
         val list = paths
         val items = withContext(Dispatchers.IO) {
             val known = list.distinct().chunked(SQL_CHUNK).flatMap { tracks.getMany(it) }.associateBy { it.path }

@@ -115,4 +115,33 @@ class ShuffleTest {
         val items = List(5) { item("a", "only") }
         assertPermutation(Shuffle.order(items, 2, ShuffleMode.SMART, Random(3)), 5)
     }
+
+    @Test
+    fun withoutAStartTheFirstTrackIsRandom() {
+        val items = List(20) { item("al${it % 4}", "ar${it % 3}", number = it / 4 + 1) }
+        for (mode in ShuffleMode.entries) {
+            val firsts = (0 until 40).map { seed -> Shuffle.order(items, null, mode, Random(seed)).also { assertPermutation(it, items.size) }.first() }
+            assertTrue("$mode always starts at ${firsts.first()}", firsts.toSet().size > 1)
+        }
+    }
+
+    @Test
+    fun albumsWithoutAStartBeginAnAlbumAtItsFirstTrack() {
+        val items = listOf(
+            item("x", number = 3), item("x", number = 1), item("x", number = 2),
+            item("y", number = 2), item("y", number = 1),
+        )
+        repeat(20) { seed ->
+            val order = Shuffle.order(items, null, ShuffleMode.ALBUMS, Random(seed))
+            assertEquals(1, items[order.first()].trackNumber)
+            // Played through: no album split in two.
+            assertEquals(2, order.map { items[it].album }.zipWithNext().count { (a, b) -> a != b } + 1)
+        }
+    }
+
+    @Test
+    fun smartWithoutAStartBeginsWithATrackNotPlayedLately() {
+        val items = List(10) { item("a$it", "ar$it", recent = it < 8) }
+        repeat(20) { seed -> assertTrue(Shuffle.order(items, null, ShuffleMode.SMART, Random(seed)).first() >= 8) }
+    }
 }

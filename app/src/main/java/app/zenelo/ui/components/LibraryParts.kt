@@ -355,6 +355,14 @@ fun SourceLabel(source: LibrarySource, modifier: Modifier = Modifier) {
     )
 }
 
+/** A server track that "Download" saved already; follows downloads as they finish. */
+@Composable
+fun rememberDownloaded(path: String?): Boolean {
+    if (!app.zenelo.mstream.MStreamPaths.isRemote(path)) return false
+    val downloaded by appContainer().mstreamFiles.downloadedPaths.collectAsStateWithLifecycle()
+    return path in downloaded
+}
+
 /** The small cloud after a title: on the mStream server only (not on the device). */
 @Composable
 fun CloudMark(modifier: Modifier = Modifier) {

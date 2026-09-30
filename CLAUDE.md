@@ -122,7 +122,8 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   virtual positions that wrap). Shuffle mode is a setting (`ShuffleMode`, orders in `Shuffle`,
   unit-tested): Tracks (uniform), Albums (albums shuffled, by track number inside), Smart (each
   track artist spread evenly, neighbours never share an artist where avoidable, plays of the last
-  48 h last). Changing the mode reshuffles a shuffled queue. The UI edits the queue directly (same process), not via the controller.
+  48 h last). Changing the mode reshuffles a shuffled queue. "Play" on a whole list (no tapped track: `startIndex` null) under
+  shuffle starts at random — any track / a random album's first track / a track not played lately. The UI edits the queue directly (same process), not via the controller.
 
 - mStream (stage 1 done): `mstream/` — `MStreamClient` (API, JWT in `x-access-token`; album art needs
   it too, despite the docs), `MStreamSync` mirrors `POST /api/v1/sync/manifest` (skipped when the
@@ -156,6 +157,9 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   `RemoteMedia` opens a download / cached copy first, else streams `/media`, or `/transcode` per
   `TranscodeMode` (default MP3: the server streams transcodes without a length and ignores Range,
   so only MP3's frame-index seeking works; Opus / AAC can't seek). It logs "open … from / streamed".
+  `MStreamFiles.downloadedPaths` (read from the download folder, updated per download / delete)
+  marks downloaded server tracks at once and hides their "Download"; `MStreamDownloads.progress`
+  drives `DownloadPopup` (track i of n, bytes) instead of a "Downloading…" message.
 - mStream stage 4: `MStreamAutoDj` (setting `autoDj`; Now Playing ⋮ toggle) — when the queue's last track
   starts, `db/random-songs` picks more, the body built as the web app's `_buildAutoDjBody` (ignoreList
   cursor, artist cooldown, BPM windows / Camelot neighbours via `AutoDjRules` (unit-tested), similar
@@ -194,6 +198,8 @@ Releases: GitHub Actions `Release` workflow (manual; tag `v<VERSION>`, APK attac
 release; fails if that tag exists, i.e. VERSION wasn't bumped). It signs with the key from secrets
 (`KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD` → env `ZENELO_KEYSTORE*`).
 Local builds without those env vars stay signed with the debug key.
+`-PappIdSuffix=.debug` (any build type) makes "Zenelo test" (`app.zenelo.debug`), installable beside
+the real app on a phone; use it with `assembleRelease` when speed matters (scrolling, crashes).
 
 Emulator: AVD `zenelo_jm21` (720×1280 @ 320dpi ≈ the JM21's 360×640dp). Grant file access with
 `adb shell appops set app.zenelo MANAGE_EXTERNAL_STORAGE allow`.

@@ -180,7 +180,7 @@ private fun EndRow(label: String, end: MStreamSonicPath.End?, playing: String?, 
         trailing = {
             if (end != null) {
                 IconButton(onClick = onClear) { Icon(Icons.Rounded.Close, "Clear", tint = ZeneloColors.TextMuted, modifier = Modifier.size(18.dp)) }
-            } else if (playing != null) {
+            } else if (playing != null && app.zenelo.mstream.MStreamPaths.isRemote(playing)) {
                 TextButton(onClick = { onUsePlaying(playing) }) { Text("Playing track") }
             }
         },

@@ -106,7 +106,7 @@ class AppContainer(context: Context, upgradedInstall: Boolean) {
         appScope.launch { db.favorites().observeAll().debounce(300).collect { mstreamSync.onFavoritesChanged() } }
         appScope.launch {
             settings.settings.map { it.downloadDir }.distinctUntilChanged().collect { dir ->
-                mstreamFiles.downloadDir = dir?.let(::File) ?: MStreamFiles.defaultDownloadDir()
+                mstreamFiles.setDownloadDir(dir?.let(::File) ?: MStreamFiles.defaultDownloadDir())
             }
         }
     }

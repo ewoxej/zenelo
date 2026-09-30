@@ -59,21 +59,25 @@ class MStreamSync(
         lastSyncAt = System.currentTimeMillis()
         _state.value = State.Running(0)
         try {
-            pushOutbox(account)
+            // Only the library is required; an older server may lack the rest (404): skipped.
+            optional("outbox") { pushOutbox(account) }
             pullLibrary(account, force)
             // Ratings aren't part of the library revision: always asked for.
-            val rated = client.rated(account).mapKeys { MStreamPaths.of(it.key) }
-            favorites.withLock {
-                db.withTransaction {
-                    db.remoteTracks().all().forEach { rt -> if (rt.rating != rated[rt.path]) db.remoteTracks().setRating(rt.path, rated[rt.path]) }
+            optional("ratings") {
+                val rated = client.rated(account).mapKeys { MStreamPaths.of(it.key) }
+                favorites.withLock {
+                    db.withTransaction {
+                        db.remoteTracks().all().forEach { rt -> if (rt.rating != rated[rt.path]) db.remoteTracks().setRating(rt.path, rated[rt.path]) }
+                    }
+                    reconcileFavorites()
                 }
-                reconcileFavorites()
             }
-            db.playlists().replaceRemote(client.playlists(account).map { (name, paths) -> name to paths.map(MStreamPaths::of) })
-            pullRecent(account)
+            optional("playlists") { db.playlists().replaceRemote(client.playlists(account).map { (name, paths) -> name to paths.map(MStreamPaths::of) }) }
+            optional("recent plays") { pullRecent(account) }
             _state.value = State.Idle
             return db.remoteTracks().paths().size
         } catch (e: Exception) {
+            if (e !is kotlinx.coroutines.CancellationException) android.util.Log.w("Zenelo", "mStream sync failed", e)
             _state.value = State.Failed(e.message ?: e.javaClass.simpleName)
             throw e
         }
@@ -182,6 +186,16 @@ class MStreamSync(
             if (plays.isEmpty()) break
             client.reportPlays(account, plays.map { MStreamClient.Play(it.id, MStreamPaths.serverPath(it.path), it.startedAt, it.playedMs, it.durationMs) })
             db.mstreamOutbox().dropPlays(plays.map { it.id })
+        }
+    }
+
+    /** A step an older server may not have: its 404 is logged and skipped, other failures still fail the sync. */
+    private suspend fun optional(what: String, block: suspend () -> Unit) {
+        try {
+            block()
+        } catch (e: MStreamException) {
+            if (e.code != 404) throw e
+            android.util.Log.w("Zenelo", "mStream sync: the server has no $what (${e.message}), skipped")
         }
     }
 

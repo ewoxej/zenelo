@@ -27,6 +27,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -101,7 +102,10 @@ private fun LoginForm(onMessage: (String) -> Unit) {
                             LibraryWork.syncServer(context, force = true)
                             onMessage("Connected to ${account.url}")
                         }
-                        .onFailure { error = it.message ?: "Couldn't connect" }
+                        .onFailure {
+                            android.util.Log.w("Zenelo", "mStream login to $url as ${user.trim()} failed", it)
+                            error = it.message ?: "Couldn't connect"
+                        }
                     busy = false
                 }
             },
@@ -126,7 +130,8 @@ private fun Field(value: String, onChange: (String) -> Unit, label: String, hint
         singleLine = true,
         label = { Text(label) },
         placeholder = if (hint.isEmpty()) null else ({ Text(hint) }),
-        keyboardOptions = KeyboardOptions(keyboardType = type),
+        // No auto-correct / capitals: "ilya" must not turn into "Ilya" (the server's names are case-sensitive).
+        keyboardOptions = KeyboardOptions(keyboardType = type, capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
         visualTransformation = if (secret) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = ZeneloColors.Mustard, cursorColor = ZeneloColors.Mustard),
         modifier = Modifier.fillMaxWidth(),

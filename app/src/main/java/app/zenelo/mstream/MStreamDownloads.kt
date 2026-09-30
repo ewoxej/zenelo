@@ -38,30 +38,72 @@ class MStreamDownloads(
     /** The track being downloaded now, if any. */
     val current: StateFlow<String?> = _current.asStateFlow()
 
+    /**
+     * A run of downloads for the popup: the track being fetched ([title], [bytes] of [size], -1 =
+     * unknown), [done] of [count] finished; [finished] once the queue is empty (then [dismiss]).
+     */
+    data class Progress(
+        val title: String?,
+        val bytes: Long = 0,
+        val size: Long = -1,
+        val done: Int = 0,
+        val count: Int = 1,
+        val failed: Int = 0,
+        val finished: Boolean = false,
+    )
+
+    private val _progress = MutableStateFlow<Progress?>(null)
+    val progress: StateFlow<Progress?> = _progress.asStateFlow()
+
+    /** The popup went away after showing a finished run: the next run counts from zero. */
+    fun dismiss() {
+        if (_progress.value?.finished == true) _progress.value = null
+    }
+
     val pending = db.downloads().observePending(MAX_ATTEMPTS)
     val failed = db.downloads().observeFailed(MAX_ATTEMPTS)
 
     /** Queues server tracks for download (local ones and those already downloaded are skipped). */
     suspend fun enqueue(paths: List<String>): Int {
-        val wanted = paths.distinct().filter { MStreamPaths.isRemote(it) && files.downloaded(it) == null }
+        val wanted = paths.distinct().filter { MStreamPaths.isRemote(it) && !files.isDownloaded(it) && files.downloaded(it) == null }
         db.downloads().add(wanted.map { DownloadEntity(it) })
         return wanted.size
     }
 
     /** Works through the download queue (from the worker); returns false if it stopped on a network error. */
     suspend fun drain(): Boolean {
+        // A finished run still on screen: this one starts over.
+        if (_progress.value?.finished == true) _progress.value = null
+        val failedBefore = db.downloads().observeFailed(MAX_ATTEMPTS).first()
         while (true) {
             val account = settings.settings.first().mstream ?: return true
-            val next = db.downloads().next(MAX_ATTEMPTS) ?: return true
+            val next = db.downloads().next(MAX_ATTEMPTS)
+            if (next == null) {
+                _progress.value?.let { p ->
+                    val failed = db.downloads().observeFailed(MAX_ATTEMPTS).first() - failedBefore
+                    _progress.value = p.copy(bytes = 0, size = -1, failed = failed.coerceAtLeast(0), finished = true)
+                }
+                return true
+            }
             _current.value = next.path
+            val done = _progress.value?.done ?: 0
+            val title = db.tracks().get(next.path)?.title ?: MStreamPaths.fileName(next.path)
+            val count = done + db.downloads().pendingCount(MAX_ATTEMPTS)
+            _progress.value = Progress(title, done = done, count = count)
             try {
-                val file = files.download(account, client, next.path)
+                val file = files.download(account, client, next.path) { bytes, size ->
+                    _progress.value = Progress(title, bytes, size, done, count)
+                }
                 // Indexed now: the library shows (and plays) it as a local, downloaded file at once.
                 indexer.indexOne(file.path)
                 db.downloads().remove(next.path)
+                _progress.value = Progress(title, done = done + 1, count = count)
             } catch (e: java.io.IOException) {
                 db.downloads().failed(next.path)
-                if (!online()) return false
+                if (!online()) {
+                    _progress.value = null
+                    return false
+                }
             } finally {
                 _current.value = null
             }
@@ -70,17 +112,20 @@ class MStreamDownloads(
 
     suspend fun clearFailed() = db.downloads().clear()
 
-    /** "Download" anywhere: queues the server tracks among [paths] and starts; returns the message to show. */
-    suspend fun request(paths: List<String>): String {
+    /**
+     * "Download" anywhere: queues the server tracks among [paths] and starts. Returns a message to
+     * show when nothing was queued; else null — the download popup ([progress]) shows at once.
+     */
+    suspend fun request(paths: List<String>): String? {
         val remote = paths.count(MStreamPaths::isRemote)
         if (remote == 0) return "Already on the device"
         val queued = enqueue(paths)
-        if (queued > 0) LibraryWork.downloadNow(context)
-        return when {
-            queued == 0 -> "Already downloaded"
-            queued == 1 -> "Downloading 1 track"
-            else -> "Downloading $queued tracks"
-        }
+        if (queued == 0) return "Already downloaded"
+        val running = _progress.value?.takeIf { !it.finished }
+        _progress.value = running?.copy(count = running.count + queued)
+            ?: Progress(db.tracks().get(paths.first(MStreamPaths::isRemote))?.title, count = queued)
+        LibraryWork.downloadNow(context)
+        return null
     }
 
     /**
