@@ -33,11 +33,24 @@ abstract class FavoriteDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     abstract suspend fun insertAll(favorites: List<FavoriteEntity>)
 
-    /** Returns true if the item is a favorite after the call. */
+    @Query("SELECT EXISTS(SELECT 1 FROM favorites WHERE path IN (:paths))")
+    abstract fun observeIsFavoriteAny(paths: List<String>): Flow<Boolean>
+
+    @Query("SELECT EXISTS(SELECT 1 FROM favorites WHERE path IN (:paths))")
+    abstract suspend fun isFavoriteAny(paths: List<String>): Boolean
+
+    @Query("DELETE FROM favorites WHERE path IN (:paths)")
+    abstract suspend fun deletePaths(paths: List<String>)
+
+    /**
+     * Returns true if the item is a favorite after the call. [copies]: the same track under other
+     * paths (its local / server copy, `ServerLinks.copiesOf`) — liked under any counts, unliking clears all.
+     */
     @Transaction
-    open suspend fun toggle(favorite: FavoriteEntity): Boolean {
-        if (isFavorite(favorite.path)) {
-            delete(favorite.path)
+    open suspend fun toggle(favorite: FavoriteEntity, copies: List<String> = emptyList()): Boolean {
+        val paths = listOf(favorite.path) + copies
+        if (isFavoriteAny(paths)) {
+            deletePaths(paths)
             return false
         }
         insert(favorite)
@@ -53,10 +66,14 @@ abstract class PlaylistDao {
                (SELECT COUNT(*) FROM playlist_entries e WHERE e.playlistId = p.id) AS trackCount,
                (SELECT e.path FROM playlist_entries e WHERE e.playlistId = p.id ORDER BY e.position LIMIT 1) AS coverPath,
                p.remote AS remote
-        FROM playlists p ORDER BY p.remote, p.createdAt DESC
+        FROM playlists p WHERE p.deleted = 0 ORDER BY p.remote, p.createdAt DESC
         """,
     )
     abstract fun observeWithCounts(): Flow<List<PlaylistWithCount>>
+
+    /** Every playlist's entries (offline: which playlists have nothing playable). */
+    @Query("SELECT * FROM playlist_entries")
+    abstract fun observeAllEntries(): Flow<List<PlaylistEntryEntity>>
 
     @Query("SELECT * FROM playlist_entries WHERE playlistId = :playlistId ORDER BY position")
     abstract fun observeEntries(playlistId: Long): Flow<List<PlaylistEntryEntity>>
@@ -65,7 +82,42 @@ abstract class PlaylistDao {
     abstract suspend fun insert(playlist: PlaylistEntity): Long
 
     @Query("DELETE FROM playlists WHERE id = :playlistId")
-    abstract suspend fun delete(playlistId: Long)
+    abstract suspend fun deleteRow(playlistId: Long)
+
+    /** A server playlist: its edits wait for the next push to the server (see `PlaylistEntity`). */
+    @Query("UPDATE playlists SET dirty = 1 WHERE id = :playlistId AND remote = 1")
+    abstract suspend fun markDirty(playlistId: Long)
+
+    @Query("UPDATE playlists SET deleted = 1, dirty = 1 WHERE id = :playlistId")
+    abstract suspend fun markDeleted(playlistId: Long)
+
+    /** Deletes a playlist; a server playlist stays as a tombstone until the server's copy is deleted too. */
+    @Transaction
+    open suspend fun delete(playlistId: Long) {
+        val p = get(playlistId) ?: return
+        if (p.remote && p.serverName != null) {
+            clear(playlistId)
+            markDeleted(playlistId)
+        } else {
+            deleteRow(playlistId)
+        }
+    }
+
+    @Query("SELECT * FROM playlists WHERE id = :playlistId")
+    abstract suspend fun get(playlistId: Long): PlaylistEntity?
+
+    /** Server playlists with edits (or deletions) the server doesn't have yet. */
+    @Query("SELECT * FROM playlists WHERE remote = 1 AND dirty = 1")
+    abstract suspend fun pendingRemote(): List<PlaylistEntity>
+
+    @Query("SELECT COUNT(*) FROM playlists WHERE remote = 1 AND dirty = 1")
+    abstract fun observePendingRemote(): Flow<Int>
+
+    @Query("UPDATE playlists SET dirty = 0, serverName = :serverName WHERE id = :playlistId")
+    abstract suspend fun markPushed(playlistId: Long, serverName: String)
+
+    @Query("UPDATE playlists SET serverName = :serverName WHERE id = :playlistId")
+    abstract suspend fun setServerName(playlistId: Long, serverName: String)
 
     @Query("SELECT COALESCE(MAX(position) + 1, 0) FROM playlist_entries WHERE playlistId = :playlistId")
     abstract suspend fun nextPosition(playlistId: Long): Int
@@ -76,6 +128,7 @@ abstract class PlaylistDao {
     @Transaction
     open suspend fun append(playlistId: Long, path: String) {
         insertEntry(PlaylistEntryEntity(playlistId, nextPosition(playlistId), path))
+        markDirty(playlistId)
     }
 
     @Query("SELECT * FROM playlists WHERE id = :playlistId")
@@ -95,7 +148,13 @@ abstract class PlaylistDao {
     abstract suspend fun paths(playlistId: Long): List<String>
 
     @Query("UPDATE playlists SET name = :name WHERE id = :playlistId")
-    abstract suspend fun rename(playlistId: Long, name: String)
+    abstract suspend fun setName(playlistId: Long, name: String)
+
+    @Transaction
+    open suspend fun rename(playlistId: Long, name: String) {
+        setName(playlistId, name)
+        markDirty(playlistId)
+    }
 
     @Query("DELETE FROM playlist_entries WHERE playlistId = :playlistId")
     abstract suspend fun clear(playlistId: Long)
@@ -107,6 +166,7 @@ abstract class PlaylistDao {
     open suspend fun appendAll(playlistId: Long, paths: List<String>) {
         val start = nextPosition(playlistId)
         insertEntries(paths.mapIndexed { i, path -> PlaylistEntryEntity(playlistId, start + i, path) })
+        markDirty(playlistId)
     }
 
     @Query("SELECT * FROM playlists ORDER BY createdAt")
@@ -127,13 +187,25 @@ abstract class PlaylistDao {
     @Query("DELETE FROM playlists WHERE remote = 1")
     abstract suspend fun deleteRemote()
 
-    /** The server's playlists, as they are there now (replaces the previous copies). */
+    /**
+     * The server's playlists, as they are there now: they replace our clean copies. Ones with edits
+     * not pushed yet (or deleted here) stay as they are, and hide the server's copy of their name.
+     */
     @Transaction
     open suspend fun replaceRemote(playlists: List<Pair<String, List<String>>>) {
-        val old = remotePlaylists().associateBy { it.name }
-        deleteRemote()
+        val old = remotePlaylists()
+        val pending = old.filter { it.dirty }.mapNotNull { it.serverName }.toSet()
+        // Clean copies are updated in place (same id: an open playlist page stays on it).
+        val clean = old.filter { !it.dirty }.associateBy { it.serverName ?: it.name }
+        val onServer = playlists.map { it.first }.toSet()
+        clean.filterKeys { it !in onServer }.values.forEach { deleteRow(it.id) }
         for ((name, paths) in playlists) {
-            val id = insert(PlaylistEntity(name = name, createdAt = old[name]?.createdAt ?: 0, remote = true))
+            if (name in pending) continue
+            val existing = clean[name]
+            val id = existing?.id ?: insert(PlaylistEntity(name = name, createdAt = 0, remote = true, serverName = name))
+            if (existing != null && paths(id) == paths && existing.name == name) continue
+            if (existing != null) setName(id, name)
+            clear(id)
             insertEntries(paths.mapIndexed { i, path -> PlaylistEntryEntity(id, i, path) })
         }
     }
@@ -151,6 +223,7 @@ abstract class PlaylistDao {
     open suspend fun replace(playlistId: Long, paths: List<String>) {
         clear(playlistId)
         insertEntries(paths.mapIndexed { i, path -> PlaylistEntryEntity(playlistId, i, path) })
+        markDirty(playlistId)
     }
 }
 
@@ -176,6 +249,13 @@ interface LoudnessDao {
 interface TrackDao {
     @Query("SELECT * FROM tracks WHERE path = :path")
     suspend fun get(path: String): TrackEntity?
+
+    /** Emits on every change of the table (cheap): a trigger for work that then reads what it needs. */
+    @Query("SELECT COUNT(*) FROM tracks")
+    fun observeChanges(): Flow<Int>
+
+    @Query("SELECT * FROM tracks")
+    suspend fun all(): List<TrackEntity>
 
     @Query("SELECT * FROM tracks WHERE path IN (:paths)")
     suspend fun getMany(paths: List<String>): List<TrackEntity>
@@ -350,6 +430,27 @@ interface RemoteTrackDao {
 
     @Query("SELECT COUNT(*) FROM remote_tracks")
     fun observeCount(): Flow<Int>
+}
+
+@Dao
+interface ServerLinkDao {
+    @Query("SELECT * FROM server_links")
+    suspend fun all(): List<ServerLinkEntity>
+
+    @Query("SELECT * FROM server_links")
+    fun observeAll(): Flow<List<ServerLinkEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(rows: List<ServerLinkEntity>)
+
+    @Query("DELETE FROM server_links WHERE localPath IN (:localPaths)")
+    suspend fun delete(localPaths: List<String>)
+
+    @Query("DELETE FROM server_links WHERE serverPath = :serverPath")
+    suspend fun deleteServer(serverPath: String)
+
+    @Query("DELETE FROM server_links")
+    suspend fun deleteAll()
 }
 
 @Dao

@@ -13,6 +13,7 @@ import app.zenelo.mstream.MStreamSonicPath
 import app.zenelo.mstream.MStreamDownloads
 import app.zenelo.mstream.MStreamFiles
 import app.zenelo.mstream.MStreamSync
+import app.zenelo.mstream.ServerLinks
 import app.zenelo.library.Library
 import app.zenelo.library.LibraryIndexer
 import app.zenelo.library.LoudnessRepository
@@ -35,6 +36,7 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -88,22 +90,34 @@ class AppContainer(context: Context, upgradedInstall: Boolean) {
     )
     val thumbnails = Thumbnails(context, db.tracks(), metadata)
     val loudness = LoudnessRepository(db)
-    val library = Library(db, settings.settings.map { it.artistSplitter }, settings.settings.map { it.librarySource }, appScope)
+    val network = app.zenelo.online.Network(context)
+    val library = Library(
+        db, settings.settings.map { it.artistSplitter }, settings.settings.map { it.librarySource }, appScope,
+        online = network.online, isCached = { mstreamFiles.isCached(it) },
+    )
     val queue = PlayQueue(db.tracks(), db.plays(), settings.settings, metadata, File(context.filesDir, "queue.txt"))
     val tagWriter = TagWriter(pendingWrites)
     val playlistPicker = PlaylistPicker()
     val playlistFiles = PlaylistFiles(context, db)
     val backup = Backup(context, db, settings)
-    val mstreamSync = MStreamSync(db, settings, mstream)
-    val mstreamFiles = MStreamFiles(context, http.client)
+    val serverLinks = ServerLinks(db, appScope).also { it.start() }
+    val mstreamFiles = MStreamFiles(context, http.client, serverLinks)
+    val mstreamSync = MStreamSync(db, settings, mstream, serverLinks)
     val mstreamDownloads = MStreamDownloads(context, db, settings, mstream, mstreamFiles, indexer, queue, appScope).also { it.start() }
-    val autoDj = MStreamAutoDj(db, settings, mstream, queue, appScope).also { it.start() }
-    val sonicPath = MStreamSonicPath(db, settings, mstream, appScope)
+    val autoDj = MStreamAutoDj(db, settings, mstream, queue, serverLinks, network.online, appScope).also { it.start() }
+    val sonicPath = MStreamSonicPath(db, settings, mstream, serverLinks, network.online, appScope)
 
     init {
         // Likes of server tracks become ratings on the server (and unlikes clear them).
         @OptIn(kotlinx.coroutines.FlowPreview::class)
         appScope.launch { db.favorites().observeAll().debounce(300).collect { mstreamSync.onFavoritesChanged() } }
+        // A new download / matched file: favorites move to the local copy, its likes reach the server.
+        @OptIn(kotlinx.coroutines.FlowPreview::class)
+        appScope.launch { serverLinks.links.drop(1).debounce(500).collect { mstreamSync.onLinksChanged() } }
+        queue.resolvePath = { serverLinks.current.canonical(it) }
+        // Edited server playlists go to the server (or wait for the next sync when it's out of reach).
+        @OptIn(kotlinx.coroutines.FlowPreview::class)
+        appScope.launch { db.playlists().observePendingRemote().debounce(1000).collect { if (it > 0) mstreamSync.onPlaylistsChanged() } }
         appScope.launch {
             settings.settings.map { it.downloadDir }.distinctUntilChanged().collect { dir ->
                 mstreamFiles.setDownloadDir(dir?.let(::File) ?: MStreamFiles.defaultDownloadDir())

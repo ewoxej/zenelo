@@ -174,6 +174,22 @@ data class AutoDjSettings(
     /** Sound-alike picks: the server's audio embeddings, at least [sonicMinSimilarity] (cosine). */
     val sonic: Boolean = false,
     val sonicMinSimilarity: Float = 0.55f,
+    /** The sound seed: false = rolling (the last picks), true = locked on the session's first track. */
+    val sonicLocked: Boolean = false,
+    /** Only [genres] (or all but them, [genresExcluded]); server genre names. */
+    val genresEnabled: Boolean = false,
+    val genres: List<String> = emptyList(),
+    val genresExcluded: Boolean = false,
+    /** Track length window in seconds, 0 = no bound; [allowUnknownLength] lets unmeasured ones through. */
+    val lengthEnabled: Boolean = false,
+    val minLengthS: Int = 0,
+    val maxLengthS: Int = 0,
+    val allowUnknownLength: Boolean = false,
+    /** Skip picks whose title / artist / album / path has one of these words. */
+    val skipWordsEnabled: Boolean = false,
+    val skipWords: List<String> = emptyList(),
+    /** Server libraries (vpaths) to pick from; empty = all. */
+    val libraries: List<String> = emptyList(),
 )
 
 /**
@@ -260,6 +276,17 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
         it[AUTO_DJ_HARMONIC] = value.harmonicMixing
         it[AUTO_DJ_SONIC] = value.sonic
         it[AUTO_DJ_SONIC_MIN] = value.sonicMinSimilarity
+        it[AUTO_DJ_SONIC_LOCKED] = value.sonicLocked
+        it[AUTO_DJ_GENRES_ON] = value.genresEnabled
+        it[AUTO_DJ_GENRES] = value.genres.joinToString("\n")
+        it[AUTO_DJ_GENRES_EXCLUDED] = value.genresExcluded
+        it[AUTO_DJ_LENGTH_ON] = value.lengthEnabled
+        it[AUTO_DJ_MIN_LENGTH] = value.minLengthS
+        it[AUTO_DJ_MAX_LENGTH] = value.maxLengthS
+        it[AUTO_DJ_UNKNOWN_LENGTH] = value.allowUnknownLength
+        it[AUTO_DJ_SKIP_ON] = value.skipWordsEnabled
+        it[AUTO_DJ_SKIP_WORDS] = value.skipWords.joinToString("\n")
+        it[AUTO_DJ_LIBRARIES] = value.libraries.joinToString("\n")
     }
 
     suspend fun setSonicPathLength(length: Int) = store.edit { it[SONIC_PATH_LENGTH] = length }
@@ -381,6 +408,17 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
             harmonicMixing = this[AUTO_DJ_HARMONIC] ?: false,
             sonic = this[AUTO_DJ_SONIC] ?: false,
             sonicMinSimilarity = this[AUTO_DJ_SONIC_MIN] ?: 0.55f,
+            sonicLocked = this[AUTO_DJ_SONIC_LOCKED] ?: false,
+            genresEnabled = this[AUTO_DJ_GENRES_ON] ?: false,
+            genres = this[AUTO_DJ_GENRES].listSetting(),
+            genresExcluded = this[AUTO_DJ_GENRES_EXCLUDED] ?: false,
+            lengthEnabled = this[AUTO_DJ_LENGTH_ON] ?: false,
+            minLengthS = this[AUTO_DJ_MIN_LENGTH] ?: 0,
+            maxLengthS = this[AUTO_DJ_MAX_LENGTH] ?: 0,
+            allowUnknownLength = this[AUTO_DJ_UNKNOWN_LENGTH] ?: false,
+            skipWordsEnabled = this[AUTO_DJ_SKIP_ON] ?: false,
+            skipWords = this[AUTO_DJ_SKIP_WORDS].listSetting(),
+            libraries = this[AUTO_DJ_LIBRARIES].listSetting(),
         ),
         sonicPathLength = this[SONIC_PATH_LENGTH] ?: 14,
         artistExceptions = this[ARTIST_EXCEPTIONS]?.split('\n')?.filter(String::isNotBlank) ?: ArtistSplitter.DEFAULT_EXCEPTIONS,
@@ -453,6 +491,17 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
         val AUTO_DJ_SONIC = booleanPreferencesKey("auto_dj_sonic")
         val AUTO_DJ_SONIC_MIN = floatPreferencesKey("auto_dj_sonic_min")
         val SONIC_PATH_LENGTH = intPreferencesKey("sonic_path_length")
+        val AUTO_DJ_SONIC_LOCKED = booleanPreferencesKey("auto_dj_sonic_locked")
+        val AUTO_DJ_GENRES_ON = booleanPreferencesKey("auto_dj_genres_on")
+        val AUTO_DJ_GENRES = stringPreferencesKey("auto_dj_genres")
+        val AUTO_DJ_GENRES_EXCLUDED = booleanPreferencesKey("auto_dj_genres_excluded")
+        val AUTO_DJ_LENGTH_ON = booleanPreferencesKey("auto_dj_length_on")
+        val AUTO_DJ_MIN_LENGTH = intPreferencesKey("auto_dj_min_length")
+        val AUTO_DJ_MAX_LENGTH = intPreferencesKey("auto_dj_max_length")
+        val AUTO_DJ_UNKNOWN_LENGTH = booleanPreferencesKey("auto_dj_unknown_length")
+        val AUTO_DJ_SKIP_ON = booleanPreferencesKey("auto_dj_skip_on")
+        val AUTO_DJ_SKIP_WORDS = stringPreferencesKey("auto_dj_skip_words")
+        val AUTO_DJ_LIBRARIES = stringPreferencesKey("auto_dj_libraries")
         /** Not in backups: a login token, and sync state that means nothing elsewhere. */
         val PRIVATE_KEYS = setOf("mstream_token", "mstream_revision")
         val ARTIST_SEPARATORS = stringPreferencesKey("artist_separators")
@@ -468,3 +517,6 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
             enumValues<T>().firstOrNull { it.name == name }
     }
 }
+
+/** A newline-joined list setting. */
+private fun String?.listSetting(): List<String> = this?.split('\n')?.map(String::trim)?.filter(String::isNotEmpty).orEmpty()

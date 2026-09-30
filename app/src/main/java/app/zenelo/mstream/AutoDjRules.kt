@@ -64,6 +64,20 @@ object AutoDjRules {
     fun average(bpms: Collection<Double>): Double? = if (bpms.isEmpty()) null else bpms.average().roundToInt().toDouble()
 
     /**
+     * A skip word in the pick's title, artist, album or path, as the web app matches them:
+     * lowercase with repeated letters collapsed ("acapella" = "acappella", "trax" = "traxxx").
+     */
+    fun hasSkipWord(song: ServerSong, words: List<String>): Boolean {
+        if (words.isEmpty()) return false
+        val text = fold(listOfNotNull(song.title, song.artist, song.album, song.filepath).joinToString(" "))
+        return words.map(::fold).any { it.isNotBlank() && it in text }
+    }
+
+    private val REPEATS = Regex("(.)\\1+")
+
+    private fun fold(s: String) = s.lowercase().replace(REPEATS, "$1")
+
+    /**
      * Whether a pick breaks the session's tempo / key (the server may relax them when nothing
      * fits). Untagged picks pass: the server already ran out of tagged ones.
      */

@@ -66,7 +66,10 @@ import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.ui.draw.scale
 import app.zenelo.ui.components.SonicPathItems
+import app.zenelo.ui.components.UNPLAYABLE_ALPHA
 import app.zenelo.ui.components.rememberDownloaded
+import app.zenelo.ui.components.rememberUnplayable
+import app.zenelo.ui.components.rememberOnline
 import app.zenelo.ui.settings.zeneloSwitchColors
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -82,6 +85,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
@@ -163,8 +167,10 @@ fun NowPlayingScreen(
     val scope = rememberCoroutineScope()
 
     val favorites = container.db.favorites()
-    val isFavorite by remember(state.mediaId) {
-        state.mediaId?.let(favorites::observeIsFavorite) ?: flowOf(false)
+    // Liked under its local or its server copy: the same song.
+    val links by container.serverLinks.links.collectAsState()
+    val isFavorite by remember(state.mediaId, links) {
+        state.mediaId?.let { favorites.observeIsFavoriteAny(listOf(it) + links.copiesOf(it)) } ?: flowOf(false)
     }.collectAsState(initial = false)
 
     val trackFlow = remember(state.mediaId) { state.mediaId?.let(container.db.tracks()::observe) ?: flowOf(null) }
@@ -265,7 +271,7 @@ fun NowPlayingScreen(
         TrackTitle(state, isFavorite) {
             val id = state.mediaId ?: return@TrackTitle
             scope.launch {
-                favorites.toggle(FavoriteEntity(id, FavoriteKind.TRACK, state.title ?: File(id).nameWithoutExtension, state.artist))
+                favorites.toggle(FavoriteEntity(id, FavoriteKind.TRACK, state.title ?: File(id).nameWithoutExtension, state.artist), container.serverLinks.current.copiesOf(id))
             }
         }
         SeekBar(state, player, track)
@@ -369,7 +375,9 @@ private fun TopBar(
                         state.mediaId?.let { picker.pick(listOf(it)) }
                     },
                 )
-                if (remote && !rememberDownloaded(state.mediaId)) {
+                // Server features need the network: offline they're not offered.
+                val online = rememberOnline()
+                if (remote && online && !rememberDownloaded(state.mediaId)) {
                     DropdownMenuItem(
                         text = { Text("Download") },
                         onClick = {
@@ -378,7 +386,7 @@ private fun TopBar(
                         },
                     )
                 }
-                if (settings?.mstream != null) {
+                if (settings?.mstream != null && online) {
                     val dj = settings?.autoDj?.enabled == true
                     val container = appContainer()
                     DropdownMenuItem(
@@ -565,6 +573,7 @@ private fun QueuePage(player: PlayerController) {
                 val info = player.queue.info(path)
                 container.db.favorites().toggle(
                     FavoriteEntity(path, FavoriteKind.TRACK, info?.title ?: File(path).nameWithoutExtension, info?.artist),
+                    container.serverLinks.current.copiesOf(path),
                 )
             }
         }
@@ -721,6 +730,8 @@ private fun QueueRow(
 ) {
     val queue = appContainer().queue
     val info by produceState(queue.cachedInfo(path), path, revision) { value = queue.info(path) }
+    // Offline and only on the server: grey, it'll be skipped.
+    val unplayable = rememberUnplayable(path)
     val accent = when {
         isCurrent -> ZeneloColors.Celadon
         played -> ZeneloColors.TextMuted
@@ -737,6 +748,7 @@ private fun QueueRow(
                 },
             )
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .alpha(if (unplayable) UNPLAYABLE_ALPHA else 1f)
             .heightIn(min = 46.dp)
             .padding(start = 20.dp, end = 4.dp, top = 3.dp, bottom = 3.dp),
         verticalAlignment = Alignment.CenterVertically,

@@ -81,6 +81,7 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
     val tracks by tracksFlow.collectAsStateWithLifecycle(initialValue = null)
     val settings by vm.settings.collectAsStateWithLifecycle()
     val (mediaId, isPlaying) = rememberNowPlaying()
+    val links by appContainer().serverLinks.links.collectAsStateWithLifecycle()
     val search = remember { PageSearch() }
     val selection = rememberSelection<Int>()
     val markLeft = settings.selectionMarker == SelectionMarkerSide.LEFT
@@ -118,16 +119,21 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     val total = items.sumOf { it.durationMs ?: 0L }
-    // A copy of a server playlist: remade on every sync, so not edited here.
-    val readOnly = playlist?.remote == true
+    // A server playlist: edited here like any other, the edits go to the server (see PlaylistEntity).
+    val remote = playlist?.remote == true
+    val serverNote = when {
+        !remote -> ""
+        playlist?.dirty == true -> " · MSTREAM · NOT SYNCED YET"
+        else -> " · MSTREAM"
+    }
 
     LibraryScaffold(
         title = playlist?.name ?: "Playlist",
         count = tracks?.size,
         caption = when {
-            total >= 60_000 -> formatTotal(total).uppercase() + if (readOnly) " · MSTREAM" else ""
-            total > 0 -> formatDuration(total)
-            else -> null
+            total >= 60_000 -> formatTotal(total).uppercase() + serverNote
+            total > 0 -> formatDuration(total) + serverNote
+            else -> serverNote.removePrefix(" · ").ifEmpty { null }
         },
         onBack = onBack,
         search = search,
@@ -138,7 +144,7 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
             chosen().let { list -> vm.onTracks(list.map(PlaylistTrack::toAudioFile), list.associate { it.path to (it.name() to it.artist) }, action) }
         },
         onSelectionPlay = { vm.play(chosen().map(PlaylistTrack::toAudioFile), shuffle = it) },
-        onSelectionRemove = if (readOnly) null else ({ remove(selection.keys) }),
+        onSelectionRemove = { remove(selection.keys) },
         removeLabel = "Remove from playlist",
         isPlaying = isPlaying,
         canPlay = files.isNotEmpty(),
@@ -148,7 +154,7 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
             Box {
                 IconButton(onClick = { menu = true }, modifier = Modifier.size(44.dp)) { Icon(Icons.Rounded.MoreVert, "More", Modifier.size(20.dp)) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    if (!readOnly) DropdownMenuItem(text = { Text("Rename…") }, onClick = { menu = false; renaming = true })
+                    DropdownMenuItem(text = { Text("Rename…") }, onClick = { menu = false; renaming = true })
                     DropdownMenuItem(
                         text = { Text("Export as M3U8…") },
                         onClick = {
@@ -156,7 +162,7 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
                             exporter.launch("${playlist?.name?.replace(Regex("[\\\\/:*?\"<>|]"), "_") ?: "Playlist"}.m3u8")
                         },
                     )
-                    if (!readOnly) DropdownMenuItem(text = { Text("Delete playlist", color = ZeneloColors.Danger) }, onClick = { menu = false; deleting = true })
+                    DropdownMenuItem(text = { Text("Delete playlist", color = ZeneloColors.Danger) }, onClick = { menu = false; deleting = true })
                 }
             }
         },
@@ -169,7 +175,7 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
                     val act = { action: SwipeAction ->
                         // Here "remove from list" takes the track out of the playlist.
                         if (action == SwipeAction.REMOVE_FROM_LIST || action == SwipeAction.HIDE) {
-                            if (readOnly) vm.showMessage("Server playlists are edited on the server") else remove(setOf(track.position))
+                            remove(setOf(track.position))
                         }
                         else vm.onTrack(file, title, track.artist, action)
                     }
@@ -184,7 +190,8 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
                             coverPath = track.path,
                             placeholder = Icons.Outlined.MusicNote,
                             trailingText = track.durationMs?.takeIf { it > 0 }?.let(::formatDuration),
-                            isCurrent = track.path == mediaId,
+                            // A server entry with a local copy plays as the copy.
+                            isCurrent = mediaId != null && (track.path == mediaId || links.localOf(track.path) == mediaId),
                             // Not in the index (moved or deleted): shown, but dimmed.
                             dimmed = track.title == null && track.durationMs == null,
                             selecting = selection.active,
@@ -201,7 +208,7 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
                                     path = track.path,
                                 )
                                 // Reordering only makes sense over the whole list.
-                                if (search.query.isBlank() && !readOnly) {
+                                if (search.query.isBlank()) {
                                     Icon(
                                         Icons.Rounded.DragHandle,
                                         "Reorder",

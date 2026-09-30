@@ -73,6 +73,8 @@ object TagReader {
             albumKey = albumKey(albumArtist ?: artist, album),
             trackPeak = tag?.replayGain("REPLAYGAIN_TRACK_PEAK"),
             albumPeak = tag?.replayGain("REPLAYGAIN_ALBUM_PEAK"),
+            genre = runCatching { tag?.getAll(FieldKey.GENRE) }.getOrNull().orEmpty()
+                .flatMap(Genres::split).distinct().joinToString("; ").ifEmpty { null },
         )
         return TagData(track, tag.field(FieldKey.LYRICS))
     }

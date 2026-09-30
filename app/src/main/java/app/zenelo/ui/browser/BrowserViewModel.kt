@@ -190,11 +190,13 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                 .collect { tracks -> _state.update { it.copy(tracks = tracks) } }
         }
         viewModelScope.launch { goHome() }
-        // The server's folders appear as a root while logged in.
+        // The server's folders appear as a root while logged in and online (offline its tracks can't play).
         viewModelScope.launch {
-            container.settings.settings.map { it.mstream != null }.distinctUntilChanged().collect { server ->
-                _state.update { it.copy(roots = fs.roots(server)) }
-            }
+            kotlinx.coroutines.flow.combine(container.settings.settings.map { it.mstream != null }, container.network.online) { logged, online -> logged && online }
+                .distinctUntilChanged().collect { server ->
+                    _state.update { it.copy(roots = fs.roots(server)) }
+                    if (!server && _state.value.dir?.let(RemoteFolders::isRemote) == true) goHome()
+                }
         }
     }
 
@@ -382,7 +384,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                     _events.send(BrowserEvent.Message(action = action, text = "Plays next"))
                 }
                 SwipeAction.FAVORITE -> {
-                    val added = favorites.toggle(FavoriteEntity(file.path, FavoriteKind.TRACK, file.title))
+                    val added = favorites.toggle(FavoriteEntity(file.path, FavoriteKind.TRACK, file.title), container.serverLinks.current.copiesOf(file.path))
                     _events.send(BrowserEvent.Message(action = action, text = if (added) "Added to favorites" else "Removed from favorites"))
                 }
                 SwipeAction.ADD_TO_PLAYLIST -> container.playlistPicker.pick(listOf(file.path))
@@ -451,6 +453,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                 }
                 SwipeAction.DELETE_FILE -> {
                     val deleted = withContext(Dispatchers.IO) { files.filter { !MStreamPaths.isRemote(it.path) && File(it.path).delete() } }
+                    container.serverLinks.forgetDeleted(deleted.map(AudioFile::path))
                     _state.update { it.copy(files = it.files - deleted.toSet()) }
                     val failed = files.size - deleted.size
                     _events.send(BrowserEvent.Message("${deleted.size} deleted" + if (failed > 0) " · $failed couldn't be deleted" else ""))
@@ -476,7 +479,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
             val deleted = !MStreamPaths.isRemote(file.path) && File(file.path).delete()
             if (deleted) {
                 _state.update { it.copy(files = it.files - file) }
-                container.mstreamFiles.forgetDeleted(listOf(file.path))
+                container.serverLinks.forgetDeleted(listOf(file.path))
             }
             _events.send(BrowserEvent.Message(if (deleted) "File deleted" else "Could not delete file"))
         }

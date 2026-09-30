@@ -1,6 +1,9 @@
 package app.zenelo.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
+import kotlinx.coroutines.flow.first
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -8,7 +11,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Logout
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material3.Icon
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -60,12 +66,12 @@ import kotlinx.coroutines.launch
  * (synced in the background); "Sync now" and "Log out".
  */
 @Composable
-fun MStreamSettings(onMessage: (String) -> Unit) {
+fun MStreamSettings(onMessage: (String) -> Unit, onOpenPage: (SettingsPage) -> Unit) {
     val container = appContainer()
     val settingsFlow = remember { container.settings.settings }
     val settings by settingsFlow.collectAsStateWithLifecycle(initialValue = ZeneloSettings())
     val account = settings.mstream
-    if (account == null) LoginForm(onMessage) else Connected(onMessage)
+    if (account == null) LoginForm(onMessage) else Connected(onMessage, onOpenPage)
 }
 
 @Composable
@@ -139,7 +145,7 @@ private fun Field(value: String, onChange: (String) -> Unit, label: String, hint
 }
 
 @Composable
-private fun Connected(onMessage: (String) -> Unit) {
+private fun Connected(onMessage: (String) -> Unit, onOpenPage: (SettingsPage) -> Unit) {
     val container = appContainer()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -172,9 +178,20 @@ private fun Connected(onMessage: (String) -> Unit) {
             }
         },
     )
+    SectionHeader("Discovery")
+    SubPageRow("Auto DJ", if (settings.autoDj.enabled) "On · more tracks when the queue ends" else "Off", Icons.Outlined.AutoAwesome) {
+        onOpenPage(SettingsPage.AUTO_DJ)
+    }
+    ListRow(
+        title = "Sonic Path",
+        subtitle = "A path of tracks morphing from one sound to another",
+        onClick = { container.sonicPath.show() },
+        leading = { IconTile(Icons.Outlined.Route, ZeneloColors.Celadon, ZeneloColors.CeladonTint) },
+    )
+    SectionHeader("On the device")
+    SubPageRow("Downloads", downloadsSummary(settings), Icons.Outlined.Download) { onOpenPage(SettingsPage.DOWNLOADS) }
     StreamingSettings(settings)
-    DownloadSettings(settings, onMessage)
-    AutoDjSettings(settings)
+    SectionHeader("Account")
     ListRow(
         title = "Log out",
         subtitle = "The server's tracks leave the library",
@@ -227,10 +244,27 @@ private fun StreamingSettings(settings: ZeneloSettings) {
     )
 }
 
-/** Where downloads go, their progress, and the queue auto-download (cache). */
+/** A row that opens a sub-page. */
 @Composable
-private fun DownloadSettings(settings: ZeneloSettings, onMessage: (String) -> Unit) {
+private fun SubPageRow(title: String, subtitle: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    ListRow(
+        title = title,
+        subtitle = subtitle,
+        onClick = onClick,
+        leading = { IconTile(icon, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+        trailing = { Icon(Icons.Rounded.ChevronRight, null, tint = ZeneloColors.TextMuted, modifier = Modifier.padding(12.dp).size(20.dp)) },
+    )
+}
+
+private fun downloadsSummary(settings: ZeneloSettings): String =
+    if (settings.autoDownload) "Queue auto-download: ${settings.autoDownloadAhead} ahead" else "Folder · queue auto-download off"
+
+/** The Downloads page (a sub-page of mStream's): where downloads go, their progress, and the queue auto-download (cache). */
+@Composable
+fun DownloadsPage(onMessage: (String) -> Unit) {
     val container = appContainer()
+    val settingsFlow = remember { container.settings.settings }
+    val settings by settingsFlow.collectAsStateWithLifecycle(initialValue = ZeneloSettings())
     val repo = container.settings
     val scope = rememberCoroutineScope()
     val downloads = container.mstreamDownloads
@@ -244,7 +278,7 @@ private fun DownloadSettings(settings: ZeneloSettings, onMessage: (String) -> Un
         if (path != null) scope.launch { repo.setDownloadDir(path) }
     }
 
-    SectionHeader("Downloads")
+    SectionHeader("Download folder")
     ListRow(
         title = "Folder",
         subtitle = folder,
@@ -297,21 +331,24 @@ private fun DownloadSettings(settings: ZeneloSettings, onMessage: (String) -> Un
     )
 }
 
-/** Auto DJ (on / off and how it picks) and the way to Sonic Path. */
+/** The Auto DJ page (a sub-page of mStream's): on / off and how it picks. */
 @Composable
-private fun AutoDjSettings(settings: ZeneloSettings) {
+fun AutoDjPage() {
     val container = appContainer()
+    val settingsFlow = remember { container.settings.settings }
+    val settings by settingsFlow.collectAsStateWithLifecycle(initialValue = ZeneloSettings())
     val repo = container.settings
     val scope = rememberCoroutineScope()
     val dj = settings.autoDj
     fun save(value: app.zenelo.data.settings.AutoDjSettings) = scope.launch { repo.setAutoDj(value) }
 
-    SectionHeader("Auto DJ")
     SwitchRow("Auto DJ", "When the queue reaches its last track, the server picks more", dj.enabled) { on ->
         container.autoDj.setEnabled(on) { container.player.playFiles(it) }
     }
+    SectionHeader("Picks")
     ChoiceRow("Minimum rating", dj.minRating, listOf(0, 2, 4, 6, 8, 10), { if (it == 0) "Any track" else "Rated ${it / 2}+ of 5" }) { save(dj.copy(minRating = it)) }
     ChoiceRow("Tracks per pick", dj.batch, listOf(1, 3, 5, 10), { "$it" }) { save(dj.copy(batch = it)) }
+    SectionHeader("Mixing")
     SwitchRow("Similar artists", "Prefer artists like the playing one (Last.fm on the server)", dj.similarArtists) { save(dj.copy(similarArtists = it)) }
     SwitchRow("Keep the tempo", "BPM close to the session's, or half / double", dj.bpmContinuity) { save(dj.copy(bpmContinuity = it)) }
     if (dj.bpmContinuity) {
@@ -326,11 +363,153 @@ private fun AutoDjSettings(settings: ZeneloSettings) {
         Text("Similarity at least ${(similarity * 100).roundToInt()}%", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp))
         ZeneloSlider(similarity, { similarity = (it * 20).roundToInt() / 20f }, 0.3f..0.9f, Modifier.padding(horizontal = 20.dp), onValueChangeFinished = { save(dj.copy(sonicMinSimilarity = similarity)) })
     }
-    ListRow(
-        title = "Sonic Path",
-        subtitle = "A path of tracks morphing from one sound to another",
-        onClick = { container.sonicPath.show() },
-        leading = { IconTile(Icons.Outlined.Route, ZeneloColors.Celadon, ZeneloColors.CeladonTint) },
+    if (dj.sonic) {
+        ChoiceRow("Sound seed", dj.sonicLocked, listOf(false, true), { if (it) "Locked · the session's first track" else "Rolling · the last picks" }) { save(dj.copy(sonicLocked = it)) }
+    }
+    SectionHeader("Filters")
+    AutoDjFilters(dj) { save(it) }
+}
+
+/** Auto DJ's filters, as in the server's web app: genres, track length, skip words, libraries. */
+@Composable
+private fun AutoDjFilters(dj: app.zenelo.data.settings.AutoDjSettings, save: (app.zenelo.data.settings.AutoDjSettings) -> Unit) {
+    val container = appContainer()
+    var pickingGenres by remember { mutableStateOf(false) }
+    var editingWords by remember { mutableStateOf(false) }
+    var pickingLibraries by remember { mutableStateOf(false) }
+    val librariesFlow = remember { container.db.remoteTracks().observeCount() }
+    val trackCount by librariesFlow.collectAsStateWithLifecycle(initialValue = 0)
+    val libraries by androidx.compose.runtime.produceState(emptyList<String>(), trackCount) {
+        value = container.db.remoteTracks().paths().map { app.zenelo.mstream.MStreamPaths.serverPath(it).substringBefore('/') }.distinct().sorted()
+    }
+
+    SwitchRow("Genres", if (dj.genres.isEmpty()) "Only or all but the genres you pick" else (if (dj.genresExcluded) "All but " else "Only ") + dj.genres.joinToString(", "), dj.genresEnabled) {
+        save(dj.copy(genresEnabled = it))
+        if (it && dj.genres.isEmpty()) pickingGenres = true
+    }
+    if (dj.genresEnabled) {
+        ChoiceRow("Genre filter", dj.genresExcluded, listOf(false, true), { if (it) "All but these" else "Only these" }) { save(dj.copy(genresExcluded = it)) }
+        ListRow(title = "Pick genres…", subtitle = "${dj.genres.size} picked", onClick = { pickingGenres = true })
+    }
+    SwitchRow("Track length", lengthLabel(dj), dj.lengthEnabled) { save(dj.copy(lengthEnabled = it)) }
+    if (dj.lengthEnabled) {
+        ChoiceRow("At least", dj.minLengthS, listOf(0, 60, 120, 180, 240), { if (it == 0) "Any" else "${it / 60} min" }) { save(dj.copy(minLengthS = it)) }
+        ChoiceRow("At most", dj.maxLengthS, listOf(0, 240, 300, 420, 600, 900), { if (it == 0) "Any" else "${it / 60} min" }) { save(dj.copy(maxLengthS = it)) }
+        SwitchRow("Unknown length", "Let tracks the server hasn't measured through", dj.allowUnknownLength) { save(dj.copy(allowUnknownLength = it)) }
+    }
+    SwitchRow("Skip words", if (dj.skipWords.isEmpty()) "Skip picks with words like \"live\" or \"remix\"" else dj.skipWords.joinToString(", "), dj.skipWordsEnabled) {
+        save(dj.copy(skipWordsEnabled = it))
+        if (it && dj.skipWords.isEmpty()) editingWords = true
+    }
+    if (dj.skipWordsEnabled) ListRow(title = "Edit words…", subtitle = "${dj.skipWords.size} words", onClick = { editingWords = true })
+    if (libraries.size > 1) {
+        ListRow(
+            title = "Libraries",
+            subtitle = dj.libraries.filter { it in libraries }.ifEmpty { libraries }.let { if (it.size == libraries.size) "All" else it.joinToString(", ") },
+            onClick = { pickingLibraries = true },
+        )
+    }
+
+    if (pickingGenres) {
+        val genres by androidx.compose.runtime.produceState<List<Pair<String, Int>>?>(null) {
+            val account = container.settings.settings.first().mstream
+            value = account?.let { runCatching { container.mstream.genres(it) }.getOrDefault(emptyList()) }.orEmpty()
+        }
+        PickDialog(
+            title = "Genres",
+            choices = genres?.map { it.first },
+            labels = genres?.associate { (name, count) -> name to "$name · $count" }.orEmpty(),
+            picked = dj.genres,
+            empty = "The server has no genres (or couldn't be reached).",
+            onDismiss = { pickingGenres = false },
+        ) { save(dj.copy(genres = it, genresEnabled = it.isNotEmpty() && dj.genresEnabled)) }
+    }
+    if (pickingLibraries) {
+        PickDialog(
+            title = "Libraries",
+            choices = libraries,
+            labels = emptyMap(),
+            picked = dj.libraries.ifEmpty { libraries },
+            empty = "",
+            onDismiss = { pickingLibraries = false },
+        ) { save(dj.copy(libraries = if (it.size == libraries.size) emptyList() else it)) }
+    }
+    if (editingWords) {
+        var text by remember { mutableStateOf(dj.skipWords.joinToString(", ")) }
+        AlertDialog(
+            onDismissRequest = { editingWords = false },
+            containerColor = ZeneloColors.Card,
+            title = { Text("Skip words") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Comma-separated; matched in the title, artist, album and path.", style = MaterialTheme.typography.bodySmall, color = ZeneloColors.TextMuted)
+                    OutlinedTextField(value = text, onValueChange = { text = it }, placeholder = { Text("live, remix, acapella") })
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    editingWords = false
+                    val words = text.split(',', '\n').map(String::trim).filter(String::isNotEmpty).distinct()
+                    save(dj.copy(skipWords = words, skipWordsEnabled = words.isNotEmpty() && dj.skipWordsEnabled))
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { editingWords = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+private fun lengthLabel(dj: app.zenelo.data.settings.AutoDjSettings): String = when {
+    dj.minLengthS > 0 && dj.maxLengthS > 0 -> "${dj.minLengthS / 60}–${dj.maxLengthS / 60} min"
+    dj.minLengthS > 0 -> "At least ${dj.minLengthS / 60} min"
+    dj.maxLengthS > 0 -> "At most ${dj.maxLengthS / 60} min"
+    else -> "Only tracks of a length you pick"
+}
+
+/** Several of [choices] (null: loading); [onPick] gets the picked ones in [choices]' order. */
+@Composable
+private fun PickDialog(
+    title: String,
+    choices: List<String>?,
+    labels: Map<String, String>,
+    picked: List<String>,
+    empty: String,
+    onDismiss: () -> Unit,
+    onPick: (List<String>) -> Unit,
+) {
+    var chosen by remember(picked) { mutableStateOf(picked.toSet()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = ZeneloColors.Card,
+        title = { Text(title) },
+        text = {
+            when {
+                choices == null -> CircularProgressIndicator(color = ZeneloColors.Mustard, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+                choices.isEmpty() -> Text(empty, style = MaterialTheme.typography.bodyMedium, color = ZeneloColors.TextMuted)
+                else -> androidx.compose.foundation.lazy.LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                    items(choices.size) { i ->
+                        val c = choices[i]
+                        androidx.compose.foundation.layout.Row(
+                            Modifier.fillMaxWidth().clickable { chosen = if (c in chosen) chosen - c else chosen + c }.padding(vertical = 4.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                        ) {
+                            androidx.compose.material3.Checkbox(
+                                checked = c in chosen,
+                                onCheckedChange = { chosen = if (it) chosen + c else chosen - c },
+                                colors = androidx.compose.material3.CheckboxDefaults.colors(checkedColor = ZeneloColors.Mustard, checkmarkColor = ZeneloColors.OnMustard),
+                            )
+                            Text(labels[c] ?: c, style = MaterialTheme.typography.bodyLarge)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = !choices.isNullOrEmpty(), onClick = {
+                onDismiss()
+                onPick(choices.orEmpty().filter { it in chosen })
+            }) { Text("Done") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 

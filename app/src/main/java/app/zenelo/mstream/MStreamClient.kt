@@ -35,6 +35,7 @@ data class ManifestEntry(
     val modified: Long,
     val hash: String?,
     val format: String?,
+    val genres: List<String> = emptyList(),
 )
 
 data class ManifestPage(val revision: String?, val scanning: Boolean, val next: Int?, val entries: List<ManifestEntry>)
@@ -49,6 +50,7 @@ data class ServerSong(
     val artist: String?,
     val bpm: Double?,
     val musicalKey: String?,
+    val album: String? = null,
 )
 
 /** One `db/random-songs` answer: the picks and the server's round-trip cursor of served ids. */
@@ -173,6 +175,29 @@ class MStreamClient(base: OkHttpClient) {
         Unit
     }
 
+    /**
+     * "Now playing" for the server's own now-playing view (and Last.fm's, if linked): kept there
+     * for 10 min per [sessionId], so a long track is announced again.
+     */
+    suspend fun nowPlaying(account: MStreamAccount, serverPath: String, sessionId: String) = withContext(Dispatchers.IO) {
+        val base = "${account.url}/".toHttpUrlOrNull() ?: throw MStreamException("Bad address")
+        post(base, "api/v1/stats/now-playing", account.token, JSONObject().put("filePath", serverPath).put("sessionId", sessionId))
+        Unit
+    }
+
+    /** The server's genres with their track counts, as it names them (for Auto DJ's genre filter). */
+    suspend fun genres(account: MStreamAccount): List<Pair<String, Int>> = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url(url(account, "api/v1/db/genres")).header("x-access-token", account.token).build()
+        client.newCall(request).execute().use { r ->
+            val text = r.body?.string().orEmpty()
+            if (!r.isSuccessful) throw error(r.code, text)
+            val array = JSONObject(text).optJSONArray("genres") ?: JSONArray()
+            List(array.length()) { array.getJSONObject(it) }.mapNotNull { o ->
+                o.optString("name").takeIf { it.isNotBlank() }?.let { it to o.optInt("track_count") }
+            }
+        }
+    }
+
     /** The user's ratings (0–10) of rated tracks: server path → rating. */
     suspend fun rated(account: MStreamAccount): Map<String, Int> = withContext(Dispatchers.IO) {
         val request = Request.Builder().url(url(account, "api/v1/db/rated")).header("x-access-token", account.token).build()
@@ -246,6 +271,25 @@ class MStreamClient(base: OkHttpClient) {
         }.getOrDefault(emptyList())
     }
 
+    /** Tracks that sound like [serverPath] (the server's audio embeddings), closest first; 403 = discovery off. */
+    suspend fun similarTracks(account: MStreamAccount, serverPath: String, limit: Int): List<ServerSong> = withContext(Dispatchers.IO) {
+        val base = "${account.url}/".toHttpUrlOrNull() ?: throw MStreamException("Bad address")
+        val json = post(base, "api/v1/discovery/local/similar/tracks", account.token, JSONObject().put("filePath", serverPath).put("limit", limit)) as JSONObject
+        if (json.optBoolean("notAnalyzed")) throw MStreamException("The server hasn't analyzed this track yet", 409)
+        val rows = json.optJSONArray("results") ?: JSONArray()
+        List(rows.length()) { parseSong(rows.getJSONObject(it)) }
+    }
+
+    /** Library artists that sound like [artist] (the server's audio embeddings); empty if it can't tell. */
+    suspend fun soundAlikeArtists(account: MStreamAccount, artist: String, limit: Int = 12): List<String> = withContext(Dispatchers.IO) {
+        val base = "${account.url}/".toHttpUrlOrNull() ?: throw MStreamException("Bad address")
+        runCatching {
+            val json = post(base, "api/v1/discovery/local/similar/artists", account.token, JSONObject().put("artist", artist).put("limit", limit)) as JSONObject
+            val rows = json.optJSONArray("results") ?: JSONArray()
+            List(rows.length()) { rows.getJSONObject(it).optString("artist") }.filter { it.isNotBlank() }
+        }.getOrDefault(emptyList())
+    }
+
     /**
      * Sonic Path (`discovery/local/path`): [length] songs (4–32, ends included) that morph from
      * [start] to [end] by the server's audio embeddings. 403 = discovery is off on the server.
@@ -261,6 +305,26 @@ class MStreamClient(base: OkHttpClient) {
             startNotAnalyzed = notAnalyzed?.optBoolean("start") == true,
             endNotAnalyzed = notAnalyzed?.optBoolean("end") == true,
         )
+    }
+
+    /** Creates or overwrites the user's playlist [name] with [serverPaths]. */
+    suspend fun savePlaylist(account: MStreamAccount, name: String, serverPaths: List<String>) = withContext(Dispatchers.IO) {
+        val base = "${account.url}/".toHttpUrlOrNull() ?: throw MStreamException("Bad address")
+        post(base, "api/v1/playlist/save", account.token, JSONObject().put("title", name).put("songs", JSONArray(serverPaths)))
+        Unit
+    }
+
+    /** Renames a playlist; 400 when [newName] is taken. */
+    suspend fun renamePlaylist(account: MStreamAccount, oldName: String, newName: String) = withContext(Dispatchers.IO) {
+        val base = "${account.url}/".toHttpUrlOrNull() ?: throw MStreamException("Bad address")
+        post(base, "api/v1/playlist/rename", account.token, JSONObject().put("oldName", oldName).put("newName", newName))
+        Unit
+    }
+
+    suspend fun deletePlaylist(account: MStreamAccount, name: String) = withContext(Dispatchers.IO) {
+        val base = "${account.url}/".toHttpUrlOrNull() ?: throw MStreamException("Bad address")
+        post(base, "api/v1/playlist/delete", account.token, JSONObject().put("playlistname", name))
+        Unit
     }
 
     /** The server's transcoded stream of a track (`/transcode/<vpath>/<rel>`). */
@@ -337,6 +401,7 @@ class MStreamClient(base: OkHttpClient) {
                 artist = str("artist"),
                 bpm = if (m.isNull("bpm") || !m.has("bpm")) null else m.optDouble("bpm").takeIf { it.isFinite() && it > 0 },
                 musicalKey = str("musical-key"),
+                album = str("album"),
             )
         }
 
@@ -361,6 +426,7 @@ class MStreamClient(base: OkHttpClient) {
                 modified = o.optLong("modified", 0),
                 hash = str(o, "audio-hash") ?: str(o, "hash"),
                 format = str(o, "format"),
+                genres = m.optJSONArray("genres")?.let { a -> List(a.length()) { a.optString(it) }.filter { it.isNotBlank() } }.orEmpty(),
             )
         }
     }

@@ -120,6 +120,8 @@ import app.zenelo.ui.library.AlbumScreen
 import app.zenelo.ui.library.AlbumsScreen
 import app.zenelo.ui.library.ArtistScreen
 import app.zenelo.ui.library.ArtistsScreen
+import app.zenelo.ui.library.GenresScreen
+import app.zenelo.ui.library.GenreScreen
 import app.zenelo.ui.library.LibraryEvent
 import app.zenelo.ui.library.LibraryNav
 import app.zenelo.ui.library.LibraryViewModel
@@ -147,12 +149,14 @@ private object Routes {
     const val ALBUM = "album/{key}"
     const val ARTIST = "artist/{key}"
     const val PLAYLIST = "playlist/{id}"
+    const val GENRE = "genre/{key}"
     const val SONIC_PATH = "sonicpath"
 
     fun section(section: Section) = "section/${section.name}"
     fun album(key: String) = "album/${Uri.encode(key)}"
     fun artist(key: String) = "artist/${Uri.encode(key)}"
     fun playlist(id: Long) = "playlist/$id"
+    fun genre(key: String) = "genre/${Uri.encode(key)}"
     fun settingsPage(page: SettingsPage) = "settings/page/${page.name}"
 }
 
@@ -280,6 +284,7 @@ private fun MainContent(settings: ZeneloSettings) {
         LibraryNav(
             onOpenAlbum = { key -> nav.navigate(Routes.album(key)) },
             onOpenArtist = { key -> nav.navigate(Routes.artist(key)) },
+            onOpenGenre = { key -> nav.navigate(Routes.genre(key)) },
         )
     }
     val openPlaylist: (Long) -> Unit = { id -> nav.navigate(Routes.playlist(id)) }
@@ -317,6 +322,7 @@ private fun MainContent(settings: ZeneloSettings) {
             Section.ARTISTS -> ArtistsScreen(libraryViewModel, libraryNav, onBack)
             Section.TRACKS -> TracksScreen(libraryViewModel, onBack)
             Section.RECENT -> RecentScreen(libraryViewModel, onBack)
+            Section.GENRES -> GenresScreen(libraryViewModel, libraryNav, onBack)
         }
     }
 
@@ -359,6 +365,9 @@ private fun MainContent(settings: ZeneloSettings) {
                 composable(Routes.ALBUM) { entry ->
                     AlbumScreen(libraryViewModel, entry.arguments?.getString("key").orEmpty(), libraryNav) { nav.popBackStack() }
                 }
+                composable(Routes.GENRE) { entry ->
+                    GenreScreen(libraryViewModel, entry.arguments?.getString("key").orEmpty()) { nav.popBackStack() }
+                }
                 composable(Routes.ARTIST) { entry ->
                     ArtistScreen(libraryViewModel, entry.arguments?.getString("key").orEmpty(), libraryNav) { nav.popBackStack() }
                 }
@@ -377,6 +386,7 @@ private fun MainContent(settings: ZeneloSettings) {
                             onOpenSwipeSettings = { nav.navigate(Routes.SWIPE_SETTINGS) },
                             onCustomizeHome = { nav.navigate(Routes.CUSTOMIZE_HOME) },
                             onCustomizeTabs = { nav.navigate(Routes.CUSTOMIZE_TABS) },
+                            onOpenPage = { nav.navigate(Routes.settingsPage(it)) },
                             onMessage = libraryViewModel::showMessage,
                         )
                     }

@@ -6,6 +6,7 @@ import androidx.compose.material.icons.outlined.Album
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.Person
@@ -25,4 +26,5 @@ val Section.icon: ImageVector
         Section.ARTISTS -> Icons.Outlined.Person
         Section.TRACKS -> Icons.Outlined.MusicNote
         Section.RECENT -> Icons.Outlined.History
+        Section.GENRES -> Icons.Outlined.Category
     }

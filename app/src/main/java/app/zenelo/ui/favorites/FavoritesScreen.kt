@@ -46,6 +46,7 @@ import app.zenelo.ui.components.ScreenTitle
 import app.zenelo.ui.components.SearchField
 import app.zenelo.ui.components.TrackThumb
 import app.zenelo.ui.components.appContainer
+import app.zenelo.ui.components.rememberPlayableNow
 import app.zenelo.ui.theme.ZeneloColors
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -71,8 +72,15 @@ fun FavoritesScreen(
     var searching by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
 
-    val visible = remember(favorites, query) {
-        if (query.isBlank()) favorites else favorites.filter { it.title.contains(query, true) || it.subtitle?.contains(query, true) == true }
+    // Offline, server tracks with no copy here leave the list (like the library).
+    val playable = rememberPlayableNow()
+    val links by container.serverLinks.links.collectAsStateWithLifecycle()
+    val visible = remember(favorites, query, playable, links) {
+        // A song liked under both its local and server copy is one row, the local copy.
+        val now = favorites.map { if (it.kind == FavoriteKind.TRACK) it.copy(path = links.canonical(it.path)) else it }
+            .distinctBy { it.path }
+            .filter { it.kind != FavoriteKind.TRACK || playable(it.path) }
+        if (query.isBlank()) now else now.filter { it.title.contains(query, true) || it.subtitle?.contains(query, true) == true }
     }
     val tracks = remember(visible) { visible.filter { it.kind == FavoriteKind.TRACK }.map { AudioFile.forPath(it.path) } }
     // An M3U / M3U8 file's tracks become favorites (any file type: pickers rarely know M3U).
@@ -105,7 +113,7 @@ fun FavoritesScreen(
                     SearchField(query, { query = it }, "Search favorites", Modifier.weight(1f))
                     IconButton(onClick = { searching = false; query = "" }) { Icon(Icons.Rounded.Close, "Close search") }
                 } else {
-                    ScreenTitle("Favorites", Modifier.weight(1f), count = favorites.size)
+                    ScreenTitle("Favorites", Modifier.weight(1f), count = visible.size)
                     IconButton(onClick = { importer.launch(arrayOf("*/*")) }) {
                         Icon(Icons.Outlined.FileOpen, "Import M3U playlist into favorites", tint = ZeneloColors.TextSecondary)
                     }
@@ -142,7 +150,7 @@ fun FavoritesScreen(
                             }
                         },
                         trailing = {
-                            IconButton(onClick = { scope.launch { dao.delete(favorite.path) } }, modifier = Modifier.size(36.dp)) {
+                            IconButton(onClick = { scope.launch { dao.deletePaths(listOf(favorite.path) + links.copiesOf(favorite.path)) } }, modifier = Modifier.size(36.dp)) {
                                 Icon(Icons.Rounded.Favorite, "Remove from favorites", tint = ZeneloColors.Celadon, modifier = Modifier.size(20.dp))
                             }
                         },

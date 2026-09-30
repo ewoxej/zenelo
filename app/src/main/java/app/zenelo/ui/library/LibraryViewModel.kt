@@ -8,6 +8,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import app.zenelo.AppContainer
 import app.zenelo.data.db.AlbumRow
 import app.zenelo.data.db.ArtistRow
+import app.zenelo.data.db.GenreRow
 import app.zenelo.data.db.FavoriteEntity
 import app.zenelo.data.db.FavoriteKind
 import app.zenelo.data.db.RecentPlay
@@ -77,6 +78,9 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
     val artists: StateFlow<List<ArtistRow>?> = combine(library.artists, sortOf(SortPage.ARTISTS), LibrarySort::artists)
         .flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    val genres: StateFlow<List<GenreRow>?> = combine(library.genres, sortOf(SortPage.GENRES), LibrarySort::genres)
+        .flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     val tracks: StateFlow<List<TrackEntity>?> = combine(library.allTracks, sortOf(SortPage.TRACKS), hidden) { all, order, gone ->
         LibrarySort.tracks(if (gone.isEmpty()) all else all.filter { it.path !in gone }, order)
     }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -98,6 +102,8 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
     fun albumTracks(key: String) = library.albumTracks(key)
 
     fun artistTracks(key: String) = library.artistTracks(key)
+
+    fun genreTracks(key: String) = library.genreTracks(key)
 
     fun setSort(page: SortPage, order: SortOrder) {
         viewModelScope.launch { container.settings.setSort(page, order) }
@@ -129,6 +135,19 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
     fun playArtists(artists: List<ArtistRow>, shuffle: Boolean) {
         viewModelScope.launch { play(filesOfArtists(artists), shuffle = shuffle) }
     }
+
+    fun playGenres(genres: List<GenreRow>, shuffle: Boolean) {
+        viewModelScope.launch { play(filesOfGenres(genres), shuffle = shuffle) }
+    }
+
+    /** Selected genres: queue / play next / add to playlist their tracks (no favorites for genres). */
+    fun onGenres(genres: List<GenreRow>, action: SwipeAction) {
+        if (genres.isEmpty()) return
+        viewModelScope.launch { queue(filesOfGenres(genres), action) }
+    }
+
+    private suspend fun filesOfGenres(genres: List<GenreRow>) =
+        genres.flatMap { library.genreTracks(it.key).first() }.distinctBy { it.path }.map(TrackEntity::toAudioFile)
 
     private suspend fun filesOfAlbums(albums: List<AlbumRow>) =
         albums.flatMap { library.albumTracks(it.key).first() }.map(TrackEntity::toAudioFile)
@@ -170,7 +189,7 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
                     _events.send(LibraryEvent.Message("Plays next", action = action))
                 }
                 SwipeAction.FAVORITE -> {
-                    val added = favorites.toggle(FavoriteEntity(file.path, FavoriteKind.TRACK, title, artist))
+                    val added = favorites.toggle(FavoriteEntity(file.path, FavoriteKind.TRACK, title, artist), container.serverLinks.current.copiesOf(file.path))
                     _events.send(LibraryEvent.Message(if (added) "Added to favorites" else "Removed from favorites", action = action))
                 }
                 SwipeAction.ADD_TO_PLAYLIST -> container.playlistPicker.pick(listOf(file.path))
@@ -249,7 +268,7 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
             val deleted = withContext(Dispatchers.IO) { files.filter { !MStreamPaths.isRemote(it.path) && File(it.path).delete() } }
             // The index follows on the next scan; until then keep them out of the lists.
             hidden.update { it + deleted.map(AudioFile::path) }
-            container.mstreamFiles.forgetDeleted(deleted.map(AudioFile::path))
+            container.serverLinks.forgetDeleted(deleted.map(AudioFile::path))
             withContext(Dispatchers.IO) { container.db.tracks().delete(deleted.map(AudioFile::path)) }
             val failed = files.size - deleted.size
             _events.send(

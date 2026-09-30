@@ -35,6 +35,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.compositeOver
@@ -68,6 +69,8 @@ import app.zenelo.ui.components.CloudMark
 import app.zenelo.ui.components.appContainer
 import app.zenelo.ui.components.DownloadMark
 import app.zenelo.ui.components.rememberDownloaded
+import app.zenelo.ui.components.UNPLAYABLE_ALPHA
+import app.zenelo.ui.components.rememberUnplayable
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -339,13 +342,16 @@ fun LibraryRow(
     subtitleMono: Boolean = false,
     /** Cloud mark: on the mStream server only. A track row's cover path is the track itself. */
     cloud: Boolean = MStreamPaths.isRemote(coverPath) && !rememberDownloaded(coverPath),
-    /** Download mark: a local copy "Download" made of a server track, or a server track that has one. */
-    downloaded: Boolean = appContainer().mstreamFiles.isDownload(coverPath) || rememberDownloaded(coverPath),
+    /** Download mark: a local file with a server copy (downloaded or matched), or a server track with a local one. */
+    downloaded: Boolean = rememberDownloaded(coverPath),
+    /** Offline and only on the server (not cached): faded — it can't play until the network is back. */
+    unplayable: Boolean = rememberUnplayable(coverPath, remote = cloud),
     trailing: @Composable () -> Unit = {},
 ) {
     Row(
         modifier
             .fillMaxWidth()
+            .alpha(if (unplayable) UNPLAYABLE_ALPHA else 1f)
             .background(if (selected) ZeneloColors.MustardTint.compositeOver(ZeneloColors.Background) else ZeneloColors.Background)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .heightIn(min = 52.dp)

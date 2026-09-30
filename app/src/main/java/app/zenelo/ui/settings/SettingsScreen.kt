@@ -115,12 +115,16 @@ private fun rememberSettings(): ZeneloSettings {
 }
 
 /** The pages Settings opens (the main screen lists them). */
-enum class SettingsPage(val title: String, val summary: String, val icon: ImageVector) {
+enum class SettingsPage(val title: String, val summary: String, val icon: ImageVector, val listed: Boolean = true) {
     PLAYBACK("Playback", "Shuffle · normalization · crossfade", Icons.Outlined.GraphicEq),
     INTERFACE("Interface", "Bottom bar · Home · swipes · lists", Icons.Outlined.Tune),
     OTHER("Other", "Covers & lyrics · library · backup", Icons.Outlined.Settings),
     MSTREAM("mStream", "Stream your server's library", Icons.Outlined.Cloud),
     ABOUT("About", "Version · author", Icons.Outlined.Info),
+
+    /** Sub-pages of mStream's, not on the main list. */
+    AUTO_DJ("Auto DJ", "", Icons.Outlined.Cloud, listed = false),
+    DOWNLOADS("Downloads", "", Icons.Outlined.Cloud, listed = false),
 }
 
 @Composable
@@ -130,7 +134,7 @@ fun SettingsScreen(onOpenPage: (SettingsPage) -> Unit, onBack: (() -> Unit)? = n
             if (onBack != null) BackButton(onBack)
             ScreenTitle("Settings", Modifier.padding(start = if (onBack != null) 0.dp else 20.dp, top = 12.dp, bottom = 12.dp))
         }
-        SettingsPage.entries.forEach { page ->
+        SettingsPage.entries.filter { it.listed }.forEach { page ->
             ListRow(
                 title = page.title,
                 subtitle = page.summary,
@@ -150,6 +154,7 @@ fun SettingsPageScreen(
     onOpenSwipeSettings: () -> Unit,
     onCustomizeHome: () -> Unit,
     onCustomizeTabs: () -> Unit,
+    onOpenPage: (SettingsPage) -> Unit,
     onMessage: (String) -> Unit,
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -158,7 +163,9 @@ fun SettingsPageScreen(
             SettingsPage.PLAYBACK -> PlaybackSettings()
             SettingsPage.INTERFACE -> InterfaceSettings(onOpenSwipeSettings, onCustomizeHome, onCustomizeTabs)
             SettingsPage.OTHER -> OtherSettings(onMessage)
-            SettingsPage.MSTREAM -> MStreamSettings(onMessage)
+            SettingsPage.MSTREAM -> MStreamSettings(onMessage, onOpenPage)
+            SettingsPage.AUTO_DJ -> AutoDjPage()
+            SettingsPage.DOWNLOADS -> DownloadsPage(onMessage)
             SettingsPage.ABOUT -> AboutPage()
         }
         Spacer(Modifier.height(16.dp))

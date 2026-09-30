@@ -26,8 +26,16 @@ data class PlaylistEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val createdAt: Long = System.currentTimeMillis(),
-    /** A copy of one of the user's playlists on the mStream server (read-only here, replaced on sync). */
+    /**
+     * One of the user's playlists on the mStream server. Edited here like any playlist: [dirty] until
+     * the next sync saves it there (as [serverName] renamed to [name] if they differ), [deleted] a
+     * tombstone until the server's copy is deleted. Clean ones are replaced by the server's on sync.
+     */
     @ColumnInfo(defaultValue = "0") val remote: Boolean = false,
+    /** Its name on the server as last synced (null: not there yet — created here). */
+    val serverName: String? = null,
+    @ColumnInfo(defaultValue = "0") val dirty: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val deleted: Boolean = false,
 )
 
 @Entity(
@@ -99,6 +107,8 @@ data class TrackEntity(
     /** ReplayGain peaks (linear sample peak, 1.0 = full scale); bound the gain so it doesn't clip. */
     val trackPeak: Float? = null,
     val albumPeak: Float? = null,
+    /** Genre tag(s) as read, several joined by "; " (see [app.zenelo.library.Genres]). */
+    val genre: String? = null,
 ) {
     val extension: String get() = path.substringAfterLast('.', "").lowercase()
 }
@@ -189,6 +199,16 @@ data class ArtistRow(
     val coverPath: String,
 )
 
+/** A genre of the library pages: tracks tagged with it (a tag may name several, see `Genres`). */
+data class GenreRow(
+    val key: String,
+    val name: String,
+    val tracks: Int,
+    val artists: Int,
+    val durationMs: Long,
+    val coverPath: String,
+)
+
 data class DirStats(val dir: String, val tracks: Int, val durationMs: Long)
 
 /**
@@ -215,6 +235,18 @@ data class RemoteTrackEntity(
     val rating: Int?,
     val hasLyrics: Boolean,
     val hash: String?,
+)
+
+/**
+ * A local file that is also on the mStream server: a download ([download]), or a file of the
+ * user's own that matched a server track (`LibraryMerge.twins`). Kept once found — tag edits
+ * don't undo it — until either side leaves the index (see `ServerLinks`).
+ */
+@Entity(tableName = "server_links", indices = [Index(value = ["serverPath"], unique = true)])
+data class ServerLinkEntity(
+    @PrimaryKey val localPath: String,
+    val serverPath: String,
+    val download: Boolean,
 )
 
 /** A rating change for a server track not yet accepted by the server (sent on the next sync). */

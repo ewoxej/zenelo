@@ -5,7 +5,6 @@ import app.zenelo.data.db.ZeneloDatabase
 import app.zenelo.data.settings.AutoDjSettings
 import app.zenelo.data.settings.SettingsRepository
 import app.zenelo.library.AudioFile
-import app.zenelo.library.LibraryMerge
 import app.zenelo.player.PlayQueue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -37,13 +36,15 @@ import kotlin.math.roundToInt
  * - sound: the last [SONIC_HISTORY] picks (else the playing track) as the `similarTo` seed;
  * - similar artists of the playing track (Last.fm, through the server).
  * A track the user started (not a pick) begins a new session: tempo, key and sound anchors reset.
- * Picks that have a local copy (see [LibraryMerge.twins]) are queued as that copy.
+ * Picks that have a local copy (see [ServerLinks]) are queued as that copy.
  */
 class MStreamAutoDj(
     private val db: ZeneloDatabase,
     private val settings: SettingsRepository,
     private val client: MStreamClient,
     private val queue: PlayQueue,
+    private val links: ServerLinks,
+    private val online: kotlinx.coroutines.flow.Flow<Boolean>,
     private val scope: CoroutineScope,
 ) {
     private val _busy = MutableStateFlow(false)
@@ -62,6 +63,10 @@ class MStreamAutoDj(
     private val bpms = ArrayDeque<Double>()
     private var camelot: String? = null
     private val sonic = ArrayDeque<String>()
+    private var lockedSeed: String? = null
+
+    /** The server's libraries (vpaths), for `ignoreVPaths`: read from the index before each pick. */
+    private var libraries: Set<String> = emptySet()
 
     /** Queued picks by the path they were queued as; [counted] = already taken into the anchors. */
     private val picks = HashMap<String, ServerSong>()
@@ -79,10 +84,11 @@ class MStreamAutoDj(
         scope.launch {
             // Current track and how many are left (tag refreshes of the queue don't count).
             val position = queue.state.map { q -> if (q.total == 0) null else q.pathAt(0) to q.size }.distinctUntilChanged()
-            combine(position, settings.settings.map { it.autoDj to it.mstream }.distinctUntilChanged()) { q, s -> q to s }
-                .collectLatest { (q, s) ->
+            combine(position, settings.settings.map { it.autoDj to it.mstream }.distinctUntilChanged(), online) { q, s, online -> Triple(q, s, online) }
+                .collectLatest { (q, s, online) ->
                     val (dj, account) = s
-                    if (!dj.enabled || account == null || q == null) return@collectLatest
+                    // Offline: nothing to ask, and no message; asked again when the network is back.
+                    if (!dj.enabled || account == null || q == null || !online) return@collectLatest
                     val (current, left) = q
                     mutex.withLock { onCurrent(current) }
                     // The last track is playing: time for more (the web app asks at the same point).
@@ -134,8 +140,10 @@ class MStreamAutoDj(
         }
         try {
             val all = db.tracks().observeAll().first()
-            val twins = LibraryMerge.twins(all)
-            val playing = current?.let { serverPathOf(it, twins) }
+            libraries = all.asSequence().filter { MStreamPaths.isRemote(it.path) }.map { MStreamPaths.serverPath(it.path).substringBefore('/') }.toSet()
+            val links = this.links.current
+            val twins = links.localCopies
+            val playing = links.serverOf(current)?.let(MStreamPaths::serverPath)
             val playingTags = if (playing != null && (dj.bpmContinuity || dj.harmonicMixing)) client.song(account, playing) else null
             val artist = current?.let { path -> all.firstOrNull { it.path == path } }?.let { it.artist ?: it.albumArtist }
             val similar = if (dj.similarArtists && artist != null) client.similarArtists(account, artist) else emptyList()
@@ -163,7 +171,8 @@ class MStreamAutoDj(
                 if (answer.ignoreList.isNotEmpty()) cursor = answer.ignoreList
                 if (answer.songs.isEmpty()) break
                 last = answer.songs
-                val fit = answer.songs.filterNot { AutoDjRules.blocked(it, refBpm, dj.bpmTolerance, keys) }
+                val words = if (dj.skipWordsEnabled) dj.skipWords else emptyList()
+                val fit = answer.songs.filterNot { AutoDjRules.blocked(it, refBpm, dj.bpmTolerance, keys) || AutoDjRules.hasSkipWord(it, words) }
                 if (fit.isNotEmpty()) {
                     chosen = fit
                     break
@@ -219,8 +228,22 @@ class MStreamAutoDj(
         }
         if (similar.isNotEmpty()) body.put("artists", JSONArray(similar))
         if (artists.isNotEmpty()) body.put("ignoreArtists", JSONArray(artists.toList()))
+        if (dj.genresEnabled && dj.genres.isNotEmpty()) {
+            body.put("genres", JSONArray(dj.genres)).put("genreMode", if (dj.genresExcluded) "blacklist" else "whitelist")
+        }
+        if (dj.lengthEnabled && (dj.minLengthS > 0 || dj.maxLengthS > 0)) {
+            if (dj.minLengthS > 0) body.put("minDuration", dj.minLengthS)
+            if (dj.maxLengthS > 0) body.put("maxDuration", dj.maxLengthS)
+            body.put("allowUnknownDuration", dj.allowUnknownLength)
+        }
+        if (dj.libraries.isNotEmpty()) {
+            val skipped = libraries - dj.libraries.toSet()
+            if (skipped.isNotEmpty()) body.put("ignoreVPaths", JSONArray(skipped.toList()))
+        }
         if (dj.sonic) {
-            val seeds = sonic.toList().ifEmpty { listOfNotNull(playing) }
+            // Locked: the session's first track stays the seed; rolling: the last picks.
+            if (dj.sonicLocked && lockedSeed == null) lockedSeed = playing ?: sonic.firstOrNull()
+            val seeds = if (dj.sonicLocked) listOfNotNull(lockedSeed) else sonic.toList().ifEmpty { listOfNotNull(playing) }
             if (seeds.isEmpty()) return null
             body.put("similarTo", JSONArray(seeds)).put("minSimilarity", (dj.sonicMinSimilarity * 100).roundToInt() / 100.0)
         }
@@ -244,6 +267,7 @@ class MStreamAutoDj(
     }
 
     private fun reset() {
+        lockedSeed = null
         bpms.clear()
         camelot = null
         sonic.clear()
@@ -257,10 +281,6 @@ class MStreamAutoDj(
     }
 
     /** The server path of a queued track: its own, or its server twin's for a local copy. */
-    private fun serverPathOf(path: String, twins: Map<String, String>): String? =
-        if (MStreamPaths.isRemote(path)) MStreamPaths.serverPath(path)
-        else twins.entries.firstOrNull { it.value == path }?.key?.let(MStreamPaths::serverPath)
-
     private fun List<IntRange>.toJson() = JSONArray(map { JSONObject().put("min", it.first).put("max", it.last) })
 
     private companion object {

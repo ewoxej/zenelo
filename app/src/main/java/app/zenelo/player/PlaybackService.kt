@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -125,6 +126,14 @@ class PlaybackService : MediaSessionService() {
                     .build()
             },
             currentGainDb = { normalization.gainDb },
+            setMainGainDb = { normalization.gainDb = it },
+            gainOf = { id -> upcomingGain?.takeIf { it.first == id }?.second },
+            onUpcoming = { id ->
+                scope.launch {
+                    val track = container.db.tracks().get(id)
+                    upcomingGain = id to (if (track == null) 0f else gainFor(track))
+                }
+            },
             // The old track's file was read until the fade ended: write what waited for it now.
             onFadeEnd = { flushPendingWrites() },
         ).also { it.start() }
@@ -149,7 +158,12 @@ class PlaybackService : MediaSessionService() {
         listenJob = scope.launch {
             while (true) {
                 delay(LISTEN_TICK_MS)
-                if (player.isPlaying) countListening()
+                if (player.isPlaying) {
+                    countListening()
+                    // Server tracks show on the server's now-playing list (throttled there).
+                    val path = player.currentMediaItem?.mediaId
+                    scope.launch(kotlinx.coroutines.Dispatchers.IO) { container.mstreamSync.onNowPlaying(path) }
+                }
             }
         }
 
@@ -167,6 +181,37 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
+
+    /** When playback was paused (elapsed realtime), 0 while it's meant to play. */
+    private var pausedAt = 0L
+    private var pausedJob: Job? = null
+
+    /**
+     * Paused, Media3 (1.5) takes the service out of the foreground, and Android stops a background
+     * app's non-foreground service about a minute later ("Stopping service due to app idle"): the
+     * notification went away and the process died soon after — the app "closed by itself". So a
+     * paused queue keeps the foreground (and its notification) for [PAUSED_FOREGROUND_MS], like
+     * Media3 1.7's foreground timeout; after that it may go.
+     */
+    override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
+        val recentlyPaused = pausedAt != 0L && player.mediaItemCount > 0 &&
+            SystemClock.elapsedRealtime() - pausedAt < PAUSED_FOREGROUND_MS
+        super.onUpdateNotification(session, startInForegroundRequired || recentlyPaused)
+    }
+
+    private fun onPlayWhenReady(playWhenReady: Boolean) {
+        pausedJob?.cancel()
+        if (playWhenReady) {
+            pausedAt = 0L
+            return
+        }
+        pausedAt = SystemClock.elapsedRealtime()
+        pausedJob = scope.launch {
+            delay(PAUSED_FOREGROUND_MS)
+            // Still paused: let the service leave the foreground (the notification can be swiped away).
+            session?.let { onUpdateNotification(it, false) }
+        }
+    }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         if (!player.playWhenReady || player.mediaItemCount == 0) stopSelf()
@@ -252,7 +297,7 @@ class PlaybackService : MediaSessionService() {
         // Follow the favorite flag so a heart tapped in the app shows up in the notification too.
         favoriteJob?.cancel()
         favoriteJob = scope.launch {
-            val flow = if (path == null) flowOf(false) else container.db.favorites().observeIsFavorite(path)
+            val flow = if (path == null) flowOf(false) else container.db.favorites().observeIsFavoriteAny(listOf(path) + container.serverLinks.current.copiesOf(path))
             flow.collect {
                 currentIsFavorite = it
                 updateCustomLayout()
@@ -282,15 +327,47 @@ class PlaybackService : MediaSessionService() {
         scope.launch(Dispatchers.IO) { upcoming.filterNot { MStreamPaths.isRemote(it) }.forEach { container.loudness.ensureMeasured(it) } }
     }
 
+    private var offlineSkips = 0
+
+    /** The next track's gain, worked out while the crossfade's tail loads (see [Crossfader]). */
+    @Volatile
+    private var upcomingGain: Pair<String, Float>? = null
+
+    /**
+     * Offline, a server track with no copy on the device can't play: go on to the next track (the
+     * queue's window follows). Returns whether it skipped. A queue with nothing playable pauses.
+     */
+    private fun skipUnplayable(): Boolean {
+        val path = player.currentMediaItem?.mediaId ?: return false
+        if (container.network.online.value || container.mstreamFiles.playsOffline(path)) {
+            offlineSkips = 0
+            return false
+        }
+        if (!player.hasNextMediaItem() || offlineSkips >= MAX_OFFLINE_SKIPS) {
+            Log.i(TAG, "offline: nothing playable ahead, paused on ${path.substringAfterLast('/')}")
+            offlineSkips = 0
+            player.pause()
+            return false
+        }
+        offlineSkips++
+        Log.i(TAG, "offline: skipping ${path.substringAfterLast('/')} (server only)")
+        player.seekToNextMediaItem()
+        return true
+    }
+
     private inner class PlayerListener : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             // Why tracks change and positions jump: `adb logcat -s Zenelo` when chasing a skip / rewind.
             Log.i(TAG, "track ${mediaItem?.mediaId?.substringAfterLast('/')} reason=${transitionReason(reason)} fading=${crossfader.fading}")
             onTrackChanged(mediaItem)
+            skipUnplayable()
         }
+
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) = onPlayWhenReady(playWhenReady)
 
         override fun onPlayerError(error: PlaybackException) {
             Log.w(TAG, "player error ${error.errorCodeName} on ${player.currentMediaItem?.mediaId?.substringAfterLast('/')}", error)
+            if (skipUnplayable()) player.prepare()
         }
 
         // The notification's shuffle button shows the mode, whoever changed it.
@@ -302,7 +379,8 @@ class PlaybackService : MediaSessionService() {
 
         override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
             if (reason == Player.DISCONTINUITY_REASON_SEEK || reason == Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT) {
-                Log.i(TAG, "seek ${oldPosition.positionMs} -> ${newPosition.positionMs} ms (item ${oldPosition.mediaItemIndex} -> ${newPosition.mediaItemIndex})")
+                val kind = if (reason == Player.DISCONTINUITY_REASON_SEEK) "seek" else "seek adjusted"
+                Log.i(TAG, "$kind ${oldPosition.positionMs} -> ${newPosition.positionMs} ms (item ${oldPosition.mediaItemIndex} -> ${newPosition.mediaItemIndex})")
             }
             if (reason == Player.DISCONTINUITY_REASON_SEEK && !player.isPlaying) savePosition()
         }
@@ -366,6 +444,7 @@ class PlaybackService : MediaSessionService() {
                     title = metadata.title?.toString() ?: File(item.mediaId).nameWithoutExtension,
                     subtitle = metadata.artist?.toString(),
                 ),
+                container.serverLinks.current.copiesOf(item.mediaId),
             )
         }
     }
@@ -380,6 +459,12 @@ class PlaybackService : MediaSessionService() {
 
     companion object {
         private const val TAG = "Zenelo"
+
+        /** A paused queue keeps the service in the foreground this long (see [onUpdateNotification]). */
+        private const val PAUSED_FOREGROUND_MS = 30 * 60 * 1000L
+
+        /** Offline skips in a row before giving up (a queue of server tracks only). */
+        private const val MAX_OFFLINE_SKIPS = 200
         const val ACTION_FAVORITE = "app.zenelo.FAVORITE"
         const val ACTION_SHUFFLE = "app.zenelo.SHUFFLE"
         val CMD_FAVORITE = SessionCommand(ACTION_FAVORITE, Bundle.EMPTY)

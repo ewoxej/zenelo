@@ -23,8 +23,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PendingRatingEntity::class,
         PlayOutboxEntity::class,
         DownloadEntity::class,
+        ServerLinkEntity::class,
     ],
-    version = 10,
+    version = 12,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
@@ -36,6 +37,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AutoMigration(from = 7, to = 8),
         AutoMigration(from = 8, to = 9),
         AutoMigration(from = 9, to = 10),
+        AutoMigration(from = 10, to = 11, spec = ZeneloDatabase.ReadGenres::class),
+        AutoMigration(from = 11, to = 12),
     ],
 )
 abstract class ZeneloDatabase : RoomDatabase() {
@@ -50,6 +53,7 @@ abstract class ZeneloDatabase : RoomDatabase() {
     abstract fun remoteTracks(): RemoteTrackDao
     abstract fun mstreamOutbox(): MStreamOutboxDao
     abstract fun downloads(): DownloadDao
+    abstract fun serverLinks(): ServerLinkDao
 
     /**
      * 5 adds ReplayGain peaks: files with ReplayGain tags get a stale stamp so the next scan reads
@@ -61,6 +65,16 @@ abstract class ZeneloDatabase : RoomDatabase() {
                 "UPDATE tracks SET modified = 0 WHERE (trackGainDb IS NOT NULL OR albumGainDb IS NOT NULL) " +
                     "AND path NOT IN (SELECT path FROM pending_writes)",
             )
+        }
+    }
+
+    /**
+     * 11 adds genres: local files are read again once (not the ones waiting for a tag write); the
+     * server's come with the next full manifest (`MStreamSync.MANIFEST_VERSION`).
+     */
+    class ReadGenres : AutoMigrationSpec {
+        override fun onPostMigrate(db: SupportSQLiteDatabase) {
+            db.execSQL("UPDATE tracks SET modified = 0 WHERE path NOT LIKE 'mstream://%' AND path NOT IN (SELECT path FROM pending_writes)")
         }
     }
 

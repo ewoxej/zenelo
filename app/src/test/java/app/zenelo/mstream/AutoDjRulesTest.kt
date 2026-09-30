@@ -59,4 +59,21 @@ class AutoDjRulesTest {
         assertEquals(94.0, s.bpm!!, 0.0)
         assertEquals("10A", AutoDjRules.toCamelot(s.musicalKey))
     }
+
+    @Test
+    fun skipWordsAsTheWebApp() {
+        val song = ServerSong("music/Live/01 Track (Acappella).mp3", "Track (Acappella)", "Band", null, null, album = "Traxxx")
+        assertTrue(AutoDjRules.hasSkipWord(song, listOf("acapella")))
+        assertTrue(AutoDjRules.hasSkipWord(song, listOf("trax")))
+        assertTrue(AutoDjRules.hasSkipWord(song, listOf("LIVE")))
+        assertFalse(AutoDjRules.hasSkipWord(song, listOf("remix", " ")))
+        assertFalse(AutoDjRules.hasSkipWord(song, emptyList()))
+    }
+
+    @Test
+    fun manifestGenres() {
+        val e = MStreamClient.parseEntry(org.json.JSONObject("""{"filepath":"music/a.mp3","metadata":{"genres":["Rock","Indie Pop"]}}"""))
+        assertEquals(listOf("Rock", "Indie Pop"), e.genres)
+        assertEquals("Rock; Indie Pop", MStreamSync.toTrack(e).genre)
+    }
 }

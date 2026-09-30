@@ -128,4 +128,52 @@ class MStreamTest {
         assertEquals(1_790_709_133_000L, MStreamClient.parseTime(1_790_709_133))
         assertNull(MStreamClient.parseTime(null))
     }
+
+    @Test
+    fun localCopyWithoutGenreTakesTheServers() {
+        val visible = LibraryMerge.visible(listOf(local, serverTwin.copy(genre = "Alternative Rock")), LibrarySource.ALL)
+        assertEquals(listOf(local.path), visible.map { it.path })
+        assertEquals("Alternative Rock", visible.single().genre)
+        // Its own tag wins.
+        assertEquals("Rock", LibraryMerge.visible(listOf(local.copy(genre = "Rock"), serverTwin.copy(genre = "Alt")), LibrarySource.ALL).single().genre)
+    }
+
+    @Test
+    fun linkedCopyStaysHiddenAfterTagEdits() {
+        // Retitled locally: no longer a twin by tags or size, but the link keeps the server copy out of "All".
+        val edited = local.copy(title = "Air Bag", size = 999)
+        assertEquals(listOf(edited.path, serverTwin.path), LibraryMerge.visible(listOf(edited, serverTwin), LibrarySource.ALL).map { it.path })
+        val links = mapOf(serverTwin.path to edited.path)
+        assertEquals(listOf(edited.path), LibraryMerge.visible(listOf(edited, serverTwin.copy(genre = "Alt")), LibrarySource.ALL, links).map { it.path })
+        assertEquals("Alt", LibraryMerge.visible(listOf(edited, serverTwin.copy(genre = "Alt")), LibrarySource.ALL, links).single().genre)
+    }
+
+    @Test
+    fun recentPlaysOfBothCopiesAreOneRow() {
+        fun play(path: String, at: Long) = app.zenelo.data.db.RecentPlay(path, at, "Airbag", "Radiohead", null, null)
+        val links = mapOf(serverTwin.path to local.path)
+        // The server's (web player) play is newer; ours is older: one row, the local copy, the newest time.
+        val list = listOf(play(serverTwin.path, 200), play(local.path, 100), play(serverOnly.path, 150))
+        val recent = Library.recentOf(list, links)
+        assertEquals(listOf(local.path to 200L, serverOnly.path to 150L), recent.map { it.path to it.playedAt })
+    }
+
+    @Test
+    fun anotherVersionIsNoTwin() {
+        // Same tags, but the server's is a 7-minute live take: both stay.
+        val live = serverTwin.copy(durationMs = 420_000)
+        assertEquals(emptyMap<String, String>(), LibraryMerge.twins(listOf(local, live)))
+        assertEquals(2, LibraryMerge.visible(listOf(local, live), LibrarySource.ALL).size)
+        // Unknown length on one side: tags decide.
+        assertEquals(mapOf(serverTwin.path to local.path), LibraryMerge.twins(listOf(local, serverTwin.copy(durationMs = 0))))
+    }
+
+    @Test
+    fun linksSurviveTagFixesNotRetagging() {
+        assertTrue(LibraryMerge.stillSame(local.copy(album = "OK Computer OKNOTOK", trackNumber = 7), serverTwin))
+        assertTrue(LibraryMerge.stillSame(local.copy(title = "Air Bag"), serverTwin)) // same file name
+        val retagged = local.copy(path = "/sdcard/Music/x.flac", title = "Lucky", trackNumber = 11)
+        assertFalse(LibraryMerge.stillSame(retagged, serverTwin))
+        assertFalse(LibraryMerge.stillSame(local.copy(durationMs = 500_000), serverTwin))
+    }
 }

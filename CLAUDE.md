@@ -71,8 +71,8 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   shuffle, repeat) to `files/queue.txt` 500 ms after each change (`SavedQueue`), the position to
   `queue.txt.position` (on pause, seek, every 10 s, service stop); `PlaybackService.onCreate`
   calls `queue.restore()`, which loads it paused. Never save an empty queue (the pre-restore state).
-  The process outlives the service (a paused app in the background loses its service after
-  ~1 min): `PlayQueue.detach` writes the queue at once and empties it in memory, so the next
+  The process outlives the service (a paused app in the background loses its service once
+  the paused foreground ends, see below): `PlayQueue.detach` writes the queue at once and empties it in memory, so the next
   service's `restore()` reads it back instead of keeping a queue its new empty player never got.
 - Navigation: the bottom bar is a setting (`tabs`, ≤5 `Section`s, may be empty → Home is the only
   page) and so is Home (`home`: each section Off / Icon / Grid / List, ordered). Tabs are pager
@@ -95,8 +95,16 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   plays the old track's end fading out while main skips to the next track fading in. Only natural
   ends fade; pause / seek / skip cut the fade; a track that reaches the fade zone by a seek (tail
   not ready) plays to its end without fading. Pending writes wait for the fade's end (the tail
-  still reads the old file). `PlaybackService` logs transitions (with reason), seeks and player
-  errors under the `Zenelo` tag: `adb logcat -s Zenelo` when chasing an unexpected skip / rewind.
+  still reads the old file). Gains are set before the audio is processed (processors apply the
+  gain when they process, and players buffer ahead): the tail's when it's prepared, main's for the
+  next track just before the switch (`gainOf`, worked out while the tail loads) — else the fade
+  started at the wrong loudness and jumped. A tail not READY at the fade point (slow stream) means no
+  fade for that track, not a late one (a hole, then the old track back). `PlaybackService` logs
+  transitions (with reason), seeks, fades (begin with both gains / done / cut short / skipped) and
+  player errors under the `Zenelo` tag: `adb logcat -s Zenelo` when chasing an unexpected skip / rewind.
+- Paused, Media3 1.5 drops the service's foreground and Android stops an idle background service
+  after ~1 min ("Stopping service due to app idle"; the notification and soon the process went):
+  `PlaybackService.onUpdateNotification` keeps the foreground for 30 min of pause (`PAUSED_FOREGROUND_MS`).
 - `ZeneloSlider` (seek bar, crossfade, pre-amp) reacts to taps and horizontal drags only: a touch
   that becomes a vertical gesture (scrolling Settings, swiping Now Playing down) must not set a value.
 - Playlists: `playlist/{id}` screen (play, drag to reorder, remove, rename, delete). "Add to
@@ -157,10 +165,44 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   `RemoteMedia` opens a download / cached copy first, else streams `/media`, or `/transcode` per
   `TranscodeMode` (default MP3: the server streams transcodes without a length and ignores Range,
   so only MP3's frame-index seeking works; Opus / AAC can't seek). It logs "open … from / streamed".
-  `MStreamFiles.downloadedPaths` (read from the download folder, updated per download / delete)
-  marks downloaded server tracks at once and hides their "Download"; `MStreamDownloads.progress`
-  drives `DownloadPopup` (track i of n, bytes) instead of a "Downloading…" message.
-- mStream stage 4: `MStreamAutoDj` (setting `autoDj`; Now Playing ⋮ toggle) — when the queue's last track
+  `MStreamDownloads.progress` drives `DownloadPopup` (track i of n, bytes) instead of a "Downloading…" message.
+- Local ↔ server (DB v12, `ServerLinks`, `server_links`): a local file that is also on the server —
+  a download (linked when saved, and files at the server's path in the download folder), or the
+  user's own file matched by `LibraryMerge.twins` (same tags or file name + size, and same length
+  ±3 s) — counts as downloaded (download mark, no "Download", Sonic Path / Play similar / server
+  playlists through it). A match is re-checked on every refresh (`LibraryMerge.stillSame`: same
+  length and still the same title, file name or artist + album + number), so fixing a tag keeps it
+  and a wrong match drops (downloads stay until the file is gone). Refresh is triggered by the cheap
+  `TrackDao.observeChanges`, not by reading all rows per change. Through the links: "All" hides the
+  server copy; a song is a favorite when liked under either path (`FavoriteDao.toggle(…, copies)`,
+  `observeIsFavoriteAny`; never moved between paths — a dropped link must lose nothing) and that
+  syncs with the server rating; plays and now playing of the copy count for the server track;
+  Recently played / Favorites show one row, the local copy; the queue takes the local copy
+  (`PlayQueue.resolvePath`) and `RemoteMedia` opens it too.
+- Offline (`online/Network`): server tracks with no copy here (linked, downloaded, cached) leave the
+  library, Favorites and Recently played (`Library` filters; `rememberPlayableNow`); in playlists,
+  the queue and Sonic Path they're faded (`rememberUnplayable`) and `PlaybackService.skipUnplayable`
+  skips them; a playlist with nothing playable is faded (`rememberUnplayablePlaylists`). Server
+  features hide: Download, Auto DJ toggle, Sonic Path / Play similar (`MStreamSonicPath.available`),
+  "Sounds like", the browser's mStream root; Auto DJ waits for the network without a message.
+  Auto DJ / Sonic Path / Play similar are the server's (its analysis): local files only through their link.
+- Genres (DB v11): `tracks.genre` from tags (`Genres.split`, unit-tested: "A; B" / "A/B" / ID3 numbers)
+  and from the manifest's `genres` (the stored revision is prefixed `v<MANIFEST_VERSION>:` so a
+  change in what we keep forces one full read). A local copy without a genre takes its server
+  twin's (`LibraryMerge.visible`). `Section.GENRES`, `genre/{key}` page; `Library.genresOf`.
+- Server playlists are editable: `PlaylistDao` marks `dirty` on any edit of a remote playlist,
+  deletes leave a tombstone (`deleted`); `MStreamSync.pushPlaylists` (watcher in `AppContainer`,
+  and each sync before pulling) renames / saves whole / deletes on the server. `replaceRemote`
+  updates clean copies in place (same id) and leaves dirty ones alone. Server playlists only take
+  server tracks: `serverCopies` maps local twins / downloads, others are skipped with a message.
+  Picker work runs in `appScope` (the dialog's scope dies with it).
+- Also: now playing announced (`stats/now-playing`, every 5 min while a server track plays),
+  "Play similar" (`discovery/local/similar/tracks`), "Sounds like" artists on artist pages
+  (`similar/artists`, else Last.fm's). Auto DJ filters as the web app: genres (whitelist /
+  blacklist), length window, skip words (`AutoDjRules.hasSkipWord`), libraries (`ignoreVPaths`),
+  rolling / locked sound seed.
+- mStream stage 4: `MStreamAutoDj` (setting `autoDj`; Now Playing ⋮ toggle; its settings are `SettingsPage.AUTO_DJ`,
+  a sub-page opened from the mStream page like `DOWNLOADS`; `listed = false` keeps them off the main Settings screen) — when the queue's last track
   starts, `db/random-songs` picks more, the body built as the web app's `_buildAutoDjBody` (ignoreList
   cursor, artist cooldown, BPM windows / Camelot neighbours via `AutoDjRules` (unit-tested), similar
   artists, `similarTo` = last picks else the playing track); a track the user started resets the

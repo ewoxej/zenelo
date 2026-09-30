@@ -11,6 +11,7 @@ enum class Section(val label: String) {
     ARTISTS("Artists"),
     TRACKS("All tracks"),
     RECENT("Recently played"),
+    GENRES("Genres"),
     ;
 
     /** Settings has no content to show in a card, only a shortcut. */
@@ -72,6 +73,10 @@ enum class SortPage(val fields: List<SortField>, val default: SortOrder) {
         listOf(SortField.NAME, SortField.ARTIST, SortField.ALBUM, SortField.DATE_ADDED, SortField.DURATION),
         SortOrder(SortField.NAME),
     ),
+    GENRES(
+        listOf(SortField.NAME, SortField.TRACKS),
+        SortOrder(SortField.NAME),
+    ),
 }
 
 object Navigation {
@@ -87,6 +92,7 @@ object Navigation {
         HomeItem(Section.ALBUMS, HomeMode.GRID),
         HomeItem(Section.ARTISTS, HomeMode.LIST),
         HomeItem(Section.TRACKS, HomeMode.LIST),
+        HomeItem(Section.GENRES, HomeMode.LIST),
         HomeItem(Section.FOLDERS, HomeMode.ICON),
         HomeItem(Section.FAVORITES, HomeMode.ICON),
         HomeItem(Section.PLAYLISTS, HomeMode.ICON),

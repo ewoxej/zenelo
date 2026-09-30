@@ -30,6 +30,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import app.zenelo.ui.components.rememberUnplayablePlaylists
+import app.zenelo.ui.components.UNPLAYABLE_ALPHA
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.zenelo.data.db.PlaylistEntity
@@ -42,6 +46,7 @@ import app.zenelo.ui.components.ListRow
 import app.zenelo.ui.components.ScreenTitle
 import app.zenelo.ui.components.appContainer
 import app.zenelo.ui.theme.ZeneloColors
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 @Composable
@@ -50,6 +55,7 @@ fun PlaylistsScreen(onOpenPlaylist: (Long) -> Unit, onMessage: (String) -> Unit,
     val dao = container.db.playlists()
     val flow = remember { dao.observeWithCounts() }
     val playlists by flow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val unplayable = rememberUnplayablePlaylists()
     val scope = rememberCoroutineScope()
     var creating by remember { mutableStateOf(false) }
     // Any file: pickers often don't know the M3U types, and a wrong file just finds no tracks.
@@ -82,6 +88,8 @@ fun PlaylistsScreen(onOpenPlaylist: (Long) -> Unit, onMessage: (String) -> Unit,
         }
         LazyColumn(Modifier.weight(1f)) {
             items(playlists, key = { it.id }) { playlist ->
+                // Offline with nothing playable in it: faded.
+                Box(Modifier.alpha(if (playlist.id in unplayable) UNPLAYABLE_ALPHA else 1f)) {
                 ListRow(
                     title = playlist.name,
                     subtitle = "${playlist.trackCount} track${if (playlist.trackCount == 1) "" else "s"}" + if (playlist.remote) " · mStream" else "",
@@ -95,6 +103,7 @@ fun PlaylistsScreen(onOpenPlaylist: (Long) -> Unit, onMessage: (String) -> Unit,
                     },
                     trailing = { Icon(Icons.Rounded.ChevronRight, null, tint = ZeneloColors.TextMuted, modifier = Modifier.padding(horizontal = 12.dp).size(20.dp)) },
                 )
+                }
             }
             if (playlists.isEmpty()) {
                 item {
@@ -111,16 +120,23 @@ fun PlaylistsScreen(onOpenPlaylist: (Long) -> Unit, onMessage: (String) -> Unit,
 
     if (creating) {
         var name by remember { mutableStateOf("") }
+        var onServer by remember { mutableStateOf(false) }
+        val account by container.settings.settings.map { it.mstream }.collectAsStateWithLifecycle(initialValue = null)
         AlertDialog(
             onDismissRequest = { creating = false },
             containerColor = ZeneloColors.Card,
             title = { Text("New playlist") },
-            text = { OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true) },
+            text = {
+                Column {
+                    OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true)
+                    if (account != null) ServerSwitch(onServer) { onServer = it }
+                }
+            },
             confirmButton = {
                 TextButton(
                     enabled = name.isNotBlank(),
                     onClick = {
-                        scope.launch { dao.insert(PlaylistEntity(name = name.trim())) }
+                        scope.launch { dao.insert(PlaylistEntity(name = name.trim(), remote = onServer, dirty = onServer)) }
                         creating = false
                     },
                 ) { Text("Create") }

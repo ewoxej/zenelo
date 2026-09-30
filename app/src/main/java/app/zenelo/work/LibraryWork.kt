@@ -56,7 +56,10 @@ object LibraryWork {
     /** On app start: index now, fetch when on Wi-Fi, and again twice a day. */
     fun schedule(context: Context) {
         val wm = WorkManager.getInstance(context)
-        wm.beginUniqueWork(INDEX, ExistingWorkPolicy.KEEP, OneTimeWorkRequestBuilder<IndexWorker>().build())
+        // REPLACE, not KEEP: the chain's fetch step waits for Wi-Fi (maybe for days), and while it
+        // waits KEEP skipped the whole chain, index included — new files weren't indexed on start.
+        // Every step picks up where it stopped, so restarting them costs nothing.
+        wm.beginUniqueWork(INDEX, ExistingWorkPolicy.REPLACE, OneTimeWorkRequestBuilder<IndexWorker>().build())
             .then(listOf(fetchRequest(), loudnessRequest()))
             .enqueue()
         wm.enqueueUniqueWork(SERVER_SYNC, ExistingWorkPolicy.KEEP, serverSyncRequest(force = false))

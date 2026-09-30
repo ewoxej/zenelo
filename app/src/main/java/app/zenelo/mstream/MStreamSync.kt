@@ -10,6 +10,7 @@ import app.zenelo.data.db.RemoteTrackEntity
 import app.zenelo.data.db.TrackEntity
 import app.zenelo.data.db.ZeneloDatabase
 import app.zenelo.data.settings.SettingsRepository
+import app.zenelo.library.LibraryMerge
 import app.zenelo.library.TagReader
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,6 +30,7 @@ class MStreamSync(
     private val db: ZeneloDatabase,
     private val settings: SettingsRepository,
     private val client: MStreamClient,
+    private val links: ServerLinks,
 ) {
     sealed interface State {
         data object Idle : State
@@ -43,6 +45,7 @@ class MStreamSync(
     /** Guards favorites ↔ ratings: the watcher and the sync's reconcile never interleave. */
     private val favorites = Mutex()
     private val pushing = Mutex()
+    private val playlistPush = Mutex()
 
     /**
      * One round with the server: send what waited (ratings, plays), then mirror its library (skipped
@@ -72,7 +75,10 @@ class MStreamSync(
                     reconcileFavorites()
                 }
             }
-            optional("playlists") { db.playlists().replaceRemote(client.playlists(account).map { (name, paths) -> name to paths.map(MStreamPaths::of) }) }
+            optional("playlists") {
+                pushPlaylists(account)
+                db.playlists().replaceRemote(client.playlists(account).map { (name, paths) -> name to paths.map(MStreamPaths::of) })
+            }
             optional("recent plays") { pullRecent(account) }
             _state.value = State.Idle
             return db.remoteTracks().paths().size
@@ -84,7 +90,9 @@ class MStreamSync(
     }
 
     private suspend fun pullLibrary(account: MStreamAccount, force: Boolean) {
-        val revision = if (force) null else settings.mstreamRevision()
+        // Stored as "v<MANIFEST_VERSION>:<revision>": what we keep of an entry changed since → read it all again.
+        val stored = settings.mstreamRevision()
+        val revision = if (force || stored == null || !stored.startsWith(REVISION_PREFIX)) null else stored.removePrefix(REVISION_PREFIX)
         var page = client.manifest(account, cursor = null, revision = revision) ?: return
         val newRevision = page.revision
         val seen = HashSet<String>()
@@ -109,40 +117,57 @@ class MStreamSync(
                 }
             }
         }
-        settings.setMStreamRevision(newRevision)
+        settings.setMStreamRevision(newRevision?.let { REVISION_PREFIX + it })
     }
 
     /**
      * Server → us: a track rated 8–10 (4–5 stars) is a favorite, others aren't — except tracks
-     * whose rating we changed and couldn't send yet (our change wins until it's sent).
+     * whose rating we changed and couldn't send yet (our change wins until it's sent). A server
+     * track with a local copy counts as liked when either is, and a new like goes on the local copy.
      */
     private suspend fun reconcileFavorites() {
+        val links = this.links.current
         val pending = db.mstreamOutbox().ratings().mapTo(HashSet()) { it.path }
-        val liked = db.favorites().all().filter { it.kind == FavoriteKind.TRACK && MStreamPaths.isRemote(it.path) }.associateBy { it.path }
+        val liked = likedByServerPath(links)
         val tracks = db.remoteTracks().all()
         db.withTransaction {
             for (rt in tracks) {
                 if (rt.path in pending) continue
                 val serverFavorite = (rt.rating ?: 0) >= FAVORITE_RATING
-                val favorite = liked[rt.path]
-                if (serverFavorite && favorite == null) {
-                    val t = db.tracks().get(rt.path)
-                    db.favorites().insert(FavoriteEntity(rt.path, FavoriteKind.TRACK, t?.title ?: MStreamPaths.fileName(rt.path), t?.artist))
-                } else if (!serverFavorite && favorite != null) {
-                    db.favorites().delete(rt.path)
+                val favorites = liked[rt.path].orEmpty()
+                if (serverFavorite && favorites.isEmpty()) {
+                    val path = links.canonical(rt.path)
+                    val t = db.tracks().get(path)
+                    db.favorites().insert(FavoriteEntity(path, FavoriteKind.TRACK, t?.title ?: MStreamPaths.fileName(rt.path), t?.artist))
+                } else if (!serverFavorite && favorites.isNotEmpty()) {
+                    favorites.forEach { db.favorites().delete(it) }
                 }
             }
         }
     }
 
+    /** Liked tracks by their server track: server paths, and local files with a server copy. */
+    private suspend fun likedByServerPath(links: ServerLinks.Links): Map<String, List<String>> =
+        db.favorites().all().filter { it.kind == FavoriteKind.TRACK }
+            .mapNotNull { f -> links.serverOf(f.path)?.let { it to f.path } }
+            .groupBy({ it.first }, { it.second })
+
     /**
-     * Us → server, on every change of favorites: liking a server track rates it 10 (5 stars),
-     * unliking one rated 8–10 clears its rating. Sent at once when possible, else on the next sync.
+     * The links changed (a download, a newly matched file, a wrong match dropped): likes of local
+     * copies count for their server track. Favorites themselves stay where they were made — a link
+     * dropped later loses nothing.
+     */
+    suspend fun onLinksChanged() = onFavoritesChanged()
+
+    /**
+     * Us → server, on every change of favorites: liking a server track (or a local file with a
+     * server copy) rates it 10 (5 stars), unliking one rated 8–10 clears its rating. Sent at once
+     * when possible, else on the next sync.
      */
     suspend fun onFavoritesChanged() {
         if (settings.settings.first().mstream == null) return
         val changed = favorites.withLock {
-            val liked = db.favorites().all().filter { it.kind == FavoriteKind.TRACK && MStreamPaths.isRemote(it.path) }.mapTo(HashSet()) { it.path }
+            val liked = likedByServerPath(links.current).keys
             var any = false
             for (rt in db.remoteTracks().all()) {
                 val serverFavorite = (rt.rating ?: 0) >= FAVORITE_RATING
@@ -164,10 +189,31 @@ class MStreamSync(
 
     /** A counted play of a server track (see PlaybackService): reported now or on the next sync. */
     suspend fun onPlayed(path: String, playedMs: Long, durationMs: Long) {
-        if (!MStreamPaths.isRemote(path)) return
+        // A local file with a server copy counts for that track.
+        val server = links.current.serverOf(path) ?: return
         val now = System.currentTimeMillis()
-        db.mstreamOutbox().putPlay(PlayOutboxEntity(UUID.randomUUID().toString(), path, now - playedMs, playedMs, durationMs))
+        db.mstreamOutbox().putPlay(PlayOutboxEntity(UUID.randomUUID().toString(), server, now - playedMs, playedMs, durationMs))
         pushSoon()
+    }
+
+    /** This player on the server's now-playing list: one entry for the app's lifetime. */
+    private val sessionId = "zenelo-" + UUID.randomUUID().toString()
+    private var announced: Pair<String, Long>? = null
+
+    /**
+     * The playing track (called on track changes and every few seconds while playing): a server
+     * track is announced as now playing when it starts, then every [ANNOUNCE_EVERY_MS] (the server
+     * forgets after 10 min). Best-effort: a miss just waits for the next call.
+     */
+    suspend fun onNowPlaying(playing: String?) {
+        val path = links.current.serverOf(playing) ?: return
+        val now = System.currentTimeMillis()
+        val last = announced
+        if (last != null && last.first == path && now - last.second < ANNOUNCE_EVERY_MS) return
+        announced = path to now
+        val account = settings.settings.first().mstream ?: return
+        runCatching { client.nowPlaying(account, MStreamPaths.serverPath(path), sessionId) }
+            .onFailure { announced = null }
     }
 
     /** Sends waiting ratings and plays; failures leave them for the next try. */
@@ -189,6 +235,53 @@ class MStreamSync(
         }
     }
 
+    /** Server playlists edited here (the watcher in `AppContainer` calls this): pushed now if we can, else on the next sync. */
+    suspend fun onPlaylistsChanged() {
+        val account = settings.settings.first().mstream ?: return
+        runCatching { pushPlaylists(account) }.onFailure { android.util.Log.w("Zenelo", "mStream playlists not pushed yet: ${it.message}") }
+    }
+
+    /**
+     * Our edits of server playlists → the server: deleted ones deleted, renamed ones renamed, and
+     * every edited one saved whole. A playlist edited again meanwhile stays dirty for the next push.
+     */
+    private suspend fun pushPlaylists(account: MStreamAccount) = playlistPush.withLock {
+        val dao = db.playlists()
+        for (p in dao.pendingRemote()) {
+            if (p.deleted) {
+                p.serverName?.let { client.deletePlaylist(account, it) }
+                dao.deleteRow(p.id)
+                continue
+            }
+            val paths = dao.paths(p.id)
+            val old = p.serverName
+            if (old != null && old != p.name) {
+                // Taken name (400): save under the new one and drop the old.
+                try {
+                    client.renamePlaylist(account, old, p.name)
+                } catch (e: MStreamException) {
+                    if (e.code != 400) throw e
+                    client.deletePlaylist(account, old)
+                }
+            }
+            client.savePlaylist(account, p.name, paths.filter(MStreamPaths::isRemote).map(MStreamPaths::serverPath))
+            db.withTransaction {
+                val now = dao.get(p.id)
+                if (now != null && now.name == p.name && dao.paths(p.id) == paths && !now.deleted) dao.markPushed(p.id, p.name)
+                else if (now != null) dao.setServerName(p.id, p.name)
+            }
+        }
+    }
+
+    /**
+     * The server's copies of [paths] for a server playlist: server tracks as they are, local ones
+     * as their server twin or the track they were downloaded from; null where there's none.
+     */
+    fun serverCopies(paths: List<String>): List<String?> {
+        val links = this.links.current
+        return paths.map(links::serverOf)
+    }
+
     /** A step an older server may not have: its 404 is logged and skipped, other failures still fail the sync. */
     private suspend fun optional(what: String, block: suspend () -> Unit) {
         try {
@@ -202,7 +295,8 @@ class MStreamSync(
     /** Plays of server tracks elsewhere (web player, other devices) join Recently played. */
     private suspend fun pullRecent(account: MStreamAccount) {
         for ((serverPath, at) in client.recentlyPlayed(account, RECENT_LIMIT)) {
-            val path = MStreamPaths.of(serverPath)
+            // Kept as the local copy where there is one: our own plays of it come back under the server's path.
+            val path = links.current.canonical(MStreamPaths.of(serverPath))
             // Our own plays come back too (reported above): skip what we already have.
             if (db.plays().countNear(path, at - SAME_PLAY_MS, at + SAME_PLAY_MS) == 0) {
                 db.plays().insert(PlayEntity(path = path, playedAt = at))
@@ -234,6 +328,12 @@ class MStreamSync(
         /** 8–10 of 0–10: 4–5 stars. */
         const val FAVORITE_RATING = 8
         const val LIKED_RATING = 10
+
+        private const val ANNOUNCE_EVERY_MS = 5 * 60 * 1000L
+
+        /** Bumped when [toTrack] keeps more of an entry (2: genres): the next sync reads every entry. */
+        private const val MANIFEST_VERSION = 2
+        private const val REVISION_PREFIX = "v$MANIFEST_VERSION:"
         private const val RECENT_LIMIT = 100
         /** A server play this close to one of ours is the same play. */
         private const val SAME_PLAY_MS = 10 * 60 * 1000L
@@ -262,6 +362,7 @@ class MStreamSync(
                 trackGainDb = e.replayGainDb,
                 albumGainDb = null,
                 albumKey = TagReader.albumKey(e.artist, e.album),
+                genre = e.genres.flatMap(app.zenelo.library.Genres::split).distinct().joinToString("; ").ifEmpty { null },
             )
         }
     }

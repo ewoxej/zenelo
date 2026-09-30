@@ -36,6 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.first
 import app.zenelo.data.db.AlbumRow
 import app.zenelo.data.db.ArtistRow
 import app.zenelo.data.db.TrackEntity
@@ -138,6 +139,78 @@ fun AlbumScreen(vm: LibraryViewModel, key: String, nav: LibraryNav, onBack: () -
     }
 }
 
+/** One genre: its tracks by artist, album and number. */
+@Composable
+fun GenreScreen(vm: LibraryViewModel, key: String, onBack: () -> Unit) {
+    val tracksFlow = remember(key) { vm.genreTracks(key) }
+    val tracks by tracksFlow.collectAsStateWithLifecycle(initialValue = null)
+    val genres by vm.genres.collectAsStateWithLifecycle()
+    val settings by vm.settings.collectAsStateWithLifecycle()
+    val (mediaId, isPlaying) = rememberNowPlaying()
+    val search = remember { PageSearch() }
+    val selection = rememberSelection<String>()
+    val markLeft = settings.selectionMarker == SelectionMarkerSide.LEFT
+    val swipeOptions = remember(settings.swipes) { listSwipeOptions(settings.swipes) }
+    val all = tracks.orEmpty()
+    val genre = genres?.firstOrNull { it.key == key }
+    val visible = remember(all, search.query) { all.filter { search.matches(LibrarySort.trackName(it), it.artist, it.album) } }
+    val files = remember(visible) { visible.map(TrackEntity::toAudioFile) }
+    val chosen = { visible.filter { it.path in selection.keys } }
+
+    LibraryScaffold(
+        sourceMenu = true,
+        title = genre?.name ?: "Genre",
+        count = tracks?.size,
+        caption = genre?.let { "${it.artists} ARTIST${if (it.artists == 1) "" else "S"} · ${formatTotal(it.durationMs).uppercase()}" },
+        onBack = onBack,
+        search = search,
+        selection = selection,
+        selectAll = { selection.toggleAll(visible.map { it.path }) },
+        allSelected = visible.isNotEmpty() && selection.keys.size >= visible.size,
+        onSelectionAction = { action -> chosen().let { vm.onTracks(it.map(TrackEntity::toAudioFile), it.associate { t -> t.path to (LibrarySort.trackName(t) to t.artist) }, action) } },
+        onSelectionPlay = { vm.play(chosen().map(TrackEntity::toAudioFile), shuffle = it) },
+        isPlaying = isPlaying,
+        canPlay = files.isNotEmpty(),
+        onPlay = { vm.play(files, shuffle = it) },
+        onStop = vm::stop,
+    ) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = FabClearance)) {
+            items(visible, key = { it.path }) { track ->
+                TrackRow(
+                    vm = vm,
+                    track = track,
+                    subtitle = listOfNotNull(track.artist ?: track.albumArtist, track.album).joinToString(" · ").ifEmpty { null },
+                    isCurrent = track.path == mediaId,
+                    selection = selection,
+                    markLeft = markLeft,
+                    swipeOptions = swipeOptions,
+                    onPlay = { vm.play(files, start = visible.indexOf(track)) },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Library artists that sound like [name], from the mStream server (its audio analysis, else
+ * Last.fm's similar artists); only those with a page here. Empty when not logged in.
+ */
+@Composable
+private fun rememberSoundsLike(name: String?, artists: List<ArtistRow>?): List<ArtistRow> {
+    val container = app.zenelo.ui.components.appContainer()
+    val online = app.zenelo.ui.components.rememberOnline()
+    val names by androidx.compose.runtime.produceState(emptyList<String>(), name, online) {
+        val account = container.settings.settings.first().mstream
+        if (name == null || account == null || !online) return@produceState
+        value = container.mstream.soundAlikeArtists(account, name).ifEmpty { container.mstream.similarArtists(account, name) }
+    }
+    return remember(names, artists, online) {
+        if (!online) return@remember emptyList()
+        val byKey = artists.orEmpty().associateBy { it.key }
+        names.mapNotNull { byKey[artistKey(it)] }.filter { it.name != name }.distinctBy { it.key }
+    }
+}
+
 /** An album's artist tag; each of several artists ("A; B") opens its own page. */
 @Composable
 private fun ArtistLinks(tag: String, splitter: ArtistSplitter, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
@@ -185,6 +258,7 @@ fun ArtistScreen(vm: LibraryViewModel, key: String, nav: LibraryNav, onBack: () 
     val visible = remember(all, search.query) { all.filter { search.matches(LibrarySort.trackName(it), it.album) } }
     val files = remember(visible) { visible.map(TrackEntity::toAudioFile) }
     val chosen = { visible.filter { it.path in selection.keys } }
+    val soundsLike = rememberSoundsLike(artist?.name, artists)
 
     LibraryScaffold(
         sourceMenu = true,
@@ -205,9 +279,9 @@ fun ArtistScreen(vm: LibraryViewModel, key: String, nav: LibraryNav, onBack: () 
         headerActions = { if (artist != null) FavoriteButton(favorite) { vm.toggleArtistFavorite(artist) } },
     ) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = FabClearance)) {
-            if (artistAlbums.isNotEmpty() && !search.open) {
-                item(key = "albums-header") { GroupHeader("Albums · ${artistAlbums.size}") }
-                item(key = "albums") {
+            if ((artistAlbums.isNotEmpty() || soundsLike.isNotEmpty()) && !search.open) {
+                if (artistAlbums.isNotEmpty()) item(key = "albums-header") { GroupHeader("Albums · ${artistAlbums.size}") }
+                if (artistAlbums.isNotEmpty()) item(key = "albums") {
                     LazyRow(
                         contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -225,6 +299,25 @@ fun ArtistScreen(vm: LibraryViewModel, key: String, nav: LibraryNav, onBack: () 
                                 onLongClick = {},
                                 modifier = Modifier.width(110.dp),
                             )
+                        }
+                    }
+                }
+                if (soundsLike.isNotEmpty()) {
+                    item(key = "similar-header") { GroupHeader("Sounds like") }
+                    item(key = "similar") {
+                        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            items(soundsLike, key = { it.key }) { other ->
+                                ArtistTile(
+                                    artist = other,
+                                    compact = true,
+                                    selecting = false,
+                                    selected = false,
+                                    markLeft = markLeft,
+                                    onClick = { nav.onOpenArtist(other.key) },
+                                    onLongClick = {},
+                                    modifier = Modifier.width(90.dp),
+                                )
+                            }
                         }
                     }
                 }

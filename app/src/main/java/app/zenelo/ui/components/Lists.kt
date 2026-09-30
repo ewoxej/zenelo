@@ -11,6 +11,7 @@ import androidx.compose.material.icons.outlined.DriveFileRenameOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Route
+import androidx.compose.material.icons.outlined.Radar
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.MoreVert
@@ -56,7 +57,8 @@ fun TrackMenu(
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             // Server tracks can be downloaded (once), not deleted; local files the other way round.
-            val downloaded = rememberDownloaded(path)
+            // Offline, nothing downloads: not offered.
+            val downloaded = rememberDownloaded(path) || !rememberOnline()
             SwipeAction.entries.filter {
                 it != SwipeAction.NONE && it != (if (local) SwipeAction.DOWNLOAD else SwipeAction.DELETE_FILE) &&
                     !(it == SwipeAction.DOWNLOAD && downloaded)
@@ -106,8 +108,17 @@ fun TrackMenu(
 fun SonicPathItems(path: String, icons: Boolean = true, onDone: () -> Unit) {
     val sonicPath = appContainer().sonicPath
     val available by sonicPath.available.collectAsStateWithLifecycle()
-    // Server tracks only: the path runs through the server's library.
-    if (!available || !app.zenelo.mstream.MStreamPaths.isRemote(path)) return
+    // Tracks the server has (local ones through their server copy): the path runs through its library.
+    if (!available || !rememberOnServer(path)) return
+    val player = appContainer().player
+    DropdownMenuItem(
+        text = { Text("Play similar") },
+        leadingIcon = if (icons) ({ Icon(Icons.Outlined.Radar, null, tint = ZeneloColors.Celadon) }) else null,
+        onClick = {
+            onDone()
+            sonicPath.playSimilar(path) { player.playFiles(it, startIndex = 0, shuffle = false) }
+        },
+    )
     DropdownMenuItem(
         text = { Text("Sonic path from here") },
         leadingIcon = if (icons) ({ Icon(Icons.Outlined.Route, null, tint = ZeneloColors.Celadon) }) else null,

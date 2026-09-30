@@ -2,6 +2,7 @@ package app.zenelo.library
 
 import app.zenelo.data.db.AlbumRow
 import app.zenelo.data.db.ArtistRow
+import app.zenelo.data.db.GenreRow
 import app.zenelo.data.db.TrackEntity
 import app.zenelo.data.settings.SortField
 import app.zenelo.data.settings.SortOrder
@@ -31,6 +32,11 @@ object LibrarySort {
         SortField.TRACKS -> artists.sortedWith(number<ArtistRow>(order) { it.tracks.toLong() }.then(text<ArtistRow>(SortOrder(SortField.NAME)) { it.name }))
         SortField.ALBUMS -> artists.sortedWith(number<ArtistRow>(order) { it.albums.toLong() }.then(text<ArtistRow>(SortOrder(SortField.NAME)) { it.name }))
         else -> artists.sortedWith(text<ArtistRow>(order) { it.name })
+    }
+
+    fun genres(genres: List<GenreRow>, order: SortOrder): List<GenreRow> = when (order.sortBy) {
+        SortField.TRACKS -> genres.sortedWith(number<GenreRow>(order) { it.tracks.toLong() }.then(text<GenreRow>(SortOrder(SortField.NAME)) { it.name }))
+        else -> genres.sortedWith(text<GenreRow>(order) { it.name })
     }
 
     fun tracks(tracks: List<TrackEntity>, order: SortOrder): List<TrackEntity> {

@@ -3,7 +3,6 @@ package app.zenelo.mstream
 import app.zenelo.data.db.TrackEntity
 import app.zenelo.data.db.ZeneloDatabase
 import app.zenelo.data.settings.SettingsRepository
-import app.zenelo.library.LibraryMerge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -13,6 +12,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -30,6 +30,8 @@ class MStreamSonicPath(
     private val db: ZeneloDatabase,
     private val settings: SettingsRepository,
     private val client: MStreamClient,
+    private val links: ServerLinks,
+    online: kotlinx.coroutines.flow.Flow<Boolean>,
     private val scope: CoroutineScope,
 ) {
     /** One end: our path (what the user picked) and the server's path of it. */
@@ -48,8 +50,9 @@ class MStreamSonicPath(
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
 
-    /** Logged in to a server: the menus offer Sonic Path. */
-    val available: StateFlow<Boolean> = settings.settings.map { it.mstream != null }.stateIn(scope, SharingStarted.Eagerly, false)
+    /** Logged in to a server and online: the menus offer Sonic Path / Play similar. */
+    val available: StateFlow<Boolean> = combine(settings.settings.map { it.mstream != null }, online) { logged, online -> logged && online }
+        .stateIn(scope, SharingStarted.Eagerly, false)
 
     private val _open = MutableSharedFlow<String?>(extraBufferCapacity = 1)
 
@@ -92,7 +95,7 @@ class MStreamSonicPath(
             val next = try {
                 val account = settings.settings.first().mstream ?: throw MStreamException("Not connected to an mStream server")
                 val path = client.sonicPath(account, start.serverPath, end.serverPath, length)
-                val twins = LibraryMerge.twins(db.tracks().observeAll().first())
+                val twins = links.current.localCopies
                 when {
                     path.startNotAnalyzed -> State(start, end, problem = "The server hasn't analyzed the start track yet — wait for its scan or pick another")
                     path.endNotAnalyzed -> State(start, end, problem = "The server hasn't analyzed the end track yet — wait for its scan or pick another")
@@ -108,9 +111,39 @@ class MStreamSonicPath(
         }
     }
 
+    /**
+     * "Play similar": [path] then the server's closest-sounding tracks (local copies where there
+     * are). Returns them, or throws with a message to show.
+     */
+    suspend fun similar(path: String, limit: Int = 30): List<String> {
+        val account = settings.settings.first().mstream ?: throw MStreamException("Not connected to an mStream server")
+        val server = links.current.serverOf(path) ?: throw MStreamException("Not on the mStream server")
+        val songs = try {
+            client.similarTracks(account, MStreamPaths.serverPath(server), limit)
+        } catch (e: MStreamException) {
+            throw MStreamException(if (e.code == 403) "The server doesn't analyze tracks (discovery is off)" else e.message ?: "Couldn't ask the server", e.code)
+        }
+        if (songs.isEmpty()) throw MStreamException("Nothing sounds close enough on the server")
+        val twins = links.current.localCopies
+        return listOf(path) + songs.map { MStreamPaths.of(it.filepath).let { p -> twins[p] ?: p } }.filter { it != path }
+    }
+
+    /** [similar], played (replacing the queue); a problem shows as a message. */
+    fun playSimilar(path: String, play: (List<app.zenelo.library.AudioFile>) -> Unit) {
+        scope.launch {
+            try {
+                val paths = similar(path)
+                android.util.Log.i("Zenelo", "play similar to ${path.substringAfterLast('/')}: ${paths.size} tracks")
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { play(paths.map(app.zenelo.library.AudioFile::forPath)) }
+            } catch (e: IOException) {
+                android.util.Log.w("Zenelo", "play similar failed", e)
+                _open.tryEmit(e.message ?: "Couldn't reach the server")
+            }
+        }
+    }
+
     private fun endFor(path: String, all: List<TrackEntity>): End? {
-        val serverPath = if (MStreamPaths.isRemote(path)) path else LibraryMerge.twins(all).entries.firstOrNull { it.value == path }?.key
-        serverPath ?: return null
+        val serverPath = links.current.serverOf(path) ?: return null
         val track = all.firstOrNull { it.path == path }
         return End(path, MStreamPaths.serverPath(serverPath), track?.title ?: path.substringAfterLast('/'), track?.artist ?: track?.albumArtist)
     }

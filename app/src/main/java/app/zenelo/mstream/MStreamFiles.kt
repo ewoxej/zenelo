@@ -3,9 +3,6 @@ package app.zenelo.mstream
 import android.content.Context
 import android.os.Environment
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -23,66 +20,64 @@ import java.util.concurrent.TimeUnit
  *
  * The player plays a local copy when there is one ([localCopy]), else streams.
  */
-class MStreamFiles(context: Context, base: OkHttpClient) {
+class MStreamFiles(context: Context, base: OkHttpClient, private val links: ServerLinks) {
     private val client = base.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
     private val cacheDir = File(context.cacheDir, "mstream").apply { mkdirs() }
 
-    /** Pushed from settings ([setDownloadDir]); read by rows (download mark) and the player. */
+    /** Pushed from settings ([setDownloadDir]); read by the player and [ServerLinks]. */
     @Volatile
     var downloadDir: File = defaultDownloadDir()
         private set
 
-    private val _downloaded = MutableStateFlow<Set<String>>(emptySet())
-
-    /**
-     * Server tracks (our `mstream://` paths) with a copy in [downloadDir]: their rows show the
-     * download mark and lose "Download" at once, before the copy is indexed. Read from the folder
-     * when it's set, then kept up to date by [download].
-     */
-    val downloadedPaths: StateFlow<Set<String>> = _downloaded.asStateFlow()
-
-    /** Sets the download folder and reads which server tracks are in it (call off the main thread). */
+    /** Sets the download folder; files already in it are linked to their server tracks by [ServerLinks]. */
     fun setDownloadDir(dir: File) {
         downloadDir = dir
-        val found = HashSet<String>()
-        dir.walkTopDown().filter { it.isFile && !it.name.endsWith(PART) }.forEach { found.add(MStreamPaths.of(it.relativeTo(dir).path)) }
-        _downloaded.value = found
+        links.downloadDir = dir
     }
 
     fun downloadTarget(path: String): File = File(downloadDir, MStreamPaths.serverPath(path))
 
     fun downloaded(path: String): File? = downloadTarget(path).takeIf { it.isFile }
 
-    /** A server track already downloaded (from memory: no disk access, fine in lists). */
-    fun isDownloaded(path: String?): Boolean = path != null && path in _downloaded.value
+    /** A server track with a local copy — downloaded or the user's own (from memory: fine in lists). */
+    fun isDownloaded(path: String?): Boolean = links.current.localOf(path) != null
 
     fun cached(path: String): File? = cacheFile(path).takeIf { it.isFile }
 
-    /** A downloaded or cached copy of a server track; using a cached one keeps it from eviction longest. */
+    /** Names in the queue cache (read once, then kept up to date): [isCached] without disk access. */
+    private val cachedNames: MutableSet<String> by lazy {
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>()).apply {
+            cacheDir.list()?.filterNot { it.endsWith(PART) }?.let(::addAll)
+        }
+    }
+
+    /** A server track in the queue cache (from memory: fine in lists). */
+    fun isCached(path: String): Boolean = cacheFile(path).name in cachedNames
+
+    /** A server track that plays without the network: a local copy, downloaded or cached. */
+    fun playsOffline(path: String): Boolean =
+        !MStreamPaths.isRemote(path) || links.current.localOf(path) != null || isCached(path) || downloaded(path) != null
+
+    /**
+     * A local copy of a server track: its linked file (a download, or the user's own copy), else
+     * one in the download folder, else in the queue cache (using it keeps it from eviction longest).
+     */
     fun localCopy(path: String): File? {
         if (!MStreamPaths.isRemote(path)) return null
+        links.current.localOf(path)?.let(::File)?.takeIf { it.isFile }?.let { return it }
         downloaded(path)?.let { return it }
         return cached(path)?.also { it.setLastModified(System.currentTimeMillis()) }
     }
 
-    /** A downloaded copy was deleted: its server track can be downloaded again. */
-    fun forgetDeleted(localPaths: List<String>) {
-        val gone = localPaths.filter(::isDownload).map { MStreamPaths.of(File(it).relativeTo(downloadDir).path) }
-        if (gone.isNotEmpty()) _downloaded.value = _downloaded.value - gone.toSet()
-    }
-
-    /** A local file that "Download" put there (download mark in lists). */
-    fun isDownload(localPath: String?): Boolean =
-        localPath != null && !MStreamPaths.isRemote(localPath) && localPath.startsWith(downloadDir.path + "/")
-
     /** Downloads [path] to [downloadDir] (for good); [progress] gets bytes so far and the size (-1 unknown). */
     suspend fun download(account: MStreamAccount, mstream: MStreamClient, path: String, progress: (Long, Long) -> Unit = { _, _ -> }): File =
         fetch(mstream.mediaUrl(account, MStreamPaths.serverPath(path)).toString(), account.token, downloadTarget(path), progress)
-            .also { _downloaded.value = _downloaded.value + path }
+            .also { links.onDownloaded(it, path) }
 
     /** Downloads [path] into the queue cache, then trims the cache to [limitBytes]. */
     suspend fun cache(account: MStreamAccount, mstream: MStreamClient, path: String, limitBytes: Long): File {
         val file = fetch(mstream.mediaUrl(account, MStreamPaths.serverPath(path)).toString(), account.token, cacheFile(path))
+        cachedNames.add(file.name)
         evict(limitBytes, keep = file)
         return file
     }
@@ -91,6 +86,7 @@ class MStreamFiles(context: Context, base: OkHttpClient) {
 
     fun clearCache() {
         cacheDir.listFiles()?.forEach { it.delete() }
+        cachedNames.clear()
     }
 
     private fun evict(limitBytes: Long, keep: File) {
@@ -101,6 +97,7 @@ class MStreamFiles(context: Context, base: OkHttpClient) {
             if (f == keep) continue
             total -= f.length()
             f.delete()
+            cachedNames.remove(f.name)
         }
     }
 

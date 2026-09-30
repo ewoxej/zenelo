@@ -38,6 +38,8 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.zenelo.data.db.AlbumRow
 import app.zenelo.data.db.ArtistRow
+import app.zenelo.data.db.GenreRow
+import androidx.compose.material.icons.outlined.Category
 import app.zenelo.data.db.RecentPlay
 import app.zenelo.data.db.TrackEntity
 import app.zenelo.data.settings.LibraryView
@@ -63,8 +65,8 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
-/** Where the library pages lead: album and artist pages. */
-class LibraryNav(val onOpenAlbum: (String) -> Unit, val onOpenArtist: (String) -> Unit)
+/** Where the library pages lead: album, artist and genre pages. */
+class LibraryNav(val onOpenAlbum: (String) -> Unit, val onOpenArtist: (String) -> Unit, val onOpenGenre: (String) -> Unit = {})
 
 /** The playing track's path and its album key, for highlighting. */
 @Composable
@@ -241,6 +243,61 @@ fun ArtistsScreen(vm: LibraryViewModel, nav: LibraryNav, onBack: (() -> Unit)?) 
         EmptyNote(artists, visible.isEmpty(), search, "No artists yet. Artists come from the tags of your files once the library is scanned.")
     }
 }
+
+/** Genres from the tags (local files and the server's), each opening its tracks. List only. */
+@Composable
+fun GenresScreen(vm: LibraryViewModel, nav: LibraryNav, onBack: (() -> Unit)?) {
+    val genres by vm.genres.collectAsStateWithLifecycle()
+    val settings by vm.settings.collectAsStateWithLifecycle()
+    val search = remember { PageSearch() }
+    val selection = rememberSelection<String>()
+    val sort = settings.sorts[SortPage.GENRES] ?: SortPage.GENRES.default
+    val markLeft = settings.selectionMarker == SelectionMarkerSide.LEFT
+    val all = genres.orEmpty()
+    val visible = remember(all, search.query) { all.filter { search.matches(it.name) } }
+    val chosen = { visible.filter { it.key in selection.keys } }
+
+    LibraryScaffold(
+        sourceMenu = true,
+        title = "Genres",
+        count = genres?.size,
+        caption = sort.label,
+        onBack = onBack,
+        search = search,
+        selection = selection,
+        selectAll = { selection.toggleAll(visible.map { it.key }) },
+        allSelected = visible.isNotEmpty() && selection.keys.size >= visible.size,
+        onSelectionAction = { vm.onGenres(chosen(), it) },
+        onSelectionPlay = { vm.playGenres(chosen(), it) },
+        sortFields = SortPage.GENRES.fields,
+        sort = sort,
+        onSort = { vm.setSort(SortPage.GENRES, it) },
+    ) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = FabClearance)) {
+            items(visible, key = { it.key }) { genre ->
+                LibraryRow(
+                    title = genre.name,
+                    subtitle = genreDetail(genre),
+                    subtitleMono = true,
+                    coverPath = genre.coverPath,
+                    placeholder = Icons.Outlined.Category,
+                    cloud = false,
+                    downloaded = false,
+                    selecting = selection.active,
+                    selected = genre.key in selection.keys,
+                    markLeft = markLeft,
+                    onClick = { if (selection.active) selection.toggle(genre.key) else nav.onOpenGenre(genre.key) },
+                    onLongClick = { selection.start(genre.key) },
+                    trailing = { Chevron() },
+                )
+            }
+        }
+        EmptyNote(genres, visible.isEmpty(), search, "No genres yet. They come from the genre tags of your files (and of the mStream server's).")
+    }
+}
+
+fun genreDetail(genre: GenreRow): String =
+    "${genre.tracks} track${if (genre.tracks == 1) "" else "s"} · ${genre.artists} artist${if (genre.artists == 1) "" else "s"}"
 
 private sealed interface TrackItem {
     /** [first]: index of its first track, so the key stays unique if a header comes up twice. */

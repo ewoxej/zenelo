@@ -355,12 +355,66 @@ fun SourceLabel(source: LibrarySource, modifier: Modifier = Modifier) {
     )
 }
 
-/** A server track that "Download" saved already; follows downloads as they finish. */
+/**
+ * On the device and on the mStream server: a server track with a local copy (downloaded or the
+ * user's own), or a local file with a server copy (see `ServerLinks`). Follows downloads as they finish.
+ */
 @Composable
 fun rememberDownloaded(path: String?): Boolean {
-    if (!app.zenelo.mstream.MStreamPaths.isRemote(path)) return false
-    val downloaded by appContainer().mstreamFiles.downloadedPaths.collectAsStateWithLifecycle()
-    return path in downloaded
+    if (path == null) return false
+    val links by appContainer().serverLinks.links.collectAsStateWithLifecycle()
+    return links.isLinked(path)
+}
+
+/** Whether a track can play now: always online; offline, local files and server tracks with a copy here. */
+@Composable
+fun rememberPlayableNow(): (String) -> Boolean {
+    val container = appContainer()
+    val online by container.network.online.collectAsStateWithLifecycle()
+    val links by container.serverLinks.links.collectAsStateWithLifecycle()
+    return remember(online, links) { { path: String -> online || container.mstreamFiles.playsOffline(path) } }
+}
+
+/** Online (the network is up): server features show only then. */
+@Composable
+fun rememberOnline(): Boolean {
+    val online by appContainer().network.online.collectAsStateWithLifecycle()
+    return online
+}
+
+/** Offline: playlists none of whose tracks can play (shown faded). Empty online. */
+@Composable
+fun rememberUnplayablePlaylists(): Set<Long> {
+    val playable = rememberPlayableNow()
+    if (rememberOnline()) return emptySet()
+    val dao = appContainer().db.playlists()
+    val flow = remember { dao.observeAllEntries() }
+    val entries by flow.collectAsStateWithLifecycle(initialValue = emptyList())
+    return remember(entries, playable) {
+        entries.groupBy { it.playlistId }.filterValues { list -> list.none { playable(it.path) } }.keys
+    }
+}
+
+/** How faded a track (or playlist) is that can't play offline. */
+const val UNPLAYABLE_ALPHA = 0.4f
+
+/** Offline and a server track with no copy on the device (downloaded, the user's own or cached): it can't play now. */
+@Composable
+fun rememberUnplayable(path: String?, remote: Boolean = app.zenelo.mstream.MStreamPaths.isRemote(path)): Boolean {
+    if (path == null || !remote) return false
+    val container = appContainer()
+    val online by container.network.online.collectAsStateWithLifecycle()
+    if (online) return false
+    val links by container.serverLinks.links.collectAsStateWithLifecycle()
+    return links.localOf(path) == null && !container.mstreamFiles.isCached(path)
+}
+
+/** A local file or server track the server knows (a server track, or a local file with a server copy). */
+@Composable
+fun rememberOnServer(path: String?): Boolean {
+    if (path == null) return false
+    if (app.zenelo.mstream.MStreamPaths.isRemote(path)) return true
+    return rememberDownloaded(path)
 }
 
 /** The small cloud after a title: on the mStream server only (not on the device). */

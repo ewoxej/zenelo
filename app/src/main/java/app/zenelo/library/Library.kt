@@ -2,6 +2,7 @@ package app.zenelo.library
 
 import app.zenelo.data.db.AlbumRow
 import app.zenelo.data.db.ArtistRow
+import app.zenelo.data.db.GenreRow
 import app.zenelo.data.db.PlayEntity
 import app.zenelo.data.db.RecentPlay
 import app.zenelo.data.db.TrackEntity
@@ -27,7 +28,17 @@ import java.util.concurrent.TimeUnit
  * merged and filtered by the chosen [LibrarySource] (see [LibraryMerge]): albums, artists, all
  * tracks, and the play history behind "Recently played".
  */
-class Library(db: ZeneloDatabase, splitter: Flow<ArtistSplitter>, source: Flow<LibrarySource>, scope: CoroutineScope) {
+class Library(
+    db: ZeneloDatabase,
+    splitter: Flow<ArtistSplitter>,
+    source: Flow<LibrarySource>,
+    scope: CoroutineScope,
+    /** Online; offline, server tracks with no copy on the device leave the library. */
+    online: Flow<Boolean> = kotlinx.coroutines.flow.flowOf(true),
+    /** A server track in the queue cache (plays offline). */
+    private val isCached: (String) -> Boolean = { false },
+) {
+    private val online = online.distinctUntilChanged()
     private val tracks = db.tracks()
     private val plays = db.plays()
     private var pruned = false
@@ -35,7 +46,12 @@ class Library(db: ZeneloDatabase, splitter: Flow<ArtistSplitter>, source: Flow<L
 
     // Indexing re-emits the table after every batch of files: at most one update per interval, so
     // a library scan doesn't re-sort 7000 rows many times a second. Shared: every page reads it.
-    val allTracks: Flow<List<TrackEntity>> = combine(tracks.observeAll().throttleLatest(THROTTLE_MS), this.source, LibraryMerge::visible)
+    private val links: Flow<Map<String, String>> = db.serverLinks().observeAll().map { rows -> rows.associate { it.serverPath to it.localPath } }
+
+    val allTracks: Flow<List<TrackEntity>> = combine(tracks.observeAll().throttleLatest(THROTTLE_MS), this.source, links, this.online) { all, src, links, online ->
+        val visible = LibraryMerge.visible(all, src, links)
+        if (online) visible else visible.filter { playsOffline(it.path, links) }
+    }
         .flowOn(Dispatchers.Default)
         .shareIn(scope, SharingStarted.WhileSubscribed(5_000), replay = 1)
 
@@ -44,6 +60,12 @@ class Library(db: ZeneloDatabase, splitter: Flow<ArtistSplitter>, source: Flow<L
     private val splitter = splitter.distinctUntilChanged()
 
     val artists: Flow<List<ArtistRow>> = combine(allTracks, this.splitter, ::artistsOf).flowOn(Dispatchers.Default)
+
+    val genres: Flow<List<GenreRow>> = allTracks.map(::genresOf).flowOn(Dispatchers.Default)
+
+    fun genreTracks(genreKey: String): Flow<List<TrackEntity>> =
+        allTracks.map { all -> all.filter { t -> Genres.split(t.genre).any { Genres.key(it) == genreKey } }.sortedWith(GENRE_TRACK_ORDER) }
+            .flowOn(Dispatchers.Default)
 
     fun albumTracks(albumKey: String): Flow<List<TrackEntity>> =
         allTracks.map { all -> all.filter { it.albumKey == albumKey }.sortedWith(ALBUM_TRACK_ORDER) }.flowOn(Dispatchers.Default)
@@ -57,13 +79,18 @@ class Library(db: ZeneloDatabase, splitter: Flow<ArtistSplitter>, source: Flow<L
 
     /** Latest play of each track in the last [RECENT_DAYS] days, newest first (of the chosen source). */
     fun recent(now: Long = System.currentTimeMillis()): Flow<List<RecentPlay>> =
-        combine(plays.observeSince(now - TimeUnit.DAYS.toMillis(RECENT_DAYS)), source) { list, src ->
+        combine(plays.observeSince(now - TimeUnit.DAYS.toMillis(RECENT_DAYS)), source, links) { list, src, links ->
             when (src) {
-                LibrarySource.ALL -> list
-                LibrarySource.LOCAL -> list.filterNot { MStreamPaths.isRemote(it.path) }
+                // A server track with a local copy is that copy (plays elsewhere come back under the server path).
+                LibrarySource.ALL -> recentOf(list, links)
+                LibrarySource.LOCAL -> recentOf(list, links).filterNot { MStreamPaths.isRemote(it.path) }
                 LibrarySource.MSTREAM -> list.filter { MStreamPaths.isRemote(it.path) }
             }
-        }
+        }.let { flow -> combine(flow, online, links) { list, online, links -> if (online) list else list.filter { playsOffline(it.path, links) } } }
+
+    /** Offline: local files, and server tracks with a local copy or in the queue cache. */
+    private fun playsOffline(path: String, links: Map<String, String>): Boolean =
+        !MStreamPaths.isRemote(path) || path in links || isCached(path)
 
     suspend fun recordPlay(path: String, at: Long = System.currentTimeMillis()) {
         plays.insert(PlayEntity(path = path, playedAt = at))
@@ -94,6 +121,16 @@ class Library(db: ZeneloDatabase, splitter: Flow<ArtistSplitter>, source: Flow<L
                 )
             }
 
+        /** Plays with server tracks as their local copy ([links]: server → local), one row per track, newest first. */
+        fun recentOf(list: List<RecentPlay>, links: Map<String, String>): List<RecentPlay> {
+            if (links.isEmpty()) return list
+            val seen = HashSet<String>()
+            return list.sortedByDescending { it.playedAt }.mapNotNull { p ->
+                val path = links[p.path] ?: p.path
+                if (seen.add(path)) p.copy(path = path) else null
+            }
+        }
+
         private val ALBUM_TRACK_ORDER = compareBy<TrackEntity>({ it.trackNumber == null }, { it.trackNumber }, { it.path })
 
         /**
@@ -122,6 +159,34 @@ class Library(db: ZeneloDatabase, splitter: Flow<ArtistSplitter>, source: Flow<L
             }
             return byKey.map { (key, a) -> ArtistRow(key, a.name, a.albums.size, a.tracks, a.added, a.cover ?: a.anyPath!!) }
         }
+
+        /** Genres of the tracks; a track tagged with several counts for each. */
+        fun genresOf(tracks: List<TrackEntity>): List<GenreRow> {
+            class Acc(var name: String) {
+                val artists = HashSet<String>()
+                var tracks = 0
+                var durationMs = 0L
+                var cover: String? = null
+                var anyPath: String? = null
+            }
+            val byKey = LinkedHashMap<String, Acc>()
+            for (t in tracks) {
+                for (name in Genres.split(t.genre)) {
+                    val acc = byKey.getOrPut(Genres.key(name)) { Acc(name) }
+                    if (name > acc.name) acc.name = name
+                    t.artistTag?.let { acc.artists.add(artistKey(it)) }
+                    acc.tracks++
+                    acc.durationMs += t.durationMs
+                    if (t.hasArtwork && (acc.cover == null || t.path < acc.cover!!)) acc.cover = t.path
+                    if (acc.anyPath == null || t.path < acc.anyPath!!) acc.anyPath = t.path
+                }
+            }
+            return byKey.map { (key, a) -> GenreRow(key, a.name, a.tracks, a.artists.size, a.durationMs, a.cover ?: a.anyPath!!) }
+        }
+
+        private val GENRE_TRACK_ORDER = compareBy<TrackEntity>(
+            { it.artistTag == null }, { it.artistTag?.lowercase() }, { it.album?.lowercase() }, { it.trackNumber ?: Int.MAX_VALUE }, { it.path },
+        )
 
         private val ARTIST_TRACK_ORDER = compareBy<TrackEntity>({ it.album == null }, { it.album?.lowercase() }, { it.trackNumber == null }, { it.trackNumber }, { it.path })
 

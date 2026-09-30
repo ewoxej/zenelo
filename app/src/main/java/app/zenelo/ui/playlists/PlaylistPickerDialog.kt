@@ -32,6 +32,7 @@ import app.zenelo.data.db.PlaylistEntity
 import app.zenelo.ui.components.IconTile
 import app.zenelo.ui.components.appContainer
 import app.zenelo.ui.theme.ZeneloColors
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -43,15 +44,30 @@ fun PlaylistPickerDialog(paths: List<String>, onDismiss: () -> Unit, onDone: (St
     val dao = appContainer().db.playlists()
     val flow = remember { dao.observeWithCounts() }
     val playlists by flow.collectAsStateWithLifecycle(initialValue = emptyList())
-    val scope = rememberCoroutineScope()
     var creating by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
     val what = if (paths.size == 1) "1 track" else "${paths.size} tracks"
 
-    fun add(id: Long, playlistName: String) {
-        scope.launch {
-            dao.appendAll(id, paths)
-            onDone("$what added to $playlistName")
+    val sync = appContainer().mstreamSync
+    val account by appContainer().settings.settings.map { it.mstream }.collectAsStateWithLifecycle(initialValue = null)
+    var onServer by remember { mutableStateOf(false) }
+
+    /** A server playlist only takes tracks the server has: local ones go as their server copy, if any. */
+    // In the app's scope: the dialog (and its scope) goes away at once.
+    val appScope = appContainer().appScope
+    fun add(id: Long, playlistName: String, remote: Boolean) {
+        appScope.launch {
+            val wanted = if (remote) sync.serverCopies(paths) else paths
+            val added = wanted.filterNotNull()
+            if (added.isNotEmpty()) dao.appendAll(id, added)
+            val skipped = wanted.size - added.size
+            onDone(
+                when {
+                    added.isEmpty() -> "Not on the mStream server: nothing added to $playlistName"
+                    skipped > 0 -> "${added.size} added to $playlistName · $skipped not on the server"
+                    else -> "$what added to $playlistName"
+                },
+            )
         }
         onDismiss()
     }
@@ -64,6 +80,7 @@ fun PlaylistPickerDialog(paths: List<String>, onDismiss: () -> Unit, onDone: (St
             Column {
                 if (creating) {
                     OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, placeholder = { Text("Playlist name") })
+                    if (account != null) ServerSwitch(onServer) { onServer = it }
                 } else {
                     Row(
                         Modifier.fillMaxWidth().clickable { creating = true }.padding(vertical = 8.dp),
@@ -74,17 +91,16 @@ fun PlaylistPickerDialog(paths: List<String>, onDismiss: () -> Unit, onDone: (St
                         Text("New playlist", style = MaterialTheme.typography.bodyLarge, color = ZeneloColors.Mustard)
                     }
                     LazyColumn(Modifier.heightIn(max = 300.dp)) {
-                        // Server playlists are read-only copies: not offered.
-                        items(playlists.filterNot { it.remote }, key = { it.id }) { p ->
+                        items(playlists, key = { it.id }) { p ->
                             Row(
-                                Modifier.fillMaxWidth().clickable { add(p.id, p.name) }.padding(vertical = 8.dp),
+                                Modifier.fillMaxWidth().clickable { add(p.id, p.name, p.remote) }.padding(vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 IconTile(Icons.AutoMirrored.Rounded.QueueMusic, ZeneloColors.Mustard, ZeneloColors.MustardTint)
                                 Spacer(Modifier.width(12.dp))
                                 Column(Modifier.weight(1f)) {
                                     Text(p.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
-                                    Text("${p.trackCount} track${if (p.trackCount == 1) "" else "s"}", style = MaterialTheme.typography.labelMedium, color = ZeneloColors.TextMuted)
+                                    Text("${p.trackCount} track${if (p.trackCount == 1) "" else "s"}" + if (p.remote) " · mStream" else "", style = MaterialTheme.typography.labelMedium, color = ZeneloColors.TextMuted)
                                 }
                             }
                         }
@@ -98,16 +114,32 @@ fun PlaylistPickerDialog(paths: List<String>, onDismiss: () -> Unit, onDone: (St
                     enabled = name.isNotBlank(),
                     onClick = {
                         val trimmed = name.trim()
-                        scope.launch {
-                            val id = dao.insert(PlaylistEntity(name = trimmed))
-                            dao.appendAll(id, paths)
-                            onDone("$what added to $trimmed")
+                        if (onServer) {
+                            appScope.launch { add(dao.insert(PlaylistEntity(name = trimmed, remote = true, dirty = true)), trimmed, remote = true) }
+                        } else {
+                            appScope.launch {
+                                val id = dao.insert(PlaylistEntity(name = trimmed))
+                                dao.appendAll(id, paths)
+                                onDone("$what added to $trimmed")
+                            }
+                            onDismiss()
                         }
-                        onDismiss()
                     },
                 ) { Text("Create") }
             }
         },
         dismissButton = { TextButton(onClick = { if (creating) creating = false else onDismiss() }) { Text(if (creating) "Back" else "Cancel") } },
     )
+}
+
+/** "On the mStream server" for a new playlist (logged in only). */
+@Composable
+fun ServerSwitch(checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("On the mStream server", style = MaterialTheme.typography.bodyLarge)
+            Text("Server tracks only; shows in its web app too", style = MaterialTheme.typography.bodySmall, color = ZeneloColors.TextMuted)
+        }
+        androidx.compose.material3.Switch(checked = checked, onCheckedChange = onChange, colors = app.zenelo.ui.settings.zeneloSwitchColors())
+    }
 }

@@ -98,6 +98,13 @@ class PlayQueue(
     private var saveJob: Job? = null
     private var player: ExoPlayer? = null
 
+    /**
+     * The path to queue for a track: a server track with a local copy is queued as the copy (set by
+     * the app to `ServerLinks.canonical`), so it plays from the device and shows as local everywhere.
+     */
+    @Volatile
+    var resolvePath: (String) -> String = { it }
+
     private var paths: List<String> = emptyList()
     private var order: List<Int> = emptyList()
 
@@ -194,7 +201,7 @@ class PlayQueue(
         if (files.isEmpty()) return@launchLocked
         val start = startIndex?.coerceIn(files.indices)
         val shuffleOn = shuffle ?: p.shuffleModeEnabled
-        paths = files.map { it.path }
+        paths = files.map { resolvePath(it.path) }
         order = if (shuffleOn) shuffledOrder(start) else paths.indices.toList()
         current = if (start == null) 0L else order.indexOf(start).toLong()
 
@@ -218,7 +225,7 @@ class PlayQueue(
         val p = player ?: return@launchLocked
         if (p.mediaItemCount > 0 || order.isNotEmpty()) return@launchLocked
         val saved = withContext(Dispatchers.IO) { SavedQueue.read(stateFile, positionFile) } ?: return@launchLocked
-        paths = saved.paths
+        paths = saved.paths.map(resolvePath)
         order = saved.order
         current = saved.current.toLong()
         // Flags first: the window depends on repeat, and matching [shuffled] keeps the order as saved.
@@ -249,7 +256,7 @@ class PlayQueue(
             if (order.isEmpty()) return@launchLocked playNow(files)
             normalizeCurrent()
             val first = paths.size
-            paths = paths + files.map { it.path }
+            paths = paths + files.map { resolvePath(it.path) }
             order = order + (first until paths.size)
             rebuildAroundCurrent()
         }
@@ -262,7 +269,7 @@ class PlayQueue(
         if (order.isEmpty()) return@launchLocked playNow(files)
         normalizeCurrent()
         val first = paths.size
-        paths = paths + files.map { it.path }
+        paths = paths + files.map { resolvePath(it.path) }
         order = order.toMutableList().apply { addAll(current.toInt() + 1, (first until paths.size).toList()) }
         rebuildAroundCurrent()
     }
@@ -346,7 +353,7 @@ class PlayQueue(
 
     private suspend fun playNow(files: List<AudioFile>) {
         val p = player ?: return
-        paths = files.map { it.path }
+        paths = files.map { resolvePath(it.path) }
         order = paths.indices.toList()
         current = 0
         val positions = windowAround(0)

@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.Album
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Tune
@@ -37,6 +38,9 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import app.zenelo.ui.components.rememberUnplayablePlaylists
+import app.zenelo.ui.components.UNPLAYABLE_ALPHA
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -64,10 +68,12 @@ import app.zenelo.ui.components.CoverImage
 import app.zenelo.ui.components.IconTile
 import app.zenelo.ui.components.icon
 import app.zenelo.ui.components.appContainer
+import app.zenelo.ui.components.rememberPlayableNow
 import app.zenelo.ui.components.formatDuration
 import app.zenelo.ui.library.LibraryNav
 import app.zenelo.ui.library.LibraryViewModel
 import app.zenelo.ui.library.artistDetail
+import app.zenelo.ui.library.genreDetail
 import app.zenelo.ui.library.recentTitle
 import app.zenelo.ui.library.rememberNowPlaying
 import app.zenelo.ui.theme.PlexMono
@@ -138,6 +144,7 @@ fun HomeScreen(vm: LibraryViewModel, nav: HomeNav) {
                     Section.FOLDERS -> FoldersCard(grid, nav)
                     Section.FAVORITES -> FavoritesCard(vm, grid, nav)
                     Section.PLAYLISTS -> PlaylistsCard(grid, nav)
+                    Section.GENRES -> GenresCard(vm, grid, nav)
                     else -> Unit
                 }
             }
@@ -339,6 +346,27 @@ private fun ArtistsCard(vm: LibraryViewModel, grid: Boolean, nav: HomeNav) {
 }
 
 @Composable
+private fun GenresCard(vm: LibraryViewModel, grid: Boolean, nav: HomeNav) {
+    val genres by vm.genres.collectAsStateWithLifecycle()
+    val settings by vm.settings.collectAsStateWithLifecycle()
+    val sort = settings.sorts[SortPage.GENRES] ?: SortPage.GENRES.default
+    val list = genres.orEmpty()
+    HomeCard(Section.GENRES, "BY ${sort.sortBy.label.uppercase()}", genres?.size, nav) {
+        if (genres != null && list.isEmpty()) return@HomeCard EmptyCard("No genres yet.")
+        if (grid) {
+            TileRow(list, { it.key }) { genre ->
+                HomeTile(genre.name, "${genre.tracks} tracks", genre.coverPath, { nav.library.onOpenGenre(genre.key) }, icon = Icons.Outlined.Category)
+            }
+        } else {
+            list.take(LIST_ROWS).forEach { genre ->
+                HomeRow(genre.name, genreDetail(genre), genre.coverPath, { nav.library.onOpenGenre(genre.key) }, icon = Icons.Outlined.Category, mono = true)
+            }
+            MoreCount(list.size - LIST_ROWS, "genres")
+        }
+    }
+}
+
+@Composable
 private fun TracksCard(vm: LibraryViewModel, grid: Boolean, nav: HomeNav) {
     val tracks by vm.tracks.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
@@ -397,7 +425,14 @@ private fun FoldersCard(grid: Boolean, nav: HomeNav) {
 private fun FavoritesCard(vm: LibraryViewModel, grid: Boolean, nav: HomeNav) {
     val container = appContainer()
     val flow = remember { container.db.favorites().observeAll() }
-    val favorites by flow.collectAsStateWithLifecycle(initialValue = null)
+    val all by flow.collectAsStateWithLifecycle(initialValue = null)
+    val playable = rememberPlayableNow()
+    val links by container.serverLinks.links.collectAsStateWithLifecycle()
+    val favorites = remember(all, playable, links) {
+        all?.map { if (it.kind == FavoriteKind.TRACK) it.copy(path = links.canonical(it.path)) else it }
+            ?.distinctBy { it.path }
+            ?.filter { it.kind != FavoriteKind.TRACK || playable(it.path) }
+    }
     val list = favorites.orEmpty()
     val tracks = remember(list) { list.filter { it.kind == FavoriteKind.TRACK }.map { AudioFile.forPath(it.path) } }
     val open = { f: FavoriteEntity ->
@@ -436,15 +471,17 @@ private fun PlaylistsCard(grid: Boolean, nav: HomeNav) {
     val flow = remember { dao.observeWithCounts() }
     val playlists by flow.collectAsStateWithLifecycle(initialValue = null)
     val list = playlists.orEmpty()
+    val unplayable = rememberUnplayablePlaylists()
+    fun faded(p: app.zenelo.data.db.PlaylistWithCount) = Modifier.alpha(if (p.id in unplayable) UNPLAYABLE_ALPHA else 1f)
     HomeCard(Section.PLAYLISTS, null, playlists?.size, nav) {
         if (playlists != null && list.isEmpty()) return@HomeCard EmptyCard("No playlists yet.")
         if (grid) {
             TileRow(list, { it.id }) { p ->
-                HomeTile(p.name, "${p.trackCount} tracks", p.coverPath, { nav.onOpenPlaylist(p.id) }, icon = Icons.AutoMirrored.Rounded.QueueMusic)
+                Box(faded(p)) { HomeTile(p.name, "${p.trackCount} tracks", p.coverPath, { nav.onOpenPlaylist(p.id) }, icon = Icons.AutoMirrored.Rounded.QueueMusic) }
             }
         } else {
             list.take(LIST_ROWS).forEach { p ->
-                HomeRow(p.name, "${p.trackCount} tracks", p.coverPath, { nav.onOpenPlaylist(p.id) }, icon = Icons.AutoMirrored.Rounded.QueueMusic, mono = true)
+                Box(faded(p)) { HomeRow(p.name, "${p.trackCount} tracks", p.coverPath, { nav.onOpenPlaylist(p.id) }, icon = Icons.AutoMirrored.Rounded.QueueMusic, mono = true) }
             }
             MoreCount(list.size - LIST_ROWS, "playlists")
         }
