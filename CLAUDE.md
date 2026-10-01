@@ -36,7 +36,9 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   have no player duration until their end: `Mp3Scan` (unit-tested) counts their frames at indexing,
   the MediaItem carries that length (`MediaMetadata.durationMs`), and the UI / `Crossfader` fall back to it.
 - Library index: `tracks` table, filled by `LibraryIndexer` (WorkManager `IndexWorker` on app start,
-  plus on-demand for the folder on screen).
+  plus on-demand for the folder on screen). Changed files are found by mtime in whole seconds + size:
+  the walk's NIO times are seconds on Android, `File.lastModified` milliseconds — compared exactly,
+  every scan re-read the whole library.
 - Covers & lyrics (`MetadataFetcher`): online only on Wi-Fi. Covers: embedded → folder image →
   cached → Deezer/iTunes/MusicBrainz (+ Last.fm if the user set an API key). Downloaded covers are
   embedded into files without art. Online search is by tags (album artist + album, else the song);
@@ -44,7 +46,9 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   cover is shown but never embedded (its source ends in " (by path)"). `Text.matches` (unit-tested)
   is equality or a word-boundary prefix, not "contains": folder names like "Music" / "Lyrics" once
   matched "VedicDhvani Music" and got its cover written into files. Lyrics: sibling .lrc → tags → LRCLIB. Background `FetchWorker`
-  on unmetered network. LRCLIB queries go from the tags as they are to cleaned-up variants
+  on unmetered network, local files only (server tracks get theirs when shown / played; a whole
+  server library took hours), with progress for settings; several LRCLIB non-answers in a row end
+  the run. LRCLIB queries go from the tags as they are to cleaned-up variants
   (`LyricsSearch`, unit-tested: "Song - Live" / "(feat. …)" / "[site.net]" dropped, first artist of
   a multi-artist tag): exact get → searches by title × artist → free-text search. A record counts only
   when title and artist match after clean-up; same length (±3 s) → synced, else the closest version's

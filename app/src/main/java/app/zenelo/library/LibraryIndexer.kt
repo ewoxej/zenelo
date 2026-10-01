@@ -48,8 +48,11 @@ class LibraryIndexer(db: ZeneloDatabase) {
         ensureActive()
 
         val stamps = tracks.stamps().associateBy { it.path }
+        // Whole seconds: the walk's times (NIO) come in seconds on Android, the stored ones
+        // (File.lastModified) in milliseconds — compared exactly, every file looked changed and
+        // each scan re-read the whole library.
         val changed = found.filter { (path, stamp) ->
-            stamps[path]?.let { it.modified != stamp.first || it.size != stamp.second } ?: true
+            stamps[path]?.let { it.modified / 1000 != stamp.first / 1000 || it.size != stamp.second } ?: true
         }.keys.map(::File)
             // The home folder first: its folder counts are what the user sees first.
             .sortedBy { first == null || !it.path.startsWith(first.path + "/") }

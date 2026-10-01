@@ -573,7 +573,7 @@ private fun LibraryStatus() {
         subtitle = when (stage) {
             null -> summary
             is LibraryWork.Stage.Scanning -> if (stage.total > 0) "Reading tags · ${stage.done} / ${stage.total}" else "Looking for new files…"
-            LibraryWork.Stage.Fetching -> "Downloading covers & lyrics…"
+            is LibraryWork.Stage.Fetching -> if (stage.total > 0) "Covers & lyrics · ${stage.done} / ${stage.total}" else "Downloading covers & lyrics…"
             LibraryWork.Stage.Measuring -> "Measuring loudness…"
         },
         onClick = { LibraryWork.scanNow(context) },

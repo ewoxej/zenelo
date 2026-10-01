@@ -128,7 +128,8 @@ object LibraryWork {
     sealed interface Stage {
         /** Reading tags: [done] of [total] new or changed files (0 / 0 while walking the folders). */
         data class Scanning(val done: Int, val total: Int) : Stage
-        data object Fetching : Stage
+        /** Covers / lyrics: [done] of [total] albums and tracks to look up. */
+        data class Fetching(val done: Int, val total: Int) : Stage
         data object Measuring : Stage
     }
 
@@ -142,7 +143,9 @@ object LibraryWork {
         if (index != null && (index.state == WorkInfo.State.RUNNING || index.state == WorkInfo.State.ENQUEUED)) {
             return Stage.Scanning(index.progress.getInt(PROGRESS_DONE, 0), index.progress.getInt(PROGRESS_TOTAL, 0))
         }
-        if (of(FetchWorker::class.java)?.state == WorkInfo.State.RUNNING) return Stage.Fetching
+        of(FetchWorker::class.java)?.takeIf { it.state == WorkInfo.State.RUNNING }?.let {
+            return Stage.Fetching(it.progress.getInt(PROGRESS_DONE, 0), it.progress.getInt(PROGRESS_TOTAL, 0))
+        }
         if (of(LoudnessWorker::class.java)?.state == WorkInfo.State.RUNNING) return Stage.Measuring
         return null
     }
@@ -169,24 +172,53 @@ class FetchWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         val fetcher = container.metadata
         if (!Environment.isExternalStorageManager() || !container.settings.settings.first().onlineFetch) return Result.success()
 
+        // Local files only. Server tracks get the server's cover / lyrics (then the public sources)
+        // when they're shown or played; looking up a whole server library from here took hours —
+        // and their rows never have embedded art, so they'd come round on every run.
+        val local = { t: app.zenelo.data.db.TrackEntity -> !app.zenelo.mstream.MStreamPaths.isRemote(t.path) }
+        val groups = container.db.tracks().withoutArtwork().filter(local).groupBy { fetcher.coverKey(it) }
+        val retryBefore = System.currentTimeMillis() - MetadataFetcher.RETRY_AFTER_MS
+        val needingLyrics = container.db.tracks().needingLyrics(retryBefore).filter(local)
+        val total = groups.size + needingLyrics.size
+        var done = 0
+        suspend fun step() {
+            done++
+            if (done % 10 == 0 || done == total) setProgress(workDataOf(LibraryWork.PROGRESS_DONE to done, LibraryWork.PROGRESS_TOTAL to total))
+        }
+        setProgress(workDataOf(LibraryWork.PROGRESS_DONE to 0, LibraryWork.PROGRESS_TOTAL to total))
+
         // Covers: one lookup per album; the result is embedded into every track of it lacking art.
-        val groups = container.db.tracks().withoutArtwork().groupBy { fetcher.coverKey(it) }
         for ((_, group) in groups) {
             if (isStopped || !fetcher.onlineAllowed()) return Result.success()
+            step()
             val cover = fetcher.coverFor(group.first(), allowNetwork = true) ?: continue
             if (fetcher.folderImage(group.first().dir) == cover) continue // folder art is shown, not embedded
             if (!fetcher.coverIsConfident(group.first())) continue // guessed from the path: shown, not embedded
             fetcher.embed(group, cover, replace = false)
         }
 
-        // Lyrics, politely paced.
-        val retryBefore = System.currentTimeMillis() - MetadataFetcher.RETRY_AFTER_MS
-        for (track in container.db.tracks().needingLyrics(retryBefore)) {
+        // Lyrics, politely paced. A lookup that gets no answer at all (null: LRCLIB down or the
+        // network gone) is retried next run; several in a row end this one instead of timing out
+        // track after track.
+        var failures = 0
+        for (track in needingLyrics) {
             if (isStopped || !fetcher.onlineAllowed()) return Result.success()
-            fetcher.lyricsFor(track, allowNetwork = true)
+            step()
+            if (fetcher.lyricsFor(track, allowNetwork = true) == null) {
+                if (++failures >= MAX_FAILURES) {
+                    android.util.Log.w("Zenelo", "lyrics: no answer from LRCLIB $failures times in a row, stopping until the next run")
+                    return Result.success()
+                }
+            } else {
+                failures = 0
+            }
             delay(300)
         }
         return Result.success()
+    }
+
+    private companion object {
+        const val MAX_FAILURES = 8
     }
 }
 
