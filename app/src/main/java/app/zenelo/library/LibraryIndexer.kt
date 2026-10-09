@@ -34,17 +34,19 @@ class LibraryIndexer(db: ZeneloDatabase) {
     }
 
     /**
-     * Walks every storage root (skipping hidden folders and the top-level `Android` folder), indexes
-     * new/changed files (those under [first], the home folder, before the rest) and drops rows for
-     * files that are gone.
+     * Walks the storage [volumes] as far as [scope] reaches (whitelist / blacklist, `.nomedia`;
+     * hidden folders and the top-level `Android` folder never), indexes new/changed files (those
+     * under [first], the home folder, before the rest) and drops rows for local files no longer
+     * found — gone, or now out of the scope. Rows on a volume that isn't mounted stay.
      */
     suspend fun indexAll(
-        roots: List<File>,
+        volumes: List<File>,
+        scope: ScanScope = ScanScope(),
         first: File? = null,
         onProgress: suspend (done: Int, total: Int) -> Unit = { _, _ -> },
     ) = withContext(Dispatchers.IO) {
         val found = HashMap<String, Pair<Long, Long>>()
-        roots.forEach { walk(it, found) }
+        scope.roots(volumes).forEach { walk(it, found, volumes, scope) }
         ensureActive()
 
         val stamps = tracks.stamps().associateBy { it.path }
@@ -56,7 +58,7 @@ class LibraryIndexer(db: ZeneloDatabase) {
         }.keys.map(::File)
             // The home folder first: its folder counts are what the user sees first.
             .sortedBy { first == null || !it.path.startsWith(first.path + "/") }
-        val removed = stamps.keys.filter { path -> path !in found && roots.any { path.startsWith(it.path + "/") } }
+        val removed = stamps.keys.filter { path -> path !in found && volumes.any { path.startsWith(it.path + "/") } }
         removed.chunked(QUERY_CHUNK).forEach { tracks.delete(it) }
         readAndStore(changed, onProgress)
     }
@@ -88,16 +90,18 @@ class LibraryIndexer(db: ZeneloDatabase) {
         }
     }
 
-    private fun walk(root: File, out: MutableMap<String, Pair<Long, Long>>) {
+    private fun walk(root: File, out: MutableMap<String, Pair<Long, Long>>, volumes: List<File>, scope: ScanScope) {
         val rootPath = root.toPath()
+        val volumePaths = volumes.mapTo(HashSet()) { it.toPath() }
         runCatching {
             Files.walkFileTree(
                 rootPath,
                 object : SimpleFileVisitor<Path>() {
                     override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                        // A root is walked as chosen (a whitelisted folder with .nomedia was picked on purpose).
                         if (dir == rootPath) return FileVisitResult.CONTINUE
                         val name = dir.fileName.toString()
-                        val skip = name.startsWith('.') || (dir.parent == rootPath && name == "Android")
+                        val skip = name.startsWith('.') || (dir.parent in volumePaths && name == "Android") || scope.skips(dir.toFile())
                         return if (skip) FileVisitResult.SKIP_SUBTREE else FileVisitResult.CONTINUE
                     }
 

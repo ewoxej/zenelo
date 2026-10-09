@@ -114,6 +114,21 @@ fun FavoritesScreen(
                     IconButton(onClick = { searching = false; query = "" }) { Icon(Icons.Rounded.Close, "Close search") }
                 } else {
                     ScreenTitle("Favorites", Modifier.weight(1f), count = visible.size)
+                    // Downloading the favorites keeps them downloaded: tracks liked later download too.
+                    val settingsFlow = remember { container.settings.settings }
+                    val keep by settingsFlow.collectAsStateWithLifecycle(initialValue = null)
+                    val trackPaths = remember(favorites) { favorites.filter { it.kind == FavoriteKind.TRACK }.map { it.path } }
+                    app.zenelo.ui.components.DownloadAction(
+                        trackPaths,
+                        onDownload = {
+                            container.appScope.launch {
+                                container.settings.setKeepFavoritesDownloaded(true)
+                                container.mstreamDownloads.request(trackPaths)
+                            }
+                        },
+                        kept = keep?.keepFavoritesDownloaded == true,
+                        onStopKeeping = { container.appScope.launch { container.settings.setKeepFavoritesDownloaded(false) } },
+                    )
                     IconButton(onClick = { importer.launch(arrayOf("*/*")) }) {
                         Icon(Icons.Outlined.FileOpen, "Import M3U playlist into favorites", tint = ZeneloColors.TextSecondary)
                     }
@@ -129,6 +144,7 @@ fun FavoritesScreen(
                         subtitle = listOfNotNull(favorite.subtitle, extension).joinToString(" · ")
                             .ifEmpty { favorite.kind.name.lowercase().replaceFirstChar { it.uppercase() } },
                         titleColor = if (isCurrent) ZeneloColors.Celadon else ZeneloColors.TextPrimary,
+                        mark = app.zenelo.ui.components.rememberStorageMark(favorite.path.takeIf { favorite.kind == FavoriteKind.TRACK }),
                         onClick = {
                             when (favorite.kind) {
                                 // Play the favorite tracks as a list, starting from this one.

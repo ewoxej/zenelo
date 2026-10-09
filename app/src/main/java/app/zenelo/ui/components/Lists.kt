@@ -178,6 +178,12 @@ fun SelectionBar(
                 IconMenuItem("Shuffle", Icons.Rounded.Shuffle, ZeneloColors.Celadon) { menu = false; onPlay(true) }
                 val playlist = SwipeAction.ADD_TO_PLAYLIST
                 IconMenuItem("Add to playlist…", playlist.icon, playlist.accent) { menu = false; onAction(playlist) }
+                // Server tracks among them (local ones are skipped): only while the server is reachable.
+                val server by appContainer().sonicPath.available.collectAsStateWithLifecycle()
+                if (server) {
+                    val download = SwipeAction.DOWNLOAD
+                    IconMenuItem(download.label, download.icon, download.accent) { menu = false; onAction(download) }
+                }
                 if (onRemove != null) {
                     IconMenuItem(removeLabel, Icons.Rounded.RemoveCircleOutline, ZeneloColors.Danger) { menu = false; onRemove() }
                 }

@@ -37,7 +37,10 @@ class Library(
     online: Flow<Boolean> = kotlinx.coroutines.flow.flowOf(true),
     /** A server track in the queue cache (plays offline). */
     private val isCached: (String) -> Boolean = { false },
+    /** The scan's folders: local tracks outside them don't show (see [ScanScope.inLibrary]). */
+    scanScope: Flow<ScanScope> = kotlinx.coroutines.flow.flowOf(ScanScope()),
 ) {
+    private val scanScope = scanScope.distinctUntilChanged()
     private val online = online.distinctUntilChanged()
     private val tracks = db.tracks()
     private val plays = db.plays()
@@ -48,20 +51,24 @@ class Library(
     // a library scan doesn't re-sort 7000 rows many times a second. Shared: every page reads it.
     private val links: Flow<Map<String, String>> = db.serverLinks().observeAll().map { rows -> rows.associate { it.serverPath to it.localPath } }
 
-    val allTracks: Flow<List<TrackEntity>> = combine(tracks.observeAll().throttleLatest(THROTTLE_MS), this.source, links, this.online) { all, src, links, online ->
-        val visible = LibraryMerge.visible(all, src, links)
+    val allTracks: Flow<List<TrackEntity>> = combine(tracks.observeAll().throttleLatest(THROTTLE_MS), this.source, links, this.online, this.scanScope) { all, src, links, online, scope ->
+        val inScope = if (scope.effectiveMode == ScanMode.ALL) all else all.filter { MStreamPaths.isRemote(it.path) || scope.inLibrary(it.path) }
+        val visible = LibraryMerge.visible(inScope, src, links)
         if (online) visible else visible.filter { playsOffline(it.path, links) }
     }
         .flowOn(Dispatchers.Default)
         .shareIn(scope, SharingStarted.WhileSubscribed(5_000), replay = 1)
 
-    val albums: Flow<List<AlbumRow>> = allTracks.map(::albumsOf).flowOn(Dispatchers.Default)
+    /** Paths with a copy on the other side (local and server), for the cloud / download marks. */
+    val linked: Flow<Set<String>> = links.map { it.keys + it.values }.distinctUntilChanged()
+
+    val albums: Flow<List<AlbumRow>> = combine(allTracks, linked, ::albumsOf).flowOn(Dispatchers.Default)
 
     private val splitter = splitter.distinctUntilChanged()
 
-    val artists: Flow<List<ArtistRow>> = combine(allTracks, this.splitter, ::artistsOf).flowOn(Dispatchers.Default)
+    val artists: Flow<List<ArtistRow>> = combine(allTracks, this.splitter, linked, ::artistsOf).flowOn(Dispatchers.Default)
 
-    val genres: Flow<List<GenreRow>> = allTracks.map(::genresOf).flowOn(Dispatchers.Default)
+    val genres: Flow<List<GenreRow>> = combine(allTracks, linked, ::genresOf).flowOn(Dispatchers.Default)
 
     fun genreTracks(genreKey: String): Flow<List<TrackEntity>> =
         allTracks.map { all -> all.filter { t -> Genres.split(t.genre).any { Genres.key(it) == genreKey } }.sortedWith(GENRE_TRACK_ORDER) }
@@ -107,7 +114,7 @@ class Library(
          * cover comes from a track with embedded art if any; [AlbumRow.remote] when all of them
          * are on the mStream server only.
          */
-        fun albumsOf(tracks: List<TrackEntity>): List<AlbumRow> =
+        fun albumsOf(tracks: List<TrackEntity>, linked: Set<String> = emptySet()): List<AlbumRow> =
             tracks.filter { it.albumKey != null && it.album != null }.groupBy { it.albumKey!! }.map { (key, group) ->
                 AlbumRow(
                     key = key,
@@ -117,7 +124,8 @@ class Library(
                     durationMs = group.sumOf { it.durationMs },
                     added = group.maxOf { it.modified },
                     coverPath = group.filter { it.hasArtwork }.minOfOrNull { it.path } ?: group.minOf { it.path },
-                    remote = group.all { MStreamPaths.isRemote(it.path) },
+                    remote = group.all { MStreamPaths.isRemote(it.path) && it.path !in linked },
+                    storage = Storage.of(group.map { it.path }, linked),
                 )
             }
 
@@ -137,8 +145,9 @@ class Library(
          * Artists by album artist (else track artist), each name of a multi-artist tag on its own:
          * "A; B" counts for A and for B. The name shown is one spelling of the key.
          */
-        fun artistsOf(tracks: List<TrackEntity>, splitter: ArtistSplitter): List<ArtistRow> {
+        fun artistsOf(tracks: List<TrackEntity>, splitter: ArtistSplitter, linked: Set<String> = emptySet()): List<ArtistRow> {
             class Acc(var name: String) {
+                var storage = Storage()
                 val albums = HashSet<String>()
                 var tracks = 0
                 var added = 0L
@@ -151,18 +160,20 @@ class Library(
                     val acc = byKey.getOrPut(artistKey(name)) { Acc(name) }
                     if (name > acc.name) acc.name = name
                     t.albumKey?.let(acc.albums::add)
+                    acc.storage += Storage.of(t.path, linked)
                     acc.tracks++
                     acc.added = maxOf(acc.added, t.modified)
                     if (t.hasArtwork && (acc.cover == null || t.path < acc.cover!!)) acc.cover = t.path
                     if (acc.anyPath == null || t.path < acc.anyPath!!) acc.anyPath = t.path
                 }
             }
-            return byKey.map { (key, a) -> ArtistRow(key, a.name, a.albums.size, a.tracks, a.added, a.cover ?: a.anyPath!!) }
+            return byKey.map { (key, a) -> ArtistRow(key, a.name, a.albums.size, a.tracks, a.added, a.cover ?: a.anyPath!!, a.storage) }
         }
 
         /** Genres of the tracks; a track tagged with several counts for each. */
-        fun genresOf(tracks: List<TrackEntity>): List<GenreRow> {
+        fun genresOf(tracks: List<TrackEntity>, linked: Set<String> = emptySet()): List<GenreRow> {
             class Acc(var name: String) {
+                var storage = Storage()
                 val artists = HashSet<String>()
                 var tracks = 0
                 var durationMs = 0L
@@ -175,13 +186,14 @@ class Library(
                     val acc = byKey.getOrPut(Genres.key(name)) { Acc(name) }
                     if (name > acc.name) acc.name = name
                     t.artistTag?.let { acc.artists.add(artistKey(it)) }
+                    acc.storage += Storage.of(t.path, linked)
                     acc.tracks++
                     acc.durationMs += t.durationMs
                     if (t.hasArtwork && (acc.cover == null || t.path < acc.cover!!)) acc.cover = t.path
                     if (acc.anyPath == null || t.path < acc.anyPath!!) acc.anyPath = t.path
                 }
             }
-            return byKey.map { (key, a) -> GenreRow(key, a.name, a.tracks, a.artists.size, a.durationMs, a.cover ?: a.anyPath!!) }
+            return byKey.map { (key, a) -> GenreRow(key, a.name, a.tracks, a.artists.size, a.durationMs, a.cover ?: a.anyPath!!, a.storage) }
         }
 
         private val GENRE_TRACK_ORDER = compareBy<TrackEntity>(

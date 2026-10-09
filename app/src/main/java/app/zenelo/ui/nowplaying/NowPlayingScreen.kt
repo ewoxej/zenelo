@@ -773,8 +773,12 @@ private fun QueueRow(
                 maxLines = 1,
                 modifier = Modifier.marquee(),
             )
-            info?.artist?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = ZeneloColors.TextMuted, maxLines = 1)
+            val mark = app.zenelo.ui.components.rememberStorageMark(path)
+            if (info?.artist != null || mark != app.zenelo.library.StorageMark.NONE) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    app.zenelo.ui.components.StorageMarkIcon(mark, Modifier.padding(end = 4.dp))
+                    Text(info?.artist.orEmpty(), style = MaterialTheme.typography.bodySmall, color = ZeneloColors.TextMuted, maxLines = 1)
+                }
             }
         }
         info?.durationMs?.takeIf { it > 0 }?.let {
@@ -890,12 +894,17 @@ private fun Transport(state: PlayerUiState, player: PlayerController) {
                 .clickable { player.togglePlay() },
             contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                if (state.isPlaying) "Pause" else "Play",
-                tint = ZeneloColors.OnMustard,
-                modifier = Modifier.size(30.dp),
-            )
+            if (app.zenelo.ui.components.rememberSpinner(state.loading)) {
+                // Loading (a server track starting): tapping still pauses.
+                androidx.compose.material3.CircularProgressIndicator(color = ZeneloColors.OnMustard, strokeWidth = 3.dp, modifier = Modifier.size(28.dp))
+            } else {
+                Icon(
+                    if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                    if (state.isPlaying) "Pause" else "Play",
+                    tint = ZeneloColors.OnMustard,
+                    modifier = Modifier.size(30.dp),
+                )
+            }
         }
         IconButton(onClick = { player.next() }) { Icon(Icons.Rounded.SkipNext, "Next", Modifier.size(30.dp)) }
         ToggleTile(

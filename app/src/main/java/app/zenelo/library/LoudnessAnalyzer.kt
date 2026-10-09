@@ -25,6 +25,9 @@ data class Loudness(val integratedLufs: Double, val peakDbfs: Double)
  */
 object LoudnessAnalyzer {
 
+    /** Dequeues (10 ms each) without output after the last input before giving up on end-of-stream: 2 s. */
+    private const val MAX_IDLE_AFTER_INPUT = 200
+
     suspend fun measure(path: String): Loudness? = withContext(Dispatchers.Default) {
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
@@ -43,6 +46,10 @@ object LoudnessAnalyzer {
             var meter: Meter? = null
             val info = MediaCodec.BufferInfo()
             var inputDone = false
+            // Some decoders never hand back the end-of-stream flag: once all input is in, a long
+            // silence from the decoder ends the measurement (else this spun until the worker was
+            // stopped, and the next run started on the same file again).
+            var idleAfterInput = 0
             while (true) {
                 coroutineContext.ensureActive()
                 if (!inputDone) {
@@ -60,7 +67,9 @@ object LoudnessAnalyzer {
                     }
                 }
                 val outIndex = decoder.dequeueOutputBuffer(info, 10_000)
+                if (outIndex < 0 && inputDone && ++idleAfterInput > MAX_IDLE_AFTER_INPUT) break
                 if (outIndex >= 0) {
+                    idleAfterInput = 0
                     if (meter == null) meter = Meter.from(decoder.outputFormat)
                     val out = decoder.getOutputBuffer(outIndex)!!
                     out.position(info.offset)
@@ -71,6 +80,8 @@ object LoudnessAnalyzer {
                 }
             }
             meter?.result()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             null
         } finally {

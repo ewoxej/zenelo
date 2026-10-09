@@ -12,6 +12,7 @@ import app.zenelo.mstream.MStreamClient
 import app.zenelo.mstream.MStreamSonicPath
 import app.zenelo.mstream.MStreamDownloads
 import app.zenelo.mstream.MStreamFiles
+import app.zenelo.data.settings.effectiveScanScope
 import app.zenelo.mstream.MStreamSync
 import app.zenelo.mstream.ServerLinks
 import app.zenelo.library.Library
@@ -68,8 +69,11 @@ class AppContainer(context: Context, upgradedInstall: Boolean) {
      */
     val coverOverride = MutableStateFlow<Pair<String, String>?>(null)
 
+    /** Messages from playback for the UI ("Can't play … — skipped"). */
+    val playbackMessages = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 4)
+
     /** Work that must outlive screens and the service (e.g. writing files once a track ends). */
-    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + app.zenelo.player.logUncaught("app"))
 
     val http = Http(context)
     val mstream = MStreamClient(http.client)
@@ -94,6 +98,7 @@ class AppContainer(context: Context, upgradedInstall: Boolean) {
     val library = Library(
         db, settings.settings.map { it.artistSplitter }, settings.settings.map { it.librarySource }, appScope,
         online = network.online, isCached = { mstreamFiles.isCached(it) },
+        scanScope = settings.settings.map { it.effectiveScanScope() },
     )
     val queue = PlayQueue(db.tracks(), db.plays(), settings.settings, metadata, File(context.filesDir, "queue.txt"))
     val tagWriter = TagWriter(pendingWrites)
@@ -103,7 +108,7 @@ class AppContainer(context: Context, upgradedInstall: Boolean) {
     val serverLinks = ServerLinks(db, appScope).also { it.start() }
     val mstreamFiles = MStreamFiles(context, http.client, serverLinks)
     val mstreamSync = MStreamSync(db, settings, mstream, serverLinks)
-    val mstreamDownloads = MStreamDownloads(context, db, settings, mstream, mstreamFiles, indexer, queue, appScope).also { it.start() }
+    val mstreamDownloads = MStreamDownloads(context, db, settings, mstream, mstreamFiles, indexer, queue, serverLinks, appScope).also { it.start() }
     val autoDj = MStreamAutoDj(db, settings, mstream, queue, serverLinks, network.online, appScope).also { it.start() }
     val sonicPath = MStreamSonicPath(db, settings, mstream, serverLinks, network.online, appScope)
 

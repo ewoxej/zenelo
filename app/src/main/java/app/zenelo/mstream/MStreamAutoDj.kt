@@ -201,7 +201,7 @@ class MStreamAutoDj(
 
     private data class Request(val body: JSONObject, val refBpm: Double?, val keys: Set<String>?)
 
-    /** The `db/random-songs` body, as the web app's `_buildAutoDjBody`; null when sonic mode has no seed. */
+    /** The `db/random-songs` body, as the web app's `_buildAutoDjBody`. */
     private fun request(dj: AutoDjSettings, cursor: List<Int>, playing: String?, playingTags: ServerSong?, similar: List<String>): Request? {
         val body = JSONObject()
             .put("ignoreList", JSONArray(cursor))
@@ -244,8 +244,13 @@ class MStreamAutoDj(
             // Locked: the session's first track stays the seed; rolling: the last picks.
             if (dj.sonicLocked && lockedSeed == null) lockedSeed = playing ?: sonic.firstOrNull()
             val seeds = if (dj.sonicLocked) listOfNotNull(lockedSeed) else sonic.toList().ifEmpty { listOfNotNull(playing) }
-            if (seeds.isEmpty()) return null
-            body.put("similarTo", JSONArray(seeds)).put("minSimilarity", (dj.sonicMinSimilarity * 100).roundToInt() / 100.0)
+            // No seed yet (a local track without a server copy playing): this pick goes without the
+            // sound filter — the picks then seed the next ones. It used to stop with a message.
+            if (seeds.isNotEmpty()) {
+                body.put("similarTo", JSONArray(seeds)).put("minSimilarity", (dj.sonicMinSimilarity * 100).roundToInt() / 100.0)
+            } else {
+                Log.i(TAG, "Auto DJ: no sound seed yet, this pick goes without it")
+            }
         }
         return Request(body, refBpm, keys)
     }

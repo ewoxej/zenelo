@@ -35,6 +35,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.outlined.Home
@@ -341,6 +344,7 @@ private fun OtherSettings(onMessage: (String) -> Unit) {
 
     SectionHeader("Library")
     LibraryStatus()
+    ScanFolders(settings.scanScope, onMessage)
     var editingArtists by remember { mutableStateOf(false) }
     ListRow(
         title = "Multiple artists",
@@ -556,6 +560,59 @@ private fun LastFmKeyDialog(current: String?, onDismiss: () -> Unit, onSave: (St
     )
 }
 
+/**
+ * Which folders the scan covers: all storage, a whitelist or a blacklist (both lists kept), and
+ * `.nomedia`. Any change rescans; folders leaving the scope leave the library.
+ */
+@Composable
+private fun ScanFolders(scope: app.zenelo.library.ScanScope, onMessage: (String) -> Unit) {
+    val context = LocalContext.current
+    val repo = appContainer().settings
+    val coroutines = rememberCoroutineScope()
+    fun save(next: app.zenelo.library.ScanScope) = coroutines.launch {
+        repo.setScanScope(next)
+        LibraryWork.scanNow(context)
+    }
+    val listed = scope.mode != app.zenelo.library.ScanMode.ALL
+    val whitelist = scope.mode == app.zenelo.library.ScanMode.ONLY
+    val folders = if (whitelist) scope.include else scope.exclude
+    fun withFolders(next: Set<String>) = if (whitelist) scope.copy(include = next) else scope.copy(exclude = next)
+    val picker = rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()) { uri ->
+        val path = uri?.let { app.zenelo.library.documentPath(it) }
+        if (uri != null && path == null) onMessage("Pick a folder on the device's storage")
+        if (path != null && path !in folders) save(withFolders(folders + path))
+    }
+
+    ChoiceRow("Folders to scan", scope.mode, app.zenelo.library.ScanMode.entries, { it.label }) { save(scope.copy(mode = it)) }
+    if (listed) {
+        folders.sorted().forEach { folder ->
+            ListRow(
+                title = folder.substringAfterLast('/'),
+                subtitle = folder,
+                leading = { IconTile(Icons.Outlined.Folder, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+                trailing = {
+                    IconButton(onClick = { save(withFolders(folders - folder)) }) {
+                        Icon(Icons.Rounded.Close, "Remove", tint = ZeneloColors.TextMuted, modifier = Modifier.size(18.dp))
+                    }
+                },
+            )
+        }
+        ListRow(
+            title = "Add folder",
+            subtitle = when {
+                whitelist && folders.isEmpty() -> "Until you add one, all storage is scanned"
+                whitelist -> "Scanned with what's inside"
+                else -> "Left out with what's inside"
+            },
+            onClick = { picker.launch(null) },
+            leading = { IconTile(Icons.Rounded.Add, ZeneloColors.Celadon, ZeneloColors.CeladonTint) },
+        )
+    }
+    SwitchRow("Skip .nomedia folders", "A folder holding a .nomedia file is left out, with everything inside", scope.nomedia) {
+        save(scope.copy(nomedia = it))
+    }
+}
+
 /** "1 234 tracks · 1 100 with covers" and a manual rescan. */
 @Composable
 private fun LibraryStatus() {
@@ -574,7 +631,7 @@ private fun LibraryStatus() {
             null -> summary
             is LibraryWork.Stage.Scanning -> if (stage.total > 0) "Reading tags · ${stage.done} / ${stage.total}" else "Looking for new files…"
             is LibraryWork.Stage.Fetching -> if (stage.total > 0) "Covers & lyrics · ${stage.done} / ${stage.total}" else "Downloading covers & lyrics…"
-            LibraryWork.Stage.Measuring -> "Measuring loudness…"
+            is LibraryWork.Stage.Measuring -> if (stage.total > 0) "Measuring loudness · ${stage.done} / ${stage.total}" else "Measuring loudness…"
         },
         onClick = { LibraryWork.scanNow(context) },
         leading = { IconTile(Icons.Outlined.Refresh, ZeneloColors.Mustard, ZeneloColors.MustardTint) },

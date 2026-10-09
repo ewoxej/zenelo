@@ -415,6 +415,7 @@ private fun MainContent(settings: ZeneloSettings) {
             }
         }
         LaunchedEffect(Unit) { container.autoDj.messages.collect(libraryViewModel::showMessage) }
+        LaunchedEffect(Unit) { container.playbackMessages.collect(libraryViewModel::showMessage) }
 
         // The player sheet: collapsed it is just the mini player above the tab bar; dragged up it
         // grows into Now Playing (the mini player fading out), and back. Now Playing is composed
@@ -611,7 +612,11 @@ private fun MiniPlayer(state: PlayerUiState, player: PlayerController, sheet: Pl
                 }
             }
             IconButton(onClick = { player.togglePlay() }) {
-                Icon(if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Play/pause")
+                if (app.zenelo.ui.components.rememberSpinner(state.loading)) {
+                    androidx.compose.material3.CircularProgressIndicator(color = ZeneloColors.Mustard, strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+                } else {
+                    Icon(if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Play/pause")
+                }
             }
             IconButton(onClick = { player.next() }) { Icon(Icons.Rounded.SkipNext, "Next") }
         }

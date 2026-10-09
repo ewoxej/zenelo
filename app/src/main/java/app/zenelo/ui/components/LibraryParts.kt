@@ -18,9 +18,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ViewList
 import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.DownloadDone
 import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material.icons.outlined.MusicNote
@@ -282,10 +284,18 @@ fun GroupHeader(text: String, modifier: Modifier = Modifier) {
 
 /** Two-line text block of a grid tile: title (celadon when playing) and up to two captions. */
 @Composable
-fun TileText(title: String, subtitle: String?, extra: String? = null, highlighted: Boolean = false, compact: Boolean = false, cloud: Boolean = false) {
+fun TileText(
+    title: String,
+    subtitle: String?,
+    extra: String? = null,
+    highlighted: Boolean = false,
+    compact: Boolean = false,
+    cloud: Boolean = false,
+    mark: app.zenelo.library.StorageMark = if (cloud) app.zenelo.library.StorageMark.CLOUD else app.zenelo.library.StorageMark.NONE,
+) {
     Spacer(Modifier.height(6.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
-        if (cloud) CloudMark(Modifier.padding(end = 4.dp))
+        StorageMarkIcon(mark, Modifier.padding(end = 4.dp))
         Text(
             title,
             style = TileTitleStyle.copy(fontSize = if (compact) 12.5.sp else 13.5.sp),
@@ -395,6 +405,66 @@ fun rememberUnplayablePlaylists(): Set<Long> {
     }
 }
 
+/** Each playlist's mark (cloud / partly / downloaded), from its entries and the links. */
+@Composable
+fun rememberPlaylistMarks(): Map<Long, app.zenelo.library.StorageMark> {
+    val container = appContainer()
+    val flow = remember { container.db.playlists().observeAllEntries() }
+    val entries by flow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val links by container.serverLinks.links.collectAsStateWithLifecycle()
+    return remember(entries, links) {
+        entries.groupBy { it.playlistId }.mapValues { (_, list) -> storageOf(list.map { it.path }, links).mark }
+    }
+}
+
+/** A set of tracks' storage counts, by the links ([ServerLinks.Links]). */
+fun storageOf(paths: List<String>, links: app.zenelo.mstream.ServerLinks.Links): app.zenelo.library.Storage =
+    paths.fold(app.zenelo.library.Storage()) { acc, path ->
+        acc + when {
+            links.isLinked(path) -> app.zenelo.library.Storage(1, 0, 1)
+            app.zenelo.mstream.MStreamPaths.isRemote(path) -> app.zenelo.library.Storage(1, 1, 0)
+            else -> app.zenelo.library.Storage(1, 0, 0)
+        }
+    }
+
+/**
+ * A page's download button (album, artist, genre, playlist, favorites): shown while some of its
+ * tracks are on the server only (and the server is reachable). [kept]: a playlist / favorites kept
+ * downloaded — then, all on the device, a "downloaded" button that stops downloading new tracks.
+ */
+@Composable
+fun DownloadAction(paths: List<String>, onDownload: () -> Unit, kept: Boolean = false, onStopKeeping: (() -> Unit)? = null) {
+    val container = appContainer()
+    val available by container.sonicPath.available.collectAsStateWithLifecycle()
+    val links by container.serverLinks.links.collectAsStateWithLifecycle()
+    val storage = remember(paths, links) { storageOf(paths, links) }
+    when {
+        storage.cloud > 0 && available -> IconButton(onClick = onDownload) {
+            Icon(Icons.Outlined.Download, "Download ${storage.cloud} track${if (storage.cloud == 1) "" else "s"}", tint = ZeneloColors.Celadon, modifier = Modifier.size(22.dp))
+        }
+        kept && onStopKeeping != null -> IconButton(onClick = onStopKeeping) {
+            Icon(Icons.Outlined.DownloadDone, "Downloaded · stop downloading new tracks", tint = ZeneloColors.Celadon, modifier = Modifier.size(22.dp))
+        }
+    }
+}
+
+/**
+ * Whether to show the player's loading spinner: only once loading lasts [delayMs] — a local file
+ * starts in a few milliseconds and would just flicker it.
+ */
+@Composable
+fun rememberSpinner(loading: Boolean, delayMs: Long = 300): Boolean {
+    var shown by remember { androidx.compose.runtime.mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(loading) {
+        shown = false
+        if (loading) {
+            kotlinx.coroutines.delay(delayMs)
+            shown = true
+        }
+    }
+    return shown && loading
+}
+
 /** How faded a track (or playlist) is that can't play offline. */
 const val UNPLAYABLE_ALPHA = 0.4f
 
@@ -421,6 +491,35 @@ fun rememberOnServer(path: String?): Boolean {
 @Composable
 fun CloudMark(modifier: Modifier = Modifier) {
     Icon(Icons.Outlined.Cloud, "On the server", tint = ZeneloColors.TextMuted, modifier = modifier.size(13.dp))
+}
+
+/** Partly on the mStream server only: some of a set's tracks aren't on the device yet. */
+@Composable
+fun PartialMark(modifier: Modifier = Modifier) {
+    Icon(Icons.Outlined.CloudDownload, "Partly on the server", tint = ZeneloColors.TextMuted, modifier = modifier.size(13.dp))
+}
+
+/** The mark for [mark] (nothing for [StorageMark.NONE]). */
+@Composable
+fun StorageMarkIcon(mark: app.zenelo.library.StorageMark, modifier: Modifier = Modifier) {
+    when (mark) {
+        app.zenelo.library.StorageMark.CLOUD -> CloudMark(modifier)
+        app.zenelo.library.StorageMark.PARTIAL -> PartialMark(modifier)
+        app.zenelo.library.StorageMark.DOWNLOADED -> DownloadMark(modifier)
+        app.zenelo.library.StorageMark.NONE -> Unit
+    }
+}
+
+/** A track's mark, following downloads and links as they change. */
+@Composable
+fun rememberStorageMark(path: String?): app.zenelo.library.StorageMark {
+    if (path == null) return app.zenelo.library.StorageMark.NONE
+    val links by appContainer().serverLinks.links.collectAsStateWithLifecycle()
+    return when {
+        links.isLinked(path) -> app.zenelo.library.StorageMark.DOWNLOADED
+        app.zenelo.mstream.MStreamPaths.isRemote(path) -> app.zenelo.library.StorageMark.CLOUD
+        else -> app.zenelo.library.StorageMark.NONE
+    }
 }
 
 /** The small arrow after a title: downloaded from the mStream server. */

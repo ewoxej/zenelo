@@ -36,6 +36,8 @@ data class PlaylistEntity(
     val serverName: String? = null,
     @ColumnInfo(defaultValue = "0") val dirty: Boolean = false,
     @ColumnInfo(defaultValue = "0") val deleted: Boolean = false,
+    /** Downloaded with "Download": its server tracks are kept on the device, new ones too (`MStreamDownloads`). */
+    @ColumnInfo(defaultValue = "0") val keepDownloaded: Boolean = false,
 )
 
 @Entity(
@@ -187,6 +189,8 @@ data class AlbumRow(
     val coverPath: String,
     /** All its tracks are on the mStream server only (cloud mark). */
     val remote: Boolean = false,
+    /** Cloud / downloaded tracks, for its mark. */
+    val storage: app.zenelo.library.Storage = app.zenelo.library.Storage(),
 )
 
 /** An artist of the library, by album artist (else track artist); [key] is its lowercase name. */
@@ -197,6 +201,7 @@ data class ArtistRow(
     val tracks: Int,
     val added: Long,
     val coverPath: String,
+    val storage: app.zenelo.library.Storage = app.zenelo.library.Storage(),
 )
 
 /** A genre of the library pages: tracks tagged with it (a tag may name several, see `Genres`). */
@@ -207,9 +212,10 @@ data class GenreRow(
     val artists: Int,
     val durationMs: Long,
     val coverPath: String,
+    val storage: app.zenelo.library.Storage = app.zenelo.library.Storage(),
 )
 
-data class DirStats(val dir: String, val tracks: Int, val durationMs: Long)
+data class DirStats(val dir: String, val tracks: Int, val durationMs: Long, val cloud: Int = 0, val downloaded: Int = 0)
 
 /**
  * A write to a file that was playing when it was requested: applied when the track stops playing.

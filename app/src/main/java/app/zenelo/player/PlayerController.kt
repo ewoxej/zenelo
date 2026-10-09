@@ -32,6 +32,8 @@ data class PlayerUiState(
     /** Cover file set by the service for tracks without embedded art (folder image or download). */
     val artworkFile: String? = null,
     val isPlaying: Boolean = false,
+    /** Meant to play but waiting for data (a server track starting, a slow stream): a spinner, not ▶. */
+    val loading: Boolean = false,
     val durationMs: Long = 0,
     val shuffle: Boolean = false,
     val repeatMode: Int = Player.REPEAT_MODE_OFF,
@@ -51,7 +53,7 @@ class PlayerController(
     private val coverOverride: StateFlow<Pair<String, String>?>,
 ) {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + app.zenelo.player.logUncaught("player controller"))
     private var future: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
     private var ticker: Job? = null
@@ -124,16 +126,30 @@ class PlayerController(
 
     fun skipTo(id: Int) = queue.skipTo(id)
 
-    fun togglePlay() = controller?.run { if (isPlaying) pause() else play() }
+    fun togglePlay() = controller?.run {
+        if (isPlaying) {
+            pause()
+        } else {
+            if (playbackState == Player.STATE_IDLE) prepare()
+            play()
+        }
+    }
 
     fun play() = controller?.play()
 
     /** Stops and clears the queue. */
     fun stop() = queue.stop()
 
-    fun next() = controller?.seekToNext()
+    /** Next / previous; after a playback error the player sits idle: prepared again so the new track plays. */
+    fun next() = controller?.run {
+        seekToNext()
+        if (playbackState == Player.STATE_IDLE) prepare()
+    }
 
-    fun previous() = controller?.seekToPrevious()
+    fun previous() = controller?.run {
+        seekToPrevious()
+        if (playbackState == Player.STATE_IDLE) prepare()
+    }
 
     fun seekTo(positionMs: Long) = controller?.seekTo(positionMs)
 
@@ -174,6 +190,7 @@ class PlayerController(
             artworkFile = coverOverride.value?.takeIf { it.first == item?.mediaId }?.second
                 ?: metadata.artworkUri?.takeIf { it.scheme == "file" }?.path,
             isPlaying = c.isPlaying,
+            loading = c.playWhenReady && c.playbackState == Player.STATE_BUFFERING,
             // MP3s without a seek table: the player learns the length only at their end; ours is exact.
             durationMs = c.duration.takeIf { it != C.TIME_UNSET && it > 0 }
                 ?: item?.mediaMetadata?.durationMs ?: info?.durationMs ?: 0L,

@@ -151,6 +151,22 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
         onPlay = { vm.play(files, shuffle = it) },
         onStop = vm::stop,
         headerActions = {
+            // Downloading a playlist keeps it downloaded: tracks added later download too.
+            val paths = remember(items) { items.map(PlaylistTrack::path) }
+            val kept = playlist?.keepDownloaded == true
+            val appScope = appContainer().appScope
+            app.zenelo.ui.components.DownloadAction(
+                paths,
+                onDownload = {
+                    appScope.launch { dao.setKeepDownloaded(id, true) }
+                    vm.download(paths)
+                },
+                kept = kept,
+                onStopKeeping = {
+                    appScope.launch { dao.setKeepDownloaded(id, false) }
+                    vm.showMessage("New tracks of this playlist won't download")
+                },
+            )
             Box {
                 IconButton(onClick = { menu = true }, modifier = Modifier.size(44.dp)) { Icon(Icons.Rounded.MoreVert, "More", Modifier.size(20.dp)) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {

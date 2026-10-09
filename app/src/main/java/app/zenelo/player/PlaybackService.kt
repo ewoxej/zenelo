@@ -60,7 +60,7 @@ import java.io.File
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + app.zenelo.player.logUncaught("playback"))
     private val container by lazy { (application as ZeneloApp).container }
     private val normalization = NormalizationAudioProcessor()
 
@@ -329,6 +329,43 @@ class PlaybackService : MediaSessionService() {
 
     private var offlineSkips = 0
 
+    /** Tracks skipped in a row for errors; reset once something plays. */
+    private var errorSkips = 0
+
+    /**
+     * A track that can't play (a damaged or unsupported file, gone, the server unreachable) used to
+     * leave the player stopped on it: the user had to skip and press play again. Now it's skipped
+     * with a message (why: damaged / unsupported, gone, server unreachable), and playback goes on
+     * with the next track. A queue of nothing playable stops (paused,
+     * with the message) after [MAX_ERROR_SKIPS] or at its end.
+     */
+    private fun recoverFrom(error: PlaybackException) {
+        val item = player.currentMediaItem ?: return
+        val path = item.mediaId
+        // Network errors come after the player's own retries (a few, over ~5 s): no more of ours.
+        val network = error.errorCode in NETWORK_ERRORS
+        val name = item.mediaMetadata.title?.toString() ?: path.substringAfterLast('/').substringBeforeLast('.')
+        val remote = MStreamPaths.isRemote(path)
+        val why = when {
+            error.errorCode == PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> "the file is gone"
+            network && remote -> "couldn't load it from the server"
+            error.errorCode in 2000..2999 -> "the file couldn't be read"
+            error.errorCode in 3000..3999 || error.errorCode in 4000..4999 -> "the file is damaged or its format isn't supported"
+            else -> error.errorCodeName.lowercase().replace('_', ' ')
+        }
+        if (player.hasNextMediaItem() && errorSkips < MAX_ERROR_SKIPS) {
+            errorSkips++
+            container.playbackMessages.tryEmit("Can't play $name — $why. Skipped")
+            Log.i(TAG, "skipping ${path.substringAfterLast('/')} ($why)")
+            player.seekToNextMediaItem()
+            player.prepare()
+        } else {
+            errorSkips = 0
+            container.playbackMessages.tryEmit("Can't play $name — $why")
+            player.pause()
+        }
+    }
+
     /** The next track's gain, worked out while the crossfade's tail loads (see [Crossfader]). */
     @Volatile
     private var upcomingGain: Pair<String, Float>? = null
@@ -367,7 +404,11 @@ class PlaybackService : MediaSessionService() {
 
         override fun onPlayerError(error: PlaybackException) {
             Log.w(TAG, "player error ${error.errorCodeName} on ${player.currentMediaItem?.mediaId?.substringAfterLast('/')}", error)
-            if (skipUnplayable()) player.prepare()
+            if (skipUnplayable()) {
+                player.prepare()
+                return
+            }
+            recoverFrom(error)
         }
 
         // The notification's shuffle button shows the mode, whoever changed it.
@@ -375,6 +416,8 @@ class PlaybackService : MediaSessionService() {
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             if (!isPlaying) savePosition()
+            // Something plays: the error streak is over.
+            if (isPlaying) errorSkips = 0
         }
 
         override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
@@ -462,6 +505,17 @@ class PlaybackService : MediaSessionService() {
 
         /** A paused queue keeps the service in the foreground this long (see [onUpdateNotification]). */
         private const val PAUSED_FOREGROUND_MS = 30 * 60 * 1000L
+
+        /** Tracks skipped for errors in a row before stopping (a folder of damaged files). */
+        private const val MAX_ERROR_SKIPS = 20
+
+        private val NETWORK_ERRORS = setOf(
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+            PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
+            PlaybackException.ERROR_CODE_TIMEOUT,
+        )
 
         /** Offline skips in a row before giving up (a queue of server tracks only). */
         private const val MAX_OFFLINE_SKIPS = 200

@@ -56,6 +56,7 @@ fun PlaylistsScreen(onOpenPlaylist: (Long) -> Unit, onMessage: (String) -> Unit,
     val flow = remember { dao.observeWithCounts() }
     val playlists by flow.collectAsStateWithLifecycle(initialValue = emptyList())
     val unplayable = rememberUnplayablePlaylists()
+    val marks = app.zenelo.ui.components.rememberPlaylistMarks()
     val scope = rememberCoroutineScope()
     var creating by remember { mutableStateOf(false) }
     // Any file: pickers often don't know the M3U types, and a wrong file just finds no tracks.
@@ -93,6 +94,7 @@ fun PlaylistsScreen(onOpenPlaylist: (Long) -> Unit, onMessage: (String) -> Unit,
                 ListRow(
                     title = playlist.name,
                     subtitle = "${playlist.trackCount} track${if (playlist.trackCount == 1) "" else "s"}" + if (playlist.remote) " · mStream" else "",
+                    mark = marks[playlist.id] ?: app.zenelo.library.StorageMark.NONE,
                     onClick = { onOpenPlaylist(playlist.id) },
                     leading = {
                         if (playlist.coverPath != null) {

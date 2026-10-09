@@ -128,6 +128,11 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
 
     fun stop() = player.stop()
 
+    /** "Download" on a page (album, artist, genre…): its server tracks. */
+    fun download(paths: List<String>) {
+        viewModelScope.launch { container.mstreamDownloads.request(paths)?.let { _events.send(LibraryEvent.Message(it, action = SwipeAction.DOWNLOAD)) } }
+    }
+
     fun playAlbums(albums: List<AlbumRow>, shuffle: Boolean) {
         viewModelScope.launch { play(filesOfAlbums(albums), shuffle = shuffle) }
     }

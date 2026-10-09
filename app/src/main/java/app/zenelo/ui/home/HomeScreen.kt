@@ -207,17 +207,21 @@ private fun HomeTile(
     shape: Shape = RoundedCornerShape(8.dp),
     icon: ImageVector = Icons.Outlined.Album,
     highlighted: Boolean = false,
+    mark: app.zenelo.library.StorageMark = app.zenelo.library.StorageMark.NONE,
 ) {
     Column(Modifier.width(96.dp).clickable(onClick = onClick)) {
         CoverImage(coverPath, Modifier.size(96.dp), shape = shape, large = true, placeholder = icon)
         Spacer(Modifier.height(6.dp))
-        Text(
-            title,
-            style = TextStyle(fontFamily = PlexSans, fontSize = 12.5.sp, fontWeight = FontWeight.Medium),
-            color = if (highlighted) ZeneloColors.Celadon else ZeneloColors.TextPrimary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            app.zenelo.ui.components.StorageMarkIcon(mark, Modifier.padding(end = 4.dp))
+            Text(
+                title,
+                style = TextStyle(fontFamily = PlexSans, fontSize = 12.5.sp, fontWeight = FontWeight.Medium),
+                color = if (highlighted) ZeneloColors.Celadon else ZeneloColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         if (subtitle != null) Text(subtitle, style = TextStyle(fontFamily = PlexSans, fontSize = 11.sp, color = ZeneloColors.TextMuted), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
@@ -242,6 +246,7 @@ private fun HomeRow(
     coverSize: Dp = 40.dp,
     highlighted: Boolean = false,
     mono: Boolean = false,
+    mark: app.zenelo.library.StorageMark = app.zenelo.library.StorageMark.NONE,
 ) {
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).height(50.dp).padding(horizontal = 14.dp),
@@ -257,14 +262,17 @@ private fun HomeRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (subtitle != null) {
-                Text(
-                    subtitle,
-                    style = if (mono) TextStyle(fontFamily = PlexMono, fontSize = 11.sp) else TextStyle(fontFamily = PlexSans, fontSize = 11.5.sp),
-                    color = ZeneloColors.TextMuted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            if (subtitle != null || mark != app.zenelo.library.StorageMark.NONE) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    app.zenelo.ui.components.StorageMarkIcon(mark, Modifier.padding(end = 4.dp))
+                    Text(
+                        subtitle.orEmpty(),
+                        style = if (mono) TextStyle(fontFamily = PlexMono, fontSize = 11.sp) else TextStyle(fontFamily = PlexSans, fontSize = 11.5.sp),
+                        color = ZeneloColors.TextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
         if (trailing != null) Text(trailing, style = CountStyle.copy(fontSize = 11.sp))
@@ -296,11 +304,11 @@ private fun RecentCard(vm: LibraryViewModel, grid: Boolean, nav: HomeNav) {
         if (recent != null && plays.isEmpty()) return@HomeCard EmptyCard("Nothing played yet.")
         if (grid) {
             TileRow(plays, { it.path }) { play ->
-                HomeTile(recentTitle(play), play.artist, play.path, { vm.play(files, start = plays.indexOf(play)) }, icon = Icons.Outlined.MusicNote, highlighted = play.path == mediaId)
+                HomeTile(recentTitle(play), play.artist, play.path, { vm.play(files, start = plays.indexOf(play)) }, icon = Icons.Outlined.MusicNote, highlighted = play.path == mediaId, mark = app.zenelo.ui.components.rememberStorageMark(play.path))
             }
         } else {
             plays.take(LIST_ROWS).forEachIndexed { i, play ->
-                HomeRow(recentTitle(play), play.artist, play.path, { vm.play(files, start = i) }, icon = Icons.Outlined.MusicNote, highlighted = play.path == mediaId)
+                HomeRow(recentTitle(play), play.artist, play.path, { vm.play(files, start = i) }, icon = Icons.Outlined.MusicNote, highlighted = play.path == mediaId, mark = app.zenelo.ui.components.rememberStorageMark(play.path))
             }
             MoreCount(plays.size - LIST_ROWS, "tracks")
         }
@@ -316,9 +324,9 @@ private fun AlbumsCard(vm: LibraryViewModel, grid: Boolean, nav: HomeNav) {
     HomeCard(Section.ALBUMS, "BY ${sort.sortBy.label.uppercase()}", albums?.size, nav) {
         if (albums != null && list.isEmpty()) return@HomeCard EmptyCard("No albums yet.")
         if (grid) {
-            TileRow(list, { it.key }) { album -> HomeTile(album.album, album.artist, album.coverPath, { nav.library.onOpenAlbum(album.key) }) }
+            TileRow(list, { it.key }) { album -> HomeTile(album.album, album.artist, album.coverPath, { nav.library.onOpenAlbum(album.key) }, mark = album.storage.mark) }
         } else {
-            list.take(LIST_ROWS).forEach { album -> HomeRow(album.album, album.artist, album.coverPath, { nav.library.onOpenAlbum(album.key) }) }
+            list.take(LIST_ROWS).forEach { album -> HomeRow(album.album, album.artist, album.coverPath, { nav.library.onOpenAlbum(album.key) }, mark = album.storage.mark) }
             MoreCount(list.size - LIST_ROWS, "albums")
         }
     }
@@ -334,11 +342,11 @@ private fun ArtistsCard(vm: LibraryViewModel, grid: Boolean, nav: HomeNav) {
         if (artists != null && list.isEmpty()) return@HomeCard EmptyCard("No artists yet.")
         if (grid) {
             TileRow(list, { it.key }) { artist ->
-                HomeTile(artist.name, null, artist.coverPath, { nav.library.onOpenArtist(artist.key) }, shape = CircleShape, icon = Icons.Outlined.Person)
+                HomeTile(artist.name, null, artist.coverPath, { nav.library.onOpenArtist(artist.key) }, shape = CircleShape, icon = Icons.Outlined.Person, mark = artist.storage.mark)
             }
         } else {
             list.take(LIST_ROWS).forEach { artist ->
-                HomeRow(artist.name, artistDetail(artist), artist.coverPath, { nav.library.onOpenArtist(artist.key) }, shape = CircleShape, icon = Icons.Outlined.Person, mono = true)
+                HomeRow(artist.name, artistDetail(artist), artist.coverPath, { nav.library.onOpenArtist(artist.key) }, shape = CircleShape, icon = Icons.Outlined.Person, mono = true, mark = artist.storage.mark)
             }
             MoreCount(list.size - LIST_ROWS, "artists")
         }
@@ -355,11 +363,11 @@ private fun GenresCard(vm: LibraryViewModel, grid: Boolean, nav: HomeNav) {
         if (genres != null && list.isEmpty()) return@HomeCard EmptyCard("No genres yet.")
         if (grid) {
             TileRow(list, { it.key }) { genre ->
-                HomeTile(genre.name, "${genre.tracks} tracks", genre.coverPath, { nav.library.onOpenGenre(genre.key) }, icon = Icons.Outlined.Category)
+                HomeTile(genre.name, "${genre.tracks} tracks", genre.coverPath, { nav.library.onOpenGenre(genre.key) }, icon = Icons.Outlined.Category, mark = genre.storage.mark)
             }
         } else {
             list.take(LIST_ROWS).forEach { genre ->
-                HomeRow(genre.name, genreDetail(genre), genre.coverPath, { nav.library.onOpenGenre(genre.key) }, icon = Icons.Outlined.Category, mono = true)
+                HomeRow(genre.name, genreDetail(genre), genre.coverPath, { nav.library.onOpenGenre(genre.key) }, icon = Icons.Outlined.Category, mono = true, mark = genre.storage.mark)
             }
             MoreCount(list.size - LIST_ROWS, "genres")
         }
@@ -377,10 +385,10 @@ private fun TracksCard(vm: LibraryViewModel, grid: Boolean, nav: HomeNav) {
     HomeCard(Section.TRACKS, "BY ${sort.sortBy.label.uppercase()}", tracks?.size, nav) {
         if (tracks != null && list.isEmpty()) return@HomeCard EmptyCard("No tracks yet.")
         if (grid) {
-            TileRow(list, { it.path }) { t -> HomeTile(LibrarySort.trackName(t), t.artist, t.path, { play(t) }, icon = Icons.Outlined.MusicNote, highlighted = t.path == mediaId) }
+            TileRow(list, { it.path }) { t -> HomeTile(LibrarySort.trackName(t), t.artist, t.path, { play(t) }, icon = Icons.Outlined.MusicNote, highlighted = t.path == mediaId, mark = app.zenelo.ui.components.rememberStorageMark(t.path)) }
         } else {
             list.take(LIST_ROWS).forEach { t ->
-                HomeRow(LibrarySort.trackName(t), t.artist, t.path, { play(t) }, trailing = formatDuration(t.durationMs), icon = Icons.Outlined.MusicNote, highlighted = t.path == mediaId)
+                HomeRow(LibrarySort.trackName(t), t.artist, t.path, { play(t) }, trailing = formatDuration(t.durationMs), icon = Icons.Outlined.MusicNote, highlighted = t.path == mediaId, mark = app.zenelo.ui.components.rememberStorageMark(t.path))
             }
             MoreCount(list.size - LIST_ROWS, "tracks")
         }
@@ -447,11 +455,11 @@ private fun FavoritesCard(vm: LibraryViewModel, grid: Boolean, nav: HomeNav) {
         if (favorites != null && list.isEmpty()) return@HomeCard EmptyCard("Nothing here yet.")
         if (grid) {
             TileRow(list, { it.path }) { f ->
-                HomeTile(f.title, f.subtitle, f.path.takeIf { f.kind == FavoriteKind.TRACK }, { open(f) }, icon = favoriteIcon(f.kind), shape = if (f.kind == FavoriteKind.ARTIST) CircleShape else RoundedCornerShape(8.dp))
+                HomeTile(f.title, f.subtitle, f.path.takeIf { f.kind == FavoriteKind.TRACK }, { open(f) }, icon = favoriteIcon(f.kind), shape = if (f.kind == FavoriteKind.ARTIST) CircleShape else RoundedCornerShape(8.dp), mark = app.zenelo.ui.components.rememberStorageMark(f.path.takeIf { f.kind == FavoriteKind.TRACK }))
             }
         } else {
             list.take(LIST_ROWS).forEach { f ->
-                HomeRow(f.title, f.subtitle, f.path.takeIf { f.kind == FavoriteKind.TRACK }, { open(f) }, icon = favoriteIcon(f.kind), shape = if (f.kind == FavoriteKind.ARTIST) CircleShape else RoundedCornerShape(6.dp))
+                HomeRow(f.title, f.subtitle, f.path.takeIf { f.kind == FavoriteKind.TRACK }, { open(f) }, icon = favoriteIcon(f.kind), shape = if (f.kind == FavoriteKind.ARTIST) CircleShape else RoundedCornerShape(6.dp), mark = app.zenelo.ui.components.rememberStorageMark(f.path.takeIf { f.kind == FavoriteKind.TRACK }))
             }
             MoreCount(list.size - LIST_ROWS, "favorites")
         }
@@ -472,16 +480,17 @@ private fun PlaylistsCard(grid: Boolean, nav: HomeNav) {
     val playlists by flow.collectAsStateWithLifecycle(initialValue = null)
     val list = playlists.orEmpty()
     val unplayable = rememberUnplayablePlaylists()
+    val marks = app.zenelo.ui.components.rememberPlaylistMarks()
     fun faded(p: app.zenelo.data.db.PlaylistWithCount) = Modifier.alpha(if (p.id in unplayable) UNPLAYABLE_ALPHA else 1f)
     HomeCard(Section.PLAYLISTS, null, playlists?.size, nav) {
         if (playlists != null && list.isEmpty()) return@HomeCard EmptyCard("No playlists yet.")
         if (grid) {
             TileRow(list, { it.id }) { p ->
-                Box(faded(p)) { HomeTile(p.name, "${p.trackCount} tracks", p.coverPath, { nav.onOpenPlaylist(p.id) }, icon = Icons.AutoMirrored.Rounded.QueueMusic) }
+                Box(faded(p)) { HomeTile(p.name, "${p.trackCount} tracks", p.coverPath, { nav.onOpenPlaylist(p.id) }, icon = Icons.AutoMirrored.Rounded.QueueMusic, mark = marks[p.id] ?: app.zenelo.library.StorageMark.NONE) }
             }
         } else {
             list.take(LIST_ROWS).forEach { p ->
-                Box(faded(p)) { HomeRow(p.name, "${p.trackCount} tracks", p.coverPath, { nav.onOpenPlaylist(p.id) }, icon = Icons.AutoMirrored.Rounded.QueueMusic, mono = true) }
+                Box(faded(p)) { HomeRow(p.name, "${p.trackCount} tracks", p.coverPath, { nav.onOpenPlaylist(p.id) }, icon = Icons.AutoMirrored.Rounded.QueueMusic, mono = true, mark = marks[p.id] ?: app.zenelo.library.StorageMark.NONE) }
             }
             MoreCount(list.size - LIST_ROWS, "playlists")
         }

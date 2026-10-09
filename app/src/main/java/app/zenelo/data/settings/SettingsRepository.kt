@@ -14,6 +14,8 @@ import androidx.datastore.core.DataMigration
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.preferencesDataStoreFile
 import app.zenelo.library.ArtistSplitter
+import app.zenelo.library.ScanMode
+import app.zenelo.library.ScanScope
 import app.zenelo.mstream.MStreamAccount
 import app.zenelo.player.ShuffleMode
 import kotlinx.coroutines.flow.Flow
@@ -90,8 +92,14 @@ val DEFAULT_FILENAME_PATTERNS = listOf(
     "%artist%/%album%/[%number%[.] ][- ]%title%",
 )
 
+/** The scan scope as used: the settings' lists plus the mStream download folder, always scanned. */
+fun ZeneloSettings.effectiveScanScope(): ScanScope =
+    scanScope.copy(always = setOf(downloadDir ?: app.zenelo.mstream.MStreamFiles.defaultDownloadDir().path))
+
 data class ZeneloSettings(
     val homeFolder: String? = null,
+    /** Which folders the library scan covers (whitelist / blacklist, `.nomedia`). */
+    val scanScope: ScanScope = ScanScope(),
     val swipes: Map<SwipeSlot, SwipeAction> = SwipeSlot.entries.associateWith { it.default },
     /** Ask before destructive swipe actions instead of showing an undo snackbar. */
     val confirmRemove: Boolean = false,
@@ -138,6 +146,8 @@ data class ZeneloSettings(
     val transcodeCodec: String = "mp3",
     /** 64k / 96k / 128k / 192k. */
     val transcodeBitrate: String = "128k",
+    /** Favorites downloaded with "Download": their server tracks are kept on the device, new likes too. */
+    val keepFavoritesDownloaded: Boolean = false,
     /** Where "Download" puts server tracks; null = `mstream` at the storage root. */
     val downloadDir: String? = null,
     /** Download the next queued server tracks ahead of playing them (into a cache). */
@@ -229,6 +239,13 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
 
     suspend fun setHomeFolder(path: String) = store.edit { it[HOME_FOLDER] = path }
 
+    suspend fun setScanScope(scope: ScanScope) = store.edit {
+        it[SCAN_MODE] = scope.mode.name
+        it[SCAN_INCLUDE] = scope.include
+        it[SCAN_EXCLUDE] = scope.exclude
+        it[SCAN_NOMEDIA] = scope.nomedia
+    }
+
     suspend fun setMStream(account: MStreamAccount?) = store.edit {
         if (account == null) {
             it.remove(MSTREAM_TOKEN)
@@ -256,6 +273,8 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
         it[TRANSCODE_CODEC] = codec
         it[TRANSCODE_BITRATE] = bitrate
     }
+
+    suspend fun setKeepFavoritesDownloaded(keep: Boolean) = store.edit { it[KEEP_FAVORITES_DOWNLOADED] = keep }
 
     suspend fun setDownloadDir(path: String?) = store.edit { if (path == null) it.remove(DOWNLOAD_DIR) else it[DOWNLOAD_DIR] = path }
 
@@ -356,6 +375,12 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
 
     private fun Preferences.toSettings() = ZeneloSettings(
         homeFolder = this[HOME_FOLDER],
+        scanScope = ScanScope(
+            mode = this[SCAN_MODE]?.let { enumOrNull<ScanMode>(it) } ?: ScanMode.ALL,
+            include = this[SCAN_INCLUDE].orEmpty(),
+            exclude = this[SCAN_EXCLUDE].orEmpty(),
+            nomedia = this[SCAN_NOMEDIA] ?: true,
+        ),
         swipes = SwipeSlot.entries.associateWith { slot ->
             this[slotKey(slot)]?.let { enumOrNull<SwipeAction>(it) } ?: slot.default
         },
@@ -394,6 +419,7 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
         transcodeCodec = this[TRANSCODE_CODEC] ?: "mp3",
         transcodeBitrate = this[TRANSCODE_BITRATE] ?: "128k",
         downloadDir = this[DOWNLOAD_DIR],
+        keepFavoritesDownloaded = this[KEEP_FAVORITES_DOWNLOADED] ?: false,
         autoDownload = this[AUTO_DOWNLOAD] ?: false,
         autoDownloadAhead = this[AUTO_DOWNLOAD_AHEAD] ?: 5,
         autoDownloadWifiOnly = this[AUTO_DOWNLOAD_WIFI] ?: true,
@@ -450,6 +476,10 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
 
     private companion object {
         val HOME_FOLDER = stringPreferencesKey("home_folder")
+        val SCAN_MODE = stringPreferencesKey("scan_mode")
+        val SCAN_INCLUDE = stringSetPreferencesKey("scan_include")
+        val SCAN_EXCLUDE = stringSetPreferencesKey("scan_exclude")
+        val SCAN_NOMEDIA = booleanPreferencesKey("scan_nomedia")
         val CONFIRM_REMOVE = booleanPreferencesKey("confirm_remove")
         val NORMALIZATION = stringPreferencesKey("normalization")
         val CROSSFADE_MS = intPreferencesKey("crossfade_ms")
@@ -477,6 +507,7 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
         val TRANSCODE_CODEC = stringPreferencesKey("transcode_codec")
         val TRANSCODE_BITRATE = stringPreferencesKey("transcode_bitrate")
         val DOWNLOAD_DIR = stringPreferencesKey("download_dir")
+        val KEEP_FAVORITES_DOWNLOADED = booleanPreferencesKey("keep_favorites_downloaded")
         val AUTO_DOWNLOAD = booleanPreferencesKey("auto_download")
         val AUTO_DOWNLOAD_AHEAD = intPreferencesKey("auto_download_ahead")
         val AUTO_DOWNLOAD_WIFI = booleanPreferencesKey("auto_download_wifi")

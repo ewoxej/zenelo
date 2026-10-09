@@ -271,7 +271,7 @@ fun AlbumTile(
             )
             TileMark(selecting, selected, markLeft)
         }
-        TileText(album.album, album.artist, detail, highlighted = isCurrent, compact = compact, cloud = album.remote)
+        TileText(album.album, album.artist, detail, highlighted = isCurrent, compact = compact, mark = album.storage.mark)
     }
 }
 
@@ -302,14 +302,16 @@ fun ArtistTile(
             )
             TileMark(selecting, selected, markLeft)
         }
-        Text(
-            artist.name,
-            style = TextStyle(fontFamily = PlexSans, fontSize = if (compact) 12.5.sp else 13.5.sp, fontWeight = FontWeight.Medium),
-            color = ZeneloColors.TextPrimary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 6.dp),
-        )
+        Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            app.zenelo.ui.components.StorageMarkIcon(artist.storage.mark, Modifier.padding(end = 4.dp))
+            Text(
+                artist.name,
+                style = TextStyle(fontFamily = PlexSans, fontSize = if (compact) 12.5.sp else 13.5.sp, fontWeight = FontWeight.Medium),
+                color = ZeneloColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         if (!compact) Text(artistDetail(artist), style = TextStyle(fontFamily = PlexMono, fontSize = 10.sp, color = ZeneloColors.TextMuted), maxLines = 1)
     }
 }
@@ -340,10 +342,12 @@ fun LibraryRow(
     selected: Boolean = false,
     markLeft: Boolean = true,
     subtitleMono: Boolean = false,
-    /** Cloud mark: on the mStream server only. A track row's cover path is the track itself. */
-    cloud: Boolean = MStreamPaths.isRemote(coverPath) && !rememberDownloaded(coverPath),
+    /** A set's mark (album, artist, playlist…); null: the row is a track, its cover path the track itself. */
+    storage: app.zenelo.library.StorageMark? = null,
+    /** Cloud mark: on the mStream server only. */
+    cloud: Boolean = if (storage != null) storage == app.zenelo.library.StorageMark.CLOUD else MStreamPaths.isRemote(coverPath) && !rememberDownloaded(coverPath),
     /** Download mark: a local file with a server copy (downloaded or matched), or a server track with a local one. */
-    downloaded: Boolean = rememberDownloaded(coverPath),
+    downloaded: Boolean = if (storage != null) storage == app.zenelo.library.StorageMark.DOWNLOADED else rememberDownloaded(coverPath),
     /** Offline and only on the server (not cached): faded — it can't play until the network is back. */
     unplayable: Boolean = rememberUnplayable(coverPath, remote = cloud),
     trailing: @Composable () -> Unit = {},
@@ -377,9 +381,11 @@ fun LibraryRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (!subtitle.isNullOrEmpty() || cloud || downloaded) {
+            val partial = storage == app.zenelo.library.StorageMark.PARTIAL
+            if (!subtitle.isNullOrEmpty() || cloud || downloaded || partial) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (cloud) CloudMark(Modifier.padding(end = 4.dp))
+                    if (partial) app.zenelo.ui.components.PartialMark(Modifier.padding(end = 4.dp))
                     if (downloaded) DownloadMark(Modifier.padding(end = 4.dp))
                     Text(
                         subtitle.orEmpty(),

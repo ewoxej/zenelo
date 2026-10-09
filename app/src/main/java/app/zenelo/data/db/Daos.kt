@@ -71,6 +71,18 @@ abstract class PlaylistDao {
     )
     abstract fun observeWithCounts(): Flow<List<PlaylistWithCount>>
 
+    @Query("UPDATE playlists SET keepDownloaded = :keep WHERE id = :playlistId")
+    abstract suspend fun setKeepDownloaded(playlistId: Long, keep: Boolean)
+
+    /** The tracks of the playlists kept downloaded (their new tracks download too). */
+    @Query(
+        """
+        SELECT e.path FROM playlist_entries e JOIN playlists p ON p.id = e.playlistId
+        WHERE p.keepDownloaded = 1 AND p.deleted = 0
+        """,
+    )
+    abstract fun observeKeptPaths(): Flow<List<String>>
+
     /** Every playlist's entries (offline: which playlists have nothing playable). */
     @Query("SELECT * FROM playlist_entries")
     abstract fun observeAllEntries(): Flow<List<PlaylistEntryEntity>>
@@ -289,20 +301,23 @@ interface TrackDao {
     )
     suspend fun needingLyrics(retryBefore: Long): List<TrackEntity>
 
-    /** Tracks without ReplayGain tags whose loudness hasn't been measured for their current version. */
+    /** Local tracks without ReplayGain tags whose loudness hasn't been measured for their current version (server tracks can't be). */
     @Query(
         """
         SELECT t.* FROM tracks t LEFT JOIN loudness l ON l.path = t.path
-        WHERE t.trackGainDb IS NULL AND (l.path IS NULL OR l.fileModified != t.modified)
+        WHERE t.trackGainDb IS NULL AND t.path NOT LIKE 'mstream://%' AND (l.path IS NULL OR l.fileModified != t.modified)
         """,
     )
     suspend fun needingLoudness(): List<TrackEntity>
 
-    /** Track count and duration per folder, for every folder under a path range (see [DirStats]). */
+    /** Track count, duration and cloud / downloaded counts per folder, for every folder under a path range (see [DirStats]). */
     @Query(
         """
-        SELECT dir, COUNT(*) AS tracks, COALESCE(SUM(durationMs), 0) AS durationMs FROM tracks
-        WHERE path >= :from AND path < :to GROUP BY dir
+        SELECT t.dir AS dir, COUNT(*) AS tracks, COALESCE(SUM(t.durationMs), 0) AS durationMs,
+            SUM(CASE WHEN t.path LIKE 'mstream://%' AND NOT EXISTS (SELECT 1 FROM server_links s WHERE s.serverPath = t.path) THEN 1 ELSE 0 END) AS cloud,
+            SUM(CASE WHEN EXISTS (SELECT 1 FROM server_links s WHERE s.serverPath = t.path) OR EXISTS (SELECT 1 FROM server_links s WHERE s.localPath = t.path) THEN 1 ELSE 0 END) AS downloaded
+        FROM tracks t
+        WHERE t.path >= :from AND t.path < :to GROUP BY t.dir
         """,
     )
     fun observeDirStats(from: String, to: String): Flow<List<DirStats>>
@@ -497,6 +512,10 @@ interface DownloadDao {
 
     @Query("SELECT COUNT(*) FROM downloads WHERE attempts < :maxAttempts")
     suspend fun pendingCount(maxAttempts: Int): Int
+
+    /** Everything in the queue, failed ones too (asked again only when the user clears them). */
+    @Query("SELECT path FROM downloads")
+    suspend fun paths(): List<String>
 
     @Query("SELECT COUNT(*) FROM downloads WHERE attempts >= :maxAttempts")
     fun observeFailed(maxAttempts: Int): Flow<Int>

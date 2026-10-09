@@ -165,6 +165,8 @@ fun ListRow(
     onLongClick: (() -> Unit)? = null,
     leading: @Composable () -> Unit = {},
     trailing: @Composable () -> Unit = {},
+    /** Cloud / download mark before the subtitle (tracks and sets of them). */
+    mark: app.zenelo.library.StorageMark = app.zenelo.library.StorageMark.NONE,
 ) {
     Row(
         modifier
@@ -178,14 +180,17 @@ fun ListRow(
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, color = titleColor, maxLines = 1, modifier = Modifier.marquee())
-            if (!subtitle.isNullOrEmpty()) {
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = ZeneloColors.TextMuted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            if (!subtitle.isNullOrEmpty() || mark != app.zenelo.library.StorageMark.NONE) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    StorageMarkIcon(mark, Modifier.padding(end = 4.dp))
+                    Text(
+                        subtitle.orEmpty(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = ZeneloColors.TextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
         trailing()

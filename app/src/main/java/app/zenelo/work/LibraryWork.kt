@@ -15,6 +15,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import app.zenelo.ZeneloApp
 import app.zenelo.data.settings.NormalizationMode
+import app.zenelo.data.settings.effectiveScanScope
 import app.zenelo.library.MetadataFetcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -130,7 +131,8 @@ object LibraryWork {
         data class Scanning(val done: Int, val total: Int) : Stage
         /** Covers / lyrics: [done] of [total] albums and tracks to look up. */
         data class Fetching(val done: Int, val total: Int) : Stage
-        data object Measuring : Stage
+        /** Loudness: [done] of [total] files to measure. */
+        data class Measuring(val done: Int, val total: Int) : Stage
     }
 
     /**
@@ -146,7 +148,9 @@ object LibraryWork {
         of(FetchWorker::class.java)?.takeIf { it.state == WorkInfo.State.RUNNING }?.let {
             return Stage.Fetching(it.progress.getInt(PROGRESS_DONE, 0), it.progress.getInt(PROGRESS_TOTAL, 0))
         }
-        if (of(LoudnessWorker::class.java)?.state == WorkInfo.State.RUNNING) return Stage.Measuring
+        of(LoudnessWorker::class.java)?.takeIf { it.state == WorkInfo.State.RUNNING }?.let {
+            return Stage.Measuring(it.progress.getInt(PROGRESS_DONE, 0), it.progress.getInt(PROGRESS_TOTAL, 0))
+        }
         return null
     }
 
@@ -158,8 +162,9 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
     override suspend fun doWork(): Result {
         if (!Environment.isExternalStorageManager()) return Result.success()
         val container = (applicationContext as ZeneloApp).container
-        val home = container.settings.settings.first().homeFolder?.let(::File)
-        container.indexer.indexAll(container.fileBrowser.roots().map { it.dir }, first = home) { done, total ->
+        val settings = container.settings.settings.first()
+        val home = settings.homeFolder?.let(::File)
+        container.indexer.indexAll(container.fileBrowser.roots().map { it.dir }, settings.effectiveScanScope(), first = home) { done, total ->
             setProgress(workDataOf(LibraryWork.PROGRESS_DONE to done, LibraryWork.PROGRESS_TOTAL to total))
         }
         return Result.success()
@@ -223,13 +228,26 @@ class FetchWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
 }
 
 class LoudnessWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+    private companion object {
+        /** A measurement this long is logged (`adb logcat -s Zenelo`): the files that keep the pass busy. */
+        const val SLOW_MS = 30_000L
+    }
+
     override suspend fun doWork(): Result {
         if (!Environment.isExternalStorageManager()) return Result.success()
         val container = (applicationContext as ZeneloApp).container
         if (container.settings.settings.first().normalization == NormalizationMode.OFF) return Result.success()
-        for (track in container.db.tracks().needingLoudness()) {
+        val tracks = container.db.tracks().needingLoudness()
+        setProgress(workDataOf(LibraryWork.PROGRESS_DONE to 0, LibraryWork.PROGRESS_TOTAL to tracks.size))
+        for ((index, track) in tracks.withIndex()) {
             if (isStopped) break
+            val started = System.currentTimeMillis()
             container.loudness.ensureMeasured(track)
+            val took = System.currentTimeMillis() - started
+            if (took > SLOW_MS) android.util.Log.i("Zenelo", "loudness: ${track.path.substringAfterLast('/')} took ${took / 1000} s")
+            if ((index + 1) % 5 == 0 || index + 1 == tracks.size) {
+                setProgress(workDataOf(LibraryWork.PROGRESS_DONE to index + 1, LibraryWork.PROGRESS_TOTAL to tracks.size))
+            }
         }
         return Result.success()
     }

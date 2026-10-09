@@ -98,7 +98,11 @@ fun AlbumScreen(vm: LibraryViewModel, key: String, nav: LibraryNav, onBack: () -
         canPlay = files.isNotEmpty(),
         onPlay = { vm.play(files, shuffle = it) },
         onStop = vm::stop,
-        headerActions = { if (album != null) FavoriteButton(favorite) { vm.toggleAlbumFavorite(album) } },
+        headerActions = {
+            val paths = remember(all) { all.map(TrackEntity::path) }
+            app.zenelo.ui.components.DownloadAction(paths, onDownload = { vm.download(paths) })
+            if (album != null) FavoriteButton(favorite) { vm.toggleAlbumFavorite(album) }
+        },
     ) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = FabClearance)) {
             if (album != null && !search.open) {
@@ -173,6 +177,10 @@ fun GenreScreen(vm: LibraryViewModel, key: String, onBack: () -> Unit) {
         canPlay = files.isNotEmpty(),
         onPlay = { vm.play(files, shuffle = it) },
         onStop = vm::stop,
+        headerActions = {
+            val paths = remember(all) { all.map(TrackEntity::path) }
+            app.zenelo.ui.components.DownloadAction(paths, onDownload = { vm.download(paths) })
+        },
     ) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = FabClearance)) {
             items(visible, key = { it.path }) { track ->
@@ -276,7 +284,11 @@ fun ArtistScreen(vm: LibraryViewModel, key: String, nav: LibraryNav, onBack: () 
         canPlay = files.isNotEmpty(),
         onPlay = { vm.play(files, shuffle = it) },
         onStop = vm::stop,
-        headerActions = { if (artist != null) FavoriteButton(favorite) { vm.toggleArtistFavorite(artist) } },
+        headerActions = {
+            val paths = remember(all) { all.map(TrackEntity::path) }
+            app.zenelo.ui.components.DownloadAction(paths, onDownload = { vm.download(paths) })
+            if (artist != null) FavoriteButton(favorite) { vm.toggleArtistFavorite(artist) }
+        },
     ) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = FabClearance)) {
             if ((artistAlbums.isNotEmpty() || soundsLike.isNotEmpty()) && !search.open) {

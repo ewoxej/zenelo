@@ -24,7 +24,10 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   In pointer code read `positionChange()` before `consume()` — a consumed change reports zero.
 - Queue UI edits entries by stable id (index into the queue's paths), not by position.
 - Loudness: `LoudnessAnalyzer` (BS.1770, unit-tested against the reference sine; matches ffmpeg
-  ebur128) measures files without ReplayGain tags in `LoudnessWorker` and for the next queued tracks.
+  ebur128) measures files without ReplayGain tags in `LoudnessWorker` (local only, progress for
+  settings, slow files logged) and for the next queued tracks. A cancelled measurement is not a
+  failure (it used to be stored as one, and the file was never measured again); a decoder that
+  never signals the end is given up on 2 s after the last input instead of spinning.
 - Tag edits go through `TagWriter` (deferred for the playing file, like cover embeds).
 - File name patterns (`FilenamePattern`, unit-tested; `[...]` = optional part) are the fallback for cover / lyrics lookups
   when tags are missing or find nothing.
@@ -36,7 +39,12 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   have no player duration until their end: `Mp3Scan` (unit-tested) counts their frames at indexing,
   the MediaItem carries that length (`MediaMetadata.durationMs`), and the UI / `Crossfader` fall back to it.
 - Library index: `tracks` table, filled by `LibraryIndexer` (WorkManager `IndexWorker` on app start,
-  plus on-demand for the folder on screen). Changed files are found by mtime in whole seconds + size:
+  plus on-demand for the folder on screen). Its reach is `ScanScope` (setting, unit-tested): all
+  storage, a whitelist or a blacklist (both lists kept; an empty whitelist scans everything), and
+  `.nomedia` folders skipped (default on); the mStream download folder is always scanned
+  (`effectiveScanScope`). Rows out of the scope go at the next scan; meanwhile `Library` hides them
+  by path, and the browser indexes the folder on screen only when the scope allows it (`allows`,
+  `.nomedia` up the tree). Changed files are found by mtime in whole seconds + size:
   the walk's NIO times are seconds on Android, `File.lastModified` milliseconds — compared exactly,
   every scan re-read the whole library.
 - Covers & lyrics (`MetadataFetcher`): online only on Wi-Fi. Covers: embedded → folder image →
@@ -106,6 +114,12 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   fade for that track, not a late one (a hole, then the old track back). `PlaybackService` logs
   transitions (with reason), seeks, fades (begin with both gains / done / cut short / skipped) and
   player errors under the `Zenelo` tag: `adb logcat -s Zenelo` when chasing an unexpected skip / rewind.
+- A track that can't play (damaged / unsupported file, gone, server unreachable after the player's
+  own retries) is skipped with a message (`PlaybackService.recoverFrom` → `playbackMessages`); a run
+  of them stops after 20 or at the queue's end. After an error the player is idle: next / previous /
+  play / skipTo prepare it again (else the user had to skip and press play). While a track loads
+  (`PlayerUiState.loading`, shown after 300 ms) the play button is a spinner. The long-lived
+  scopes log uncaught exceptions (`logUncaught`) instead of crashing the app.
 - Paused, Media3 1.5 drops the service's foreground and Android stops an idle background service
   after ~1 min ("Stopping service due to app idle"; the notification and soon the process went):
   `PlaybackService.onUpdateNotification` keeps the foreground for 30 min of pause (`PAUSED_FOREGROUND_MS`).
@@ -116,7 +130,8 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   Entries are rewritten as a whole on reorder / removal (`PlaylistDao.replace`).
   M3U / M3U8 (`M3u`, unit-tested; `PlaylistFiles`): import from the Playlists screen, export from a
   playlist's ⋮, both via the system picker (SAF). `documentPath` maps local-storage picker URIs to
-  real paths, so relative entries resolve and exports write paths relative to the playlist file
+  real paths (tree vs document URIs told apart by the path: `isDocumentUri(null, …)` threw, and every
+  picked folder came back null), so relative entries resolve and exports write paths relative to the playlist file
   (same volume only). Entries that don't resolve are matched in the index by their path's tail.
 - Settings: the main screen lists pages (`SettingsPage`: Playback, Interface, Other, About), each
   a `settings/page/{page}` route. Favorites can import an M3U too (`PlaylistFiles.importToFavorites`,
@@ -170,6 +185,13 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   `TranscodeMode` (default MP3: the server streams transcodes without a length and ignores Range,
   so only MP3's frame-index seeking works; Opus / AAC can't seek). It logs "open … from / streamed".
   `MStreamDownloads.progress` drives `DownloadPopup` (track i of n, bytes) instead of a "Downloading…" message.
+  "Download" also for albums / artists / genres (page header button, selection ⋮), playlists and
+  favorites (header button: downloading them keeps them downloaded — `playlists.keepDownloaded`
+  (DB v13), setting `keepFavoritesDownloaded`; `MStreamDownloads.start` queues tracks added later;
+  a failed track isn't asked again). Marks everywhere (`Storage` / `StorageMark`, unit-tested):
+  cloud, partly in the cloud, downloaded — for tracks (`rememberStorageMark`), albums / artists /
+  genres (`Library.*Of` with the linked paths), playlists (`rememberPlaylistMarks`), folders
+  (`DirStats.cloud / downloaded`), on rows, tiles, Home, Favorites, the queue and the browser.
 - Local ↔ server (DB v12, `ServerLinks`, `server_links`): a local file that is also on the server —
   a download (linked when saved, and files at the server's path in the download folder), or the
   user's own file matched by `LibraryMerge.twins` (same tags or file name + size, and same length

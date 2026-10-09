@@ -220,6 +220,7 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
                             FolderRow(
                                 folder = folder,
                                 label = state.folderLabel(folder),
+                                mark = state.folderStorage[folder.path]?.mark ?: app.zenelo.library.StorageMark.NONE,
                                 viewModel = viewModel,
                                 selecting = selecting,
                                 selected = folder.path in selected,
@@ -454,6 +455,7 @@ private fun TrackRow(
     ListRow(
         title = file.name,
         subtitle = trackSubtitle(file, info),
+        mark = app.zenelo.ui.components.rememberStorageMark(file.path),
         titleColor = if (isCurrent) ZeneloColors.Celadon else ZeneloColors.TextPrimary,
         modifier = if (selected) Modifier.background(ZeneloColors.MustardTint) else Modifier,
         onClick = onClick,
@@ -474,6 +476,7 @@ private fun TrackRow(
 private fun FolderRow(
     folder: File,
     label: String?,
+    mark: app.zenelo.library.StorageMark,
     viewModel: BrowserViewModel,
     selecting: Boolean,
     selected: Boolean,
@@ -484,6 +487,7 @@ private fun FolderRow(
     ListRow(
         title = folder.name,
         subtitle = label,
+        mark = mark,
         modifier = if (selected) Modifier.background(ZeneloColors.MustardTint) else Modifier,
         onClick = onClick,
         onLongClick = onLongClick,

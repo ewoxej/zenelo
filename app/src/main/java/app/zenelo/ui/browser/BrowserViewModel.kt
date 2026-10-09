@@ -8,6 +8,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import app.zenelo.AppContainer
 import app.zenelo.mstream.MStreamPaths
 import app.zenelo.mstream.RemoteFolders
+import app.zenelo.data.settings.effectiveScanScope
 import app.zenelo.data.db.FavoriteEntity
 import app.zenelo.data.db.FavoriteKind
 import app.zenelo.data.db.TrackEntity
@@ -58,6 +59,8 @@ data class BrowserState(
     val folderStats: Map<String, Pair<Int, Long>> = emptyMap(),
     /** Tracks directly in each subfolder (its own subfolders not counted), for sorting. */
     val folderTracks: Map<String, Int> = emptyMap(),
+    /** Each subfolder's cloud / downloaded counts (recursive), for its mark. */
+    val folderStorage: Map<String, app.zenelo.library.Storage> = emptyMap(),
     /** True until the first listing of [dir] arrives; starts true so launch doesn't flash "empty". */
     val loading: Boolean = true,
     val query: String = "",
@@ -122,6 +125,13 @@ data class BrowserState(
         }
 }
 
+private class FolderStats(
+    val dir: File,
+    val stats: Map<String, Pair<Int, Long>>,
+    val direct: Map<String, Int>,
+    val storage: Map<String, app.zenelo.library.Storage>,
+)
+
 sealed interface BrowserEvent {
     data class Message(val text: String, val undo: (() -> Unit)? = null, val action: SwipeAction? = null) : BrowserEvent
     /** Shown for file deletion always, and for list removal when `confirmRemove` is on. */
@@ -165,19 +175,21 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                     val prefix = RemoteFolders.indexPath(dir) + "/"
                     val byChild = HashMap<String, Pair<Int, Long>>()
                     val direct = HashMap<String, Int>()
+                    val storage = HashMap<String, app.zenelo.library.Storage>()
                     for (row in rows) {
                         if (!row.dir.startsWith(prefix)) continue
                         val child = prefix + row.dir.substring(prefix.length).substringBefore('/')
                         val key = RemoteFolders.folderPath(child)
                         val (t, d) = byChild[key] ?: (0 to 0L)
                         byChild[key] = (t + row.tracks) to (d + row.durationMs)
+                        storage[key] = (storage[key] ?: app.zenelo.library.Storage()) + app.zenelo.library.Storage(row.tracks, row.cloud, row.downloaded)
                         if (row.dir == child) direct[key] = row.tracks
                     }
-                    Triple(dir, byChild, direct)
+                    FolderStats(dir, byChild, direct, storage)
                 }
                 .flowOn(Dispatchers.Default)
-                .collect { (dir, stats, direct) ->
-                    _state.update { if (it.dir != dir) it else it.copy(folderStats = stats, folderTracks = direct) }
+                .collect { f ->
+                    _state.update { if (it.dir != f.dir) it else it.copy(folderStats = f.stats, folderTracks = f.direct, folderStorage = f.storage) }
                 }
         }
         viewModelScope.launch {
@@ -231,7 +243,11 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                 _state.update { if (it.dir != dir) it else it.copy(loading = false) }
             }
             // Tags for the folder on screen right away; the background pass covers the rest.
-            if (!RemoteFolders.isRemote(dir)) container.indexer.indexFiles(listing.files.map { File(it.path) })
+            // Only folders the library scan covers: a blacklisted or .nomedia folder stays out of the library.
+            val scope = container.settings.settings.first().effectiveScanScope()
+            if (!RemoteFolders.isRemote(dir) && scope.allows(dir, fs.roots().map { it.dir })) {
+                container.indexer.indexFiles(listing.files.map { File(it.path) })
+            }
             fs.prefetch(listing.folders)
             _state.update { if (it.dir != dir) it else it.copy(subfolderCounts = subfolderCounts(listing.folders)) }
         }

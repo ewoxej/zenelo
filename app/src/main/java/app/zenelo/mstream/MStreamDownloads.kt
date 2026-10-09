@@ -18,6 +18,9 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 
 /**
  * "Download" for server tracks (a queue in the `downloads` table, worked through by
@@ -31,6 +34,7 @@ class MStreamDownloads(
     private val files: MStreamFiles,
     private val indexer: LibraryIndexer,
     private val queue: PlayQueue,
+    private val links: ServerLinks,
     private val scope: CoroutineScope,
 ) {
     private val _current = MutableStateFlow<String?>(null)
@@ -133,7 +137,28 @@ class MStreamDownloads(
      * server tracks of the queue in the cache, one at a time. Follows the queue itself (not track
      * changes, which arrive before a new queue is published); a change restarts the round.
      */
+    @OptIn(kotlinx.coroutines.FlowPreview::class, kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     fun start() {
+        // Playlists / favorites downloaded with "Download" stay downloaded: tracks added to them
+        // later download too. A track whose download failed isn't asked again (it stays in the
+        // queue as failed until the user clears those).
+        scope.launch {
+            val favorites = settings.settings.map { it.keepFavoritesDownloaded }.distinctUntilChanged().flatMapLatest { keep ->
+                if (keep) db.favorites().observeAll().map { list -> list.filter { it.kind == app.zenelo.data.db.FavoriteKind.TRACK }.map { it.path } }
+                else kotlinx.coroutines.flow.flowOf(emptyList())
+            }
+            combine(db.playlists().observeKeptPaths(), favorites, links.links, settings.settings.map { it.mstream != null }.distinctUntilChanged()) { kept, liked, linked, server ->
+                if (!server) emptyList() else (kept + liked).distinct().filter { MStreamPaths.isRemote(it) && linked.localOf(it) == null }
+            }.debounce(KEEP_DEBOUNCE_MS).distinctUntilChanged().collect { wanted ->
+                if (wanted.isEmpty()) return@collect
+                val queued = db.downloads().paths().toHashSet()
+                val fresh = wanted.filter { it !in queued }
+                if (fresh.isNotEmpty()) {
+                    android.util.Log.i("Zenelo", "keep downloaded: ${fresh.size} new tracks")
+                    request(fresh)
+                }
+            }
+        }
         scope.launch {
             combine(queue.state, settings.settings) { snapshot, s ->
                 if (!s.autoDownload || s.mstream == null) emptyList()
@@ -163,6 +188,9 @@ class MStreamDownloads(
     }
 
     companion object {
+        /** Kept playlists / favorites settle this long before their new tracks are queued. */
+        private const val KEEP_DEBOUNCE_MS = 3_000L
+
         const val MAX_ATTEMPTS = 3
     }
 }

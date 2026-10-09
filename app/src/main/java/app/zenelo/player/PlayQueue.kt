@@ -91,8 +91,8 @@ class PlayQueue(
     private val stateFile: File,
 ) {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + app.zenelo.player.logUncaught("queue"))
+    private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO + app.zenelo.player.logUncaught("queue"))
     private val mutex = Mutex()
     private val positionFile = File(stateFile.path + ".position")
     private var saveJob: Job? = null
@@ -345,6 +345,8 @@ class PlayQueue(
         window.clear()
         window.addAll(positions)
         p.setMediaItems(items, positions.indexOf(current), 0L)
+        // After a playback error the player sits idle: without this it wouldn't load the new track.
+        p.prepare()
         p.play()
         publish()
     }
