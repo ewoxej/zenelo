@@ -72,18 +72,20 @@ class MetadataFetcher(
      * playlist: one probe per folder and one query per 500 albums, no network.
      */
     suspend fun localCovers(infos: Collection<TrackEntity>): Map<String, File> = withContext(Dispatchers.IO) {
-        val missing = infos.filter { !it.hasArtwork }
+        val candidates = infos.filter { !it.hasArtwork }
+        // Covers the user removed (album or track marks) don't come back through the folder image.
+        val rows = candidates.flatMap { listOf(coverKey(it), trackKey(it)) }.distinct().chunked(500).flatMap { covers.getMany(it) }
+        val removed = rows.filter { it.source == SOURCE_REMOVED }.mapTo(HashSet()) { it.albumKey }
+        val missing = candidates.filter { coverKey(it) !in removed && trackKey(it) !in removed }
         val byDir = missing.map { it.dir }.distinct().associateWith { folderImage(it) }
-        val keys = missing.filter { byDir[it.dir] == null }.map(::coverKey).distinct()
-        val cached = keys.chunked(500).flatMap { covers.getMany(it) }
-            .mapNotNull { c -> c.file?.let(::File)?.takeIf { it.exists() }?.let { c.albumKey to it } }
-            .toMap()
+        val cached = rows.mapNotNull { c -> c.file?.let(::File)?.takeIf { it.exists() }?.let { c.albumKey to it } }.toMap()
         missing.mapNotNull { t -> (byDir[t.dir] ?: cached[coverKey(t)])?.let { t.path to it } }.toMap()
     }
 
     /** Cover to show for a track without embedded art, downloading it if allowed. */
     suspend fun coverFor(track: TrackEntity, allowNetwork: Boolean): File? = withContext(Dispatchers.IO) {
         val remote = MStreamPaths.isRemote(track.path)
+        if (isCoverRemoved(track)) return@withContext null
         if (!remote) folderImage(track.dir)?.let { return@withContext it }
         val key = coverKey(track)
         covers.get(key)?.let { cached ->
@@ -150,6 +152,37 @@ class MetadataFetcher(
         }
     }
 
+    /** What [removeCover] did: files changed now or once they stop playing, and failures. */
+    data class Removed(val files: Int, val failed: Int)
+
+    /**
+     * Removes the cover of [targets]: the art in their files, and the app's other covers for them
+     * — the cached download and the folder image are no longer shown (the image file stays). A
+     * mark keeps the background pass from finding another one: on the album with [wholeAlbum],
+     * else on each track. Picking a cover by hand ([applyCover]) clears the marks.
+     */
+    suspend fun removeCover(targets: List<TrackEntity>, wholeAlbum: Boolean): Removed = withContext(Dispatchers.IO) {
+        var files = 0
+        var failed = 0
+        for (track in targets) {
+            if (MStreamPaths.isRemote(track.path) || !track.hasArtwork) continue
+            if (pendingWrites.removeCover(track.path) == PendingWrites.Result.FAILED) failed++ else files++
+        }
+        val keys = if (wholeAlbum) targets.map(::coverKey).distinct() else targets.map(::trackKey)
+        keys.forEach { key ->
+            covers.get(key)?.file?.let { File(it).delete() }
+            covers.upsert(CoverEntity(key, null, SOURCE_REMOVED, Long.MAX_VALUE))
+        }
+        Removed(files, failed)
+    }
+
+    /** The user removed this track's cover (or its album's): no folder image, download or search for it. */
+    suspend fun isCoverRemoved(track: TrackEntity): Boolean =
+        covers.getMany(listOf(coverKey(track), trackKey(track)).distinct()).any { it.source == SOURCE_REMOVED }
+
+    /** A per-track cover entry (the "removed" mark of one track of an album). */
+    private fun trackKey(track: TrackEntity) = "track:${track.path}"
+
     /** Candidates for the manual picker, searched by the given terms. */
     suspend fun searchCovers(artist: String, album: String): List<CoverCandidate> =
         if (http.onWifi()) coverSources.candidates(artist, album) else emptyList()
@@ -164,6 +197,8 @@ class MetadataFetcher(
     suspend fun applyCover(targets: List<TrackEntity>, candidate: CoverCandidate): Applied? = withContext(Dispatchers.IO) {
         val first = targets.firstOrNull() ?: return@withContext null
         val image = coverSources.download(candidate) ?: return@withContext null
+        // A new cover replaces "removed" marks (the album's is overwritten by saveCover).
+        covers.delete(targets.map(::trackKey))
         val file = saveCover(coverKey(first), image, candidate.source)
         Applied(file, embed(targets, file, replace = true))
     }
@@ -248,6 +283,9 @@ class MetadataFetcher(
         const val SOURCE_FILE = "file"
         const val SOURCE_LRCLIB = "lrclib"
         const val SOURCE_MSTREAM = "mStream"
+
+        /** A cover the user removed: never looked for again (`fetchedAt` = never expires). */
+        const val SOURCE_REMOVED = "removed"
         /** Suffix of a cover's source when it was found by names guessed from the path. */
         private const val FROM_PATH = " (by path)"
 

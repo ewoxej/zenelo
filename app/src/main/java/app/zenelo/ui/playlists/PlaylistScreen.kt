@@ -216,8 +216,8 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
                             trailing = {
                                 TrackMenu(
                                     onAction = act,
-                                    onDownloadCover = { vm.openDialog(TrackDialog.Cover(track.path)) },
-                                    onEditTags = { vm.openDialog(TrackDialog.EditTags(track.path, it)) },
+                                    onEditTags = { vm.openDialog(TrackDialog.EditTags(track.path)) },
+                                    onFindCover = { vm.openDialog(TrackDialog.Cover(track.path)) },
                                     local = !MStreamPaths.isRemote(track.path),
                                     path = track.path,
                                     onRemove = { remove(setOf(track.position)) },

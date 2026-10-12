@@ -202,8 +202,8 @@ fun FavoritesScreen(
                             trailing = {
                                 TrackMenu(
                                     onAction = act,
-                                    onDownloadCover = { vm.openDialog(TrackDialog.Cover(favorite.path)) },
-                                    onEditTags = { vm.openDialog(TrackDialog.EditTags(favorite.path, it)) },
+                                    onEditTags = { vm.openDialog(TrackDialog.EditTags(favorite.path)) },
+                                    onFindCover = { vm.openDialog(TrackDialog.Cover(favorite.path)) },
                                     local = !MStreamPaths.isRemote(favorite.path),
                                     path = favorite.path,
                                 )

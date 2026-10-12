@@ -155,6 +155,8 @@ class PlayerController(
 
     fun toggleShuffle() = controller?.run { shuffleModeEnabled = !shuffleModeEnabled }
 
+    fun setRepeat(mode: Int) = controller?.run { repeatMode = mode }
+
     fun cycleRepeat() = controller?.run {
         repeatMode = when (repeatMode) {
             Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
@@ -180,15 +182,16 @@ class PlayerController(
         _position.value = c.currentPosition
         // Our tag index wins over the player's copy: it's what a tag edit just updated.
         val info = item?.mediaId?.let(queue::cachedInfo)
+        val override = coverOverride.value?.takeIf { it.first == item?.mediaId }
         _state.value = PlayerUiState(
             connected = true,
             mediaId = item?.mediaId,
             title = info?.title ?: (metadata.title ?: metadata.displayTitle)?.toString(),
             artist = info?.artist ?: metadata.artist?.toString(),
             album = info?.album ?: metadata.albumTitle?.toString(),
-            artwork = metadata.artworkData,
-            artworkFile = coverOverride.value?.takeIf { it.first == item?.mediaId }?.second
-                ?: metadata.artworkUri?.takeIf { it.scheme == "file" }?.path,
+            // An override of "" is a removed cover: none, though the playing file still has it.
+            artwork = metadata.artworkData.takeIf { override?.second != "" },
+            artworkFile = if (override != null) override.second.ifEmpty { null } else metadata.artworkUri?.takeIf { it.scheme == "file" }?.path,
             isPlaying = c.isPlaying,
             loading = c.playWhenReady && c.playbackState == Player.STATE_BUFFERING,
             // MP3s without a seek table: the player learns the length only at their end; ours is exact.

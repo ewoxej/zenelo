@@ -11,9 +11,9 @@ class SwipeRulesTest {
 
     @Test
     fun localFile() {
-        assertEquals(always + SwipeAction.FAVORITE + SwipeAction.DELETE_FILE, allowed(Target()))
+        assertEquals(always + SwipeAction.FAVORITE + SwipeAction.DELETE_FILE + SwipeAction.EDIT_TAGS, allowed(Target()))
         // Already a favorite, matched to the server: no heart, Sonic path yes, nothing to download.
-        assertEquals(always + SwipeAction.DELETE_FILE + SwipeAction.SONIC_PATH, allowed(Target(favorite = true, onServer = true)))
+        assertEquals(always + SwipeAction.DELETE_FILE + SwipeAction.SONIC_PATH + SwipeAction.EDIT_TAGS, allowed(Target(favorite = true, onServer = true)))
     }
 
     @Test

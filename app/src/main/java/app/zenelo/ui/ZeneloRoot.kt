@@ -111,7 +111,6 @@ import app.zenelo.data.settings.Navigation
 import app.zenelo.data.settings.Section
 import app.zenelo.data.settings.ZeneloSettings
 import app.zenelo.library.AudioFile
-import app.zenelo.ui.components.CoverPickerDialog
 import app.zenelo.ui.components.TagEditorDialog
 import app.zenelo.ui.components.ZeneloSnackbar
 import app.zenelo.ui.components.icon
@@ -536,8 +535,8 @@ private fun LibraryMessages(vm: LibraryViewModel, modifier: Modifier) {
     }
 
     when (val d = dialog) {
-        is TrackDialog.EditTags -> TagEditorDialog(d.path, d.fromFileName, onDismiss = { vm.openDialog(null) }, onDone = vm::showMessage)
-        is TrackDialog.Cover -> CoverPickerDialog(d.path, onDismiss = { vm.openDialog(null) }, onDone = vm::showMessage)
+        is TrackDialog.EditTags -> TagEditorDialog(d.path, onDismiss = { vm.openDialog(null) }, onDone = vm::showMessage)
+        is TrackDialog.Cover -> app.zenelo.ui.components.CoverPickerDialog(d.path, onDismiss = { vm.openDialog(null) }, onDone = vm::showMessage)
         null -> Unit
     }
     confirmDelete?.let { files ->

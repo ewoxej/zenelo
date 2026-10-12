@@ -615,8 +615,8 @@ fun TrackRow(
             trailing = {
                 TrackMenu(
                     onAction = { vm.onTrack(file, title, track.artist, it) },
-                    onDownloadCover = { vm.openDialog(TrackDialog.Cover(track.path)) },
-                    onEditTags = { vm.openDialog(TrackDialog.EditTags(track.path, it)) },
+                    onEditTags = { vm.openDialog(TrackDialog.EditTags(track.path)) },
+                    onFindCover = { vm.openDialog(TrackDialog.Cover(track.path)) },
                     local = !MStreamPaths.isRemote(track.path),
                     path = track.path,
                 )
@@ -686,8 +686,8 @@ fun RecentScreen(vm: LibraryViewModel, onBack: (() -> Unit)?) {
                             trailing = {
                                 TrackMenu(
                                     onAction = { vm.onTrack(file, title, play.artist, it) },
-                                    onDownloadCover = { vm.openDialog(TrackDialog.Cover(play.path)) },
-                                    onEditTags = { vm.openDialog(TrackDialog.EditTags(play.path, it)) },
+                                    onEditTags = { vm.openDialog(TrackDialog.EditTags(play.path)) },
+                                    onFindCover = { vm.openDialog(TrackDialog.Cover(play.path)) },
                                     local = !MStreamPaths.isRemote(play.path),
                                     path = play.path,
                                 )

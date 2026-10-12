@@ -1,5 +1,6 @@
 package app.zenelo.ui.components
 
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -7,9 +8,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.DriveFileRenameOutline
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Radar
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.material.icons.rounded.Close
@@ -42,8 +41,10 @@ import app.zenelo.ui.theme.ZeneloColors
 @Composable
 fun TrackMenu(
     onAction: (SwipeAction) -> Unit,
-    onDownloadCover: () -> Unit,
-    onEditTags: (fromFileName: Boolean) -> Unit,
+    /** The full-screen tag editor (tags, cover, fill from file name). */
+    onEditTags: () -> Unit,
+    /** Server tracks (no tag editor): the cover search. */
+    onFindCover: () -> Unit = {},
     /** False for mStream tracks: the server's files aren't ours to rewrite or delete. */
     local: Boolean = true,
     /** The track, for "Play similar" / "Sonic path" (while logged in to mStream). */
@@ -68,7 +69,8 @@ fun TrackMenu(
             val favorite by (favoriteFlow ?: kotlinx.coroutines.flow.flowOf(false)).collectAsStateWithLifecycle(initialValue = false)
             SwipeAction.entries.filter {
                 // Sonic path comes with Play similar below (server tracks only).
-                it != SwipeAction.NONE && it != SwipeAction.SONIC_PATH && it != (if (local) SwipeAction.DOWNLOAD else SwipeAction.DELETE_FILE) &&
+                // Edit tags has its own item below (local files only).
+                it != SwipeAction.NONE && it != SwipeAction.SONIC_PATH && it != SwipeAction.EDIT_TAGS && it != (if (local) SwipeAction.DOWNLOAD else SwipeAction.DELETE_FILE) &&
                     !(it == SwipeAction.DOWNLOAD && downloaded)
             }.forEach { action ->
                 DropdownMenuItem(
@@ -96,27 +98,20 @@ fun TrackMenu(
                     leadingIcon = { Icon(Icons.Outlined.Edit, null, tint = ZeneloColors.Celadon) },
                     onClick = {
                         menu = false
-                        onEditTags(false)
+                        onEditTags()
                     },
                 )
+            } else {
                 DropdownMenuItem(
-                    text = { Text("Tags from file name…") },
-                    leadingIcon = { Icon(Icons.Outlined.DriveFileRenameOutline, null, tint = ZeneloColors.Celadon) },
+                    text = { Text("Find cover…") },
+                    leadingIcon = { Icon(Icons.Outlined.Image, null, tint = ZeneloColors.Celadon) },
                     onClick = {
                         menu = false
-                        onEditTags(true)
+                        onFindCover()
                     },
                 )
             }
             if (path != null) SonicPathItems(path) { menu = false }
-            DropdownMenuItem(
-                text = { Text("Download cover…") },
-                leadingIcon = { Icon(Icons.Outlined.Image, null, tint = ZeneloColors.Celadon) },
-                onClick = {
-                    menu = false
-                    onDownloadCover()
-                },
-            )
         }
     }
 }

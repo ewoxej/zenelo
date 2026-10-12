@@ -50,7 +50,10 @@ sealed interface LibraryEvent {
 
 /** The ⋮ menu's dialogs, shown at the root so any page can open them. */
 sealed interface TrackDialog {
-    data class EditTags(val path: String, val fromFileName: Boolean) : TrackDialog
+    /** The full-screen tag editor (tags and cover). */
+    data class EditTags(val path: String) : TrackDialog
+
+    /** The cover search, for server tracks (local files find covers in the tag editor). */
     data class Cover(val path: String) : TrackDialog
 }
 
@@ -221,6 +224,7 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
                 SwipeAction.DELETE_FILE -> _events.send(LibraryEvent.ConfirmDelete(listOf(file)))
                 SwipeAction.DOWNLOAD -> container.mstreamDownloads.request(listOf(file.path))?.let { _events.send(LibraryEvent.Message(it, action = action)) }
                 SwipeAction.SONIC_PATH -> container.sonicPath.add(file.path)
+                SwipeAction.EDIT_TAGS -> if (!MStreamPaths.isRemote(file.path)) openDialog(TrackDialog.EditTags(file.path))
             }
         }
     }

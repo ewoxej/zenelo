@@ -24,6 +24,8 @@ object SwipeRules {
         SwipeAction.DOWNLOAD -> serverAvailable && if (t.folder) t.cloudInside > 0 else t.remote && !t.hasLocalCopy
         SwipeAction.DELETE_FILE -> !t.folder && !t.remote
         SwipeAction.SONIC_PATH -> !t.folder && serverAvailable && t.onServer
+        // The server's files aren't ours to write.
+        SwipeAction.EDIT_TAGS -> !t.folder && !t.remote
         SwipeAction.ADD_TO_QUEUE, SwipeAction.PLAY_NEXT, SwipeAction.ADD_TO_PLAYLIST, SwipeAction.HIDE -> true
     }
 

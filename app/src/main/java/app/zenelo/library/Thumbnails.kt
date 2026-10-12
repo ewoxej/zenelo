@@ -47,13 +47,31 @@ class Thumbnails(context: Context, private val tracks: TrackDao, private val fet
     fun override(path: String, cover: File) {
         val bitmap = runCatching { decode(cover.readBytes(), SIZE) }.getOrNull() ?: return
         missing.remove(path)
+        removed.remove(path)
         memory.put(path, bitmap)
         largeMemory.remove(path)
         _revision.value++
     }
 
+    /** Covers removed this run: shown as none at once, even while the playing file still holds its art. */
+    private val removed = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+
+    /** [path]'s cover is gone (removed): its thumbnails are dropped, visible rows reload. */
+    fun forget(path: String) {
+        removed.add(path)
+        memory.remove(path)
+        largeMemory.remove(path)
+        missing.remove(path)
+        // The disk cache is keyed by the file's mtime: a removed folder image doesn't change it.
+        val stamp = "$path:${File(path).lastModified()}"
+        File(dir, sha1(stamp) + ".jpg").delete()
+        File(largeDir, sha1(stamp) + ".jpg").delete()
+        _revision.value++
+    }
+
     suspend fun load(path: String, large: Boolean = false): Bitmap? {
         val cache = if (large) largeMemory else memory
+        if (path in removed) return null
         cache.get(path)?.let { return it }
         if (missing.get(path) == true) return null
         return gate.withPermit {

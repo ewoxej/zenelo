@@ -293,6 +293,10 @@ interface TrackDao {
     @Query("SELECT * FROM tracks WHERE dir = :dir AND albumKey IS :albumKey")
     suspend fun albumTracksInDir(dir: String, albumKey: String?): List<TrackEntity>
 
+    /** Every track of an album, in any folder (local files and the server's). */
+    @Query("SELECT * FROM tracks WHERE albumKey = :albumKey")
+    suspend fun albumTracks(albumKey: String): List<TrackEntity>
+
     @Query("SELECT path, modified, size FROM tracks")
     suspend fun stamps(): List<TrackStamp>
 
@@ -399,6 +403,9 @@ interface CoverDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(cover: CoverEntity)
+
+    @Query("DELETE FROM covers WHERE albumKey IN (:keys)")
+    suspend fun delete(keys: List<String>)
 }
 
 @Dao

@@ -71,6 +71,22 @@ class PendingWrites(
         }
     }
 
+    /** Removes the file's cover art (the playing file: when its track ends, like [embedCover]). */
+    suspend fun removeCover(path: String): Result = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            if (path == nowPlaying.value) {
+                val existing = pending.get(path)
+                pending.upsert(PendingWriteEntity(path, existing?.tagsJson, REMOVE_COVER))
+                onVisualChange(path, null)
+                return@withContext Result.DEFERRED
+            }
+            if (!TagReader.removeArtwork(File(path))) return@withContext Result.FAILED
+            indexer.indexOne(path)
+            onVisualChange(path, null)
+            Result.WRITTEN
+        }
+    }
+
     /** Writes everything waiting for files that are no longer playing. */
     suspend fun flush() = withContext(Dispatchers.IO) {
         mutex.withLock {
@@ -80,9 +96,13 @@ class PendingWrites(
                 val file = File(write.path)
                 if (file.isFile) {
                     write.tagsJson?.let(::decode)?.let { TagReader.writeEditable(file, it) }
-                    write.coverFile?.let(::File)?.takeIf { it.isFile }?.let { TagReader.embedArtwork(file, it.readBytes()) }
+                    if (write.coverFile == REMOVE_COVER) {
+                        TagReader.removeArtwork(file)
+                    } else {
+                        write.coverFile?.let(::File)?.takeIf { it.isFile }?.let { TagReader.embedArtwork(file, it.readBytes()) }
+                    }
                     indexer.indexOne(write.path)
-                    onVisualChange(write.path, write.coverFile?.let(::File))
+                    onVisualChange(write.path, write.coverFile?.takeIf { it != REMOVE_COVER }?.let(::File))
                 }
                 pending.delete(write.path)
             }
@@ -108,6 +128,11 @@ class PendingWrites(
                 ),
             ),
         )
+    }
+
+    companion object {
+        /** `pending_writes.coverFile` for "remove the art" (a cover path otherwise). */
+        const val REMOVE_COVER = "-"
     }
 
     private fun encode(tags: EditableTags): String = JSONObject()

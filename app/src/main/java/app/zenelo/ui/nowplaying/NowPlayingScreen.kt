@@ -1,5 +1,11 @@
 package app.zenelo.ui.nowplaying
 
+import androidx.compose.material.icons.rounded.AllInclusive
+import app.zenelo.data.settings.SwipeAction
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Folder
 import app.zenelo.ui.components.applicableQueueSwipes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -61,17 +67,14 @@ import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Switch
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.animateScrollBy
-import androidx.compose.ui.draw.scale
 import app.zenelo.ui.components.SonicPathItems
 import app.zenelo.ui.components.UNPLAYABLE_ALPHA
 import app.zenelo.ui.components.rememberDownloaded
 import app.zenelo.ui.components.rememberUnplayable
 import app.zenelo.ui.components.rememberOnline
-import app.zenelo.ui.settings.zeneloSwitchColors
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -125,7 +128,6 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 import app.zenelo.library.LyricLine
 import app.zenelo.library.Lrc
 import app.zenelo.ui.components.Artwork
-import app.zenelo.ui.components.CoverPickerDialog
 import app.zenelo.ui.components.TagEditorDialog
 import app.zenelo.ui.components.formatChip
 import app.zenelo.ui.theme.PlexSans
@@ -176,8 +178,8 @@ fun NowPlayingScreen(
 
     val trackFlow = remember(state.mediaId) { state.mediaId?.let(container.db.tracks()::observe) ?: flowOf(null) }
     val track by trackFlow.collectAsState(initial = null)
-    var coverPicker by remember { mutableStateOf(false) }
     var tagEditor by remember { mutableStateOf(false) }
+    var coverPicker by remember { mutableStateOf(false) }
     var coverMessage by remember { mutableStateOf<String?>(null) }
 
     // Pull-down to collapse, starting inside the area chosen in settings (top bar ... whole screen);
@@ -220,10 +222,10 @@ fun NowPlayingScreen(
     }
 
     if (tagEditor && state.mediaId != null) {
-        TagEditorDialog(state.mediaId!!, fromFileName = false, onDismiss = { tagEditor = false }, onDone = { coverMessage = it })
+        TagEditorDialog(state.mediaId!!, onDismiss = { tagEditor = false }, onDone = { coverMessage = it })
     }
     if (coverPicker && state.mediaId != null) {
-        CoverPickerDialog(state.mediaId!!, onDismiss = { coverPicker = false }, onDone = { coverMessage = it })
+        app.zenelo.ui.components.CoverPickerDialog(state.mediaId!!, onDismiss = { coverPicker = false }, onDone = { coverMessage = it })
     }
     coverMessage?.let { text ->
         LaunchedEffect(text) {
@@ -245,8 +247,8 @@ fun NowPlayingScreen(
             onOpenFolder,
             onOpenAlbum = onOpenAlbum,
             onOpenArtist = onOpenArtist,
-            onDownloadCover = { coverPicker = true },
             onEditTags = { tagEditor = true },
+            onFindCover = { coverPicker = true },
             onMessage = { coverMessage = it },
         )
         HorizontalPager(
@@ -289,8 +291,8 @@ private fun TopBar(
     onOpenFolder: (File) -> Unit,
     onOpenAlbum: (String) -> Unit,
     onOpenArtist: (String) -> Unit,
-    onDownloadCover: () -> Unit,
     onEditTags: () -> Unit,
+    onFindCover: () -> Unit,
     onMessage: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -343,7 +345,8 @@ private fun TopBar(
             IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "More") }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                 DropdownMenuItem(
-                    text = { Text("Open folder") },
+                    text = { Text("Go to folder") },
+                    leadingIcon = { Icon(Icons.Outlined.Folder, null, tint = ZeneloColors.Mustard) },
                     enabled = folder != null,
                     onClick = {
                         menu = false
@@ -353,6 +356,7 @@ private fun TopBar(
                 if (albumKey != null) {
                     DropdownMenuItem(
                         text = { Text("Go to album") },
+                        leadingIcon = { Icon(Icons.Outlined.Album, null, tint = ZeneloColors.Mustard) },
                         onClick = {
                             menu = false
                             onOpenAlbum(albumKey)
@@ -362,6 +366,7 @@ private fun TopBar(
                 artistNames.forEach { name ->
                     DropdownMenuItem(
                         text = { Text(if (artistNames.size == 1) "Go to artist" else "Go to artist $name", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        leadingIcon = { Icon(Icons.Outlined.Person, null, tint = ZeneloColors.Mustard) },
                         onClick = {
                             menu = false
                             onOpenArtist(artistKey(name))
@@ -370,6 +375,7 @@ private fun TopBar(
                 }
                 DropdownMenuItem(
                     text = { Text("Add to playlist…") },
+                    leadingIcon = { Icon(SwipeAction.ADD_TO_PLAYLIST.icon, null, tint = SwipeAction.ADD_TO_PLAYLIST.accent) },
                     enabled = state.mediaId != null,
                     onClick = {
                         menu = false
@@ -381,6 +387,7 @@ private fun TopBar(
                 if (remote && online && !rememberDownloaded(state.mediaId)) {
                     DropdownMenuItem(
                         text = { Text("Download") },
+                        leadingIcon = { Icon(SwipeAction.DOWNLOAD.icon, null, tint = SwipeAction.DOWNLOAD.accent) },
                         onClick = {
                             menu = false
                             state.mediaId?.let { path -> scope.launch { downloads.request(listOf(path))?.let(onMessage) } }
@@ -388,34 +395,17 @@ private fun TopBar(
                     )
                 }
                 if (settings?.mstream != null && online) {
-                    val dj = settings?.autoDj?.enabled == true
-                    val container = appContainer()
-                    DropdownMenuItem(
-                        text = { Text("Auto DJ") },
-                        trailingIcon = { Switch(checked = dj, onCheckedChange = null, colors = zeneloSwitchColors(), modifier = Modifier.scale(0.8f)) },
-                        onClick = {
-                            menu = false
-                            container.autoDj.setEnabled(!dj) { container.player.playFiles(it) }
-                            onMessage(if (dj) "Auto DJ off" else "Auto DJ on")
-                        },
-                    )
-                    state.mediaId?.let { path -> SonicPathItems(path, icons = false) { menu = false } }
+                    // Auto DJ is the repeat button's ∞ state.
+                    state.mediaId?.let { path -> SonicPathItems(path) { menu = false } }
                 }
+                // The server's files aren't ours to write: a server track only gets the cover search.
                 DropdownMenuItem(
-                    text = { Text("Edit tags…") },
-                    // The server's files aren't ours to write.
-                    enabled = state.mediaId != null && !remote,
-                    onClick = {
-                        menu = false
-                        onEditTags()
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text("Download cover…") },
+                    text = { Text(if (remote) "Find cover…" else "Edit tags…") },
+                    leadingIcon = { Icon(if (remote) Icons.Outlined.Image else Icons.Outlined.Edit, null, tint = ZeneloColors.Celadon) },
                     enabled = state.mediaId != null,
                     onClick = {
                         menu = false
-                        onDownloadCover()
+                        if (remote) onFindCover() else onEditTags()
                     },
                 )
             }
@@ -909,11 +899,49 @@ private fun Transport(state: PlayerUiState, player: PlayerController) {
             }
         }
         IconButton(onClick = { player.next() }) { Icon(Icons.Rounded.SkipNext, "Next", Modifier.size(30.dp)) }
+        // Repeat: off → all → one → Auto DJ (∞, more tracks from the server when the queue ends) → off.
+        // Auto DJ only with a server and the network; without them the button is plain repeat.
+        val container = appContainer()
+        val server by container.sonicPath.available.collectAsStateWithLifecycle()
+        val settingsFlow = remember { container.settings.settings }
+        val settings by settingsFlow.collectAsStateWithLifecycle(initialValue = null)
+        val saved = settings?.autoDj?.enabled == true
+        // The repeat mode changes at once, the Auto DJ setting a moment later (DataStore): what was
+        // tapped shows until the setting catches up — else "repeat off" flashed before ∞.
+        var tapped by remember { mutableStateOf<Boolean?>(null) }
+        LaunchedEffect(saved) { if (tapped == saved) tapped = null }
+        val dj = server && (tapped ?: saved)
         ToggleTile(
-            if (state.repeatMode == Player.REPEAT_MODE_ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
-            "Repeat",
-            active = state.repeatMode != Player.REPEAT_MODE_OFF,
-        ) { player.cycleRepeat() }
+            when {
+                dj -> Icons.Rounded.AllInclusive
+                state.repeatMode == Player.REPEAT_MODE_ONE -> Icons.Rounded.RepeatOne
+                else -> Icons.Rounded.Repeat
+            },
+            if (dj) "Auto DJ" else "Repeat",
+            active = dj || state.repeatMode != Player.REPEAT_MODE_OFF,
+        ) {
+            when {
+                dj -> {
+                    tapped = false
+                    container.autoDj.setEnabled(false) {}
+                }
+                state.repeatMode == Player.REPEAT_MODE_ONE && server -> {
+                    // Repeat would keep the queue from ending: Auto DJ takes over from it.
+                    tapped = true
+                    player.setRepeat(Player.REPEAT_MODE_OFF)
+                    container.autoDj.setEnabled(true) { player.playFiles(it) }
+                }
+                else -> {
+                    // A repeat picked while Auto DJ can't run (offline) turns it off: else it would
+                    // come back over the repeat once the network does.
+                    if (saved) {
+                        tapped = false
+                        container.autoDj.setEnabled(false) {}
+                    }
+                    player.cycleRepeat()
+                }
+            }
+        }
     }
 }
 

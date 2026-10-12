@@ -23,7 +23,8 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   A direction without options isn't captured (queue rows: left only, right goes to the pager).
   Per row, an action that doesn't apply counts as Nothing (`SwipeRules`, unit-tested;
   `applicableSwipes` / `applicableQueueSwipes`): no heart for a favorite (Favorites itself
-  included), no Download for a track on the device or offline, no Delete for server tracks, no
+  included), no Download for a track on the device or offline, no Delete / Edit tags (`SwipeAction.EDIT_TAGS`,
+  opens the tag editor) for server tracks, no
   Sonic path off the server; folders take Download only with cloud tracks inside.
   In pointer code read `positionChange()` before `consume()` — a consumed change reports zero.
 - Queue UI edits entries by stable id (index into the queue's paths), not by position.
@@ -32,7 +33,17 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   settings, slow files logged) and for the next queued tracks. A cancelled measurement is not a
   failure (it used to be stored as one, and the file was never measured again); a decoder that
   never signals the end is given up on 2 s after the last input instead of spinning.
-- Tag edits go through `TagWriter` (deferred for the playing file, like cover embeds).
+- Tag edits go through `TagWriter` (deferred for the playing file, like cover embeds). The tag
+  editor (`TagEditorDialog`, a full-screen dialog from a track's ⋮ "Edit tags…" / Now Playing)
+  holds the cover too ("Fill tags from file name" is a full-width button below it), "Find online" (`CoverPickerDialog`, applied at
+  once), "Remove cover" / "Remove from all N album tracks" (the album by tag in every folder,
+  `TrackDao.albumTracks`; offered only while a cover shows) — no confirmation, shown at once,
+  done when the editor closes (any way; Save counts a removal as a change): `MetadataFetcher.removeCover` takes the art out of the files
+  (`PendingWrites.removeCover`, deferred for the playing file) and marks the track
+  (`track:<path>`) or the album `SOURCE_REMOVED` in `covers`: no folder image (the file stays),
+  cached download or background search for it (`isCoverRemoved`, `localCovers`); a cover picked
+  by hand clears the marks. Seen at once: `Thumbnails.forget`, and `coverOverride` = (path, "")
+  for the playing track. Server tracks (no editor) get ⋮ / Now Playing "Find cover…".
 - File name patterns (`FilenamePattern`, unit-tested; `[...]` = optional part) are the fallback for cover / lyrics lookups
   when tags are missing or find nothing.
 - Tags: jaudiotagger in Android mode (`TagReader`). Its `setImageFromData` throws on Android, so FLAC
@@ -236,7 +247,7 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   library, Favorites and Recently played (`Library` filters; `rememberPlayableNow`); in playlists,
   the queue and Sonic Path they're faded (`rememberUnplayable`) and `PlaybackService.skipUnplayable`
   skips them; a playlist with nothing playable is faded (`rememberUnplayablePlaylists`). Server
-  features hide: Download, Auto DJ toggle, Sonic Path / Play similar (`MStreamSonicPath.available`),
+  features hide: Download, the repeat button's Auto DJ state, Sonic Path / Play similar (`MStreamSonicPath.available`),
   "Sounds like", the browser's mStream root; Auto DJ waits for the network without a message.
   Auto DJ / Sonic Path / Play similar are the server's (its analysis): local files only through their link.
 - Genres (DB v11): `tracks.genre` from tags (`Genres.split`, unit-tested: "A; B" / "A/B" / ID3 numbers)
@@ -254,7 +265,8 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   (`similar/artists`, else Last.fm's). Auto DJ filters as the web app: genres (whitelist /
   blacklist), length window, skip words (`AutoDjRules.hasSkipWord`), libraries (`ignoreVPaths`),
   rolling / locked sound seed.
-- mStream stage 4: `MStreamAutoDj` (setting `autoDj`; Now Playing ⋮ toggle; its settings are `SettingsPage.AUTO_DJ`,
+- mStream stage 4: `MStreamAutoDj` (setting `autoDj`; turned on / off as the 4th state of Now Playing's repeat button — off → all
+  → one → ∞ Auto DJ, only with a server and the network; picking a repeat turns Auto DJ off; its settings are `SettingsPage.AUTO_DJ`,
   a sub-page opened from the mStream page like `DOWNLOADS`; `listed = false` keeps them off the main Settings screen) — when the queue's last track
   starts, `db/random-songs` picks more, the body built as the web app's `_buildAutoDjBody` (ignoreList
   cursor, artist cooldown, BPM windows / Camelot neighbours via `AutoDjRules` (unit-tested), similar

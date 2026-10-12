@@ -114,6 +114,16 @@ object TagReader {
         }.getOrDefault(false)
     }
 
+    /** Removes the file's cover art. True when the file has none afterwards. */
+    fun removeArtwork(file: File): Boolean = runCatching {
+        val audio = AudioFileIO.read(file)
+        val tag = audio.tag ?: return true
+        if (tag.artworkList.isNullOrEmpty()) return true
+        tag.deleteArtworkField()
+        audio.commit()
+        AudioFileIO.read(file).tag?.artworkList.isNullOrEmpty()
+    }.getOrDefault(false)
+
     /** User-editable text tags; empty string = no value. */
     data class EditableTags(
         val title: String = "",

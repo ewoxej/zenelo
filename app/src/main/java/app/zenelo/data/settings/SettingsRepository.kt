@@ -32,6 +32,8 @@ enum class SwipeAction(val label: String) {
     DOWNLOAD("Download"),
     /** mStream: the track becomes the Sonic Path's start (its end once there's a start). */
     SONIC_PATH("Sonic path"),
+    /** Local files: the full-screen tag editor (tags and cover). */
+    EDIT_TAGS("Edit tags"),
     /** Left out of every list (library, folders, playlists, Favorites…) until shown again in Settings. */
     HIDE("Hide"),
     DELETE_FILE("Delete file"),

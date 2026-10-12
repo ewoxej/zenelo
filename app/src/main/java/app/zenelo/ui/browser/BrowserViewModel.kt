@@ -137,6 +137,8 @@ sealed interface BrowserEvent {
     data class Message(val text: String, val undo: (() -> Unit)? = null, val action: SwipeAction? = null) : BrowserEvent
     /** Shown for file deletion always, and for list removal when `confirmRemove` is on. */
     data class Confirm(val file: AudioFile, val deleteFile: Boolean) : BrowserEvent
+    /** "Edit tags" swipe: the screen opens the tag editor. */
+    data class EditTags(val path: String) : BrowserEvent
 }
 
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
@@ -370,6 +372,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
             SwipeAction.HIDE -> hide(listOf(folder), emptyList())
             SwipeAction.DELETE_FILE -> showMessage("Folders can't be deleted from here")
             SwipeAction.SONIC_PATH -> showMessage("Sonic Path runs between two tracks")
+            SwipeAction.EDIT_TAGS -> Unit
             SwipeAction.DOWNLOAD -> viewModelScope.launch {
                 container.mstreamDownloads.request(fs.listRecursive(folder).map { it.path })?.let { _events.send(BrowserEvent.Message(it, action = action)) }
             }
@@ -414,6 +417,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                 SwipeAction.DELETE_FILE -> _events.send(BrowserEvent.Confirm(file, deleteFile = true))
                 SwipeAction.DOWNLOAD -> container.mstreamDownloads.request(listOf(file.path))?.let { _events.send(BrowserEvent.Message(it, action = action)) }
                 SwipeAction.SONIC_PATH -> container.sonicPath.add(file.path)
+                SwipeAction.EDIT_TAGS -> if (!MStreamPaths.isRemote(file.path)) _events.send(BrowserEvent.EditTags(file.path))
             }
         }
     }
@@ -471,7 +475,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                 }
                 SwipeAction.DOWNLOAD -> container.mstreamDownloads.request(expand(folders, files).map { it.path })?.let { _events.send(BrowserEvent.Message(it, action = action)) }
                 // Not in the selection bar: one track at a time.
-                SwipeAction.SONIC_PATH, SwipeAction.NONE -> Unit
+                SwipeAction.SONIC_PATH, SwipeAction.EDIT_TAGS, SwipeAction.NONE -> Unit
             }
         }
     }

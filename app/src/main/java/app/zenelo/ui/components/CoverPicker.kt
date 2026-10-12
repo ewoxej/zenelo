@@ -51,7 +51,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 /**
- * "Download cover": search all cover sources with editable terms, pick one, and it replaces the
+ * The tag editor's "Find online": search all cover sources with editable terms, pick one, and it replaces the
  * cover of this track (or of the album's tracks in the same folder). [onDone] gets a status message.
  */
 @Composable
@@ -107,7 +107,7 @@ fun CoverPickerDialog(path: String, onDismiss: () -> Unit, onDone: (String) -> U
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text("Download cover", style = MaterialTheme.typography.titleSmall)
+            Text("Find a cover", style = MaterialTheme.typography.titleSmall)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     SearchTerm(artist, { artist = it }, "Artist", ::search)

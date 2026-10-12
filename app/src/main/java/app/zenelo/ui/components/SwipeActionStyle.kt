@@ -1,5 +1,6 @@
 package app.zenelo.ui.components
 
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
@@ -30,6 +31,7 @@ val SwipeAction.icon: ImageVector
         SwipeAction.DELETE_FILE -> Icons.Outlined.DeleteOutline
         SwipeAction.DOWNLOAD -> Icons.Outlined.Download
         SwipeAction.SONIC_PATH -> Icons.Outlined.Route
+        SwipeAction.EDIT_TAGS -> Icons.Outlined.Edit
     }
 
 val SwipeAction.accent: Color
@@ -37,7 +39,7 @@ val SwipeAction.accent: Color
         SwipeAction.NONE, SwipeAction.HIDE -> ZeneloColors.TextMuted
         SwipeAction.ADD_TO_QUEUE, SwipeAction.PLAY_NEXT, SwipeAction.ADD_TO_PLAYLIST -> ZeneloColors.Mustard
         SwipeAction.FAVORITE -> ZeneloColors.Info
-        SwipeAction.DOWNLOAD, SwipeAction.SONIC_PATH -> ZeneloColors.Celadon
+        SwipeAction.DOWNLOAD, SwipeAction.SONIC_PATH, SwipeAction.EDIT_TAGS -> ZeneloColors.Celadon
         SwipeAction.DELETE_FILE -> ZeneloColors.Danger
     }
 

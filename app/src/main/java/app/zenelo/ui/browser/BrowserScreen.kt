@@ -91,7 +91,6 @@ import app.zenelo.ui.components.TrackThumb
 import app.zenelo.ui.components.listSwipeOptions
 import app.zenelo.ui.components.ZeneloSnackbar
 import app.zenelo.ui.components.accent
-import app.zenelo.ui.components.CoverPickerDialog
 import app.zenelo.ui.components.TagEditorDialog
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.DriveFileRenameOutline
@@ -109,8 +108,8 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
     val snackbar = remember { SnackbarHostState() }
     var snackbarIcon by remember { mutableStateOf<ImageVector?>(null) }
     var pendingConfirm by remember { mutableStateOf<BrowserEvent.Confirm?>(null) }
+    var tagEditorFor by remember { mutableStateOf<String?>(null) }
     var coverPickerFor by remember { mutableStateOf<String?>(null) }
-    var tagEditorFor by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
 
     // Multi-select of folders and files (long-press a row), like in the queue: paths of either.
     // Cleared when the folder changes.
@@ -139,6 +138,7 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
         viewModel.events.collect { event ->
             when (event) {
                 is BrowserEvent.Confirm -> pendingConfirm = event
+                is BrowserEvent.EditTags -> tagEditorFor = event.path
                 is BrowserEvent.Message -> {
                     snackbar.currentSnackbarData?.dismiss()
                     snackbarIcon = event.action?.icon
@@ -280,8 +280,8 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
                                 onClick = { if (selecting) toggle(file.path) else viewModel.playFrom(file) },
                                 onLongClick = { startSelection(file.path) },
                                 onAction = { viewModel.onSwipe(file, it) },
-                                onDownloadCover = { coverPickerFor = file.path },
-                                onEditTags = { fromName -> tagEditorFor = file.path to fromName },
+                                onEditTags = { tagEditorFor = file.path },
+                                onFindCover = { coverPickerFor = file.path },
                             )
                         }
                     }
@@ -318,13 +318,13 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter)) { ZeneloSnackbar(it, snackbarIcon) }
     }
 
-    tagEditorFor?.let { (path, fromName) ->
-        TagEditorDialog(path, fromName, onDismiss = { tagEditorFor = null }, onDone = viewModel::showMessage)
+    tagEditorFor?.let { path ->
+        TagEditorDialog(path, onDismiss = { tagEditorFor = null }, onDone = viewModel::showMessage)
+    }
+    coverPickerFor?.let { path ->
+        app.zenelo.ui.components.CoverPickerDialog(path, onDismiss = { coverPickerFor = null }, onDone = viewModel::showMessage)
     }
 
-    coverPickerFor?.let { path ->
-        CoverPickerDialog(path, onDismiss = { coverPickerFor = null }, onDone = viewModel::showMessage)
-    }
 
     if (confirmDeleteSelected) {
         AlertDialog(
@@ -478,8 +478,8 @@ private fun TrackRow(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onAction: (SwipeAction) -> Unit,
-    onDownloadCover: () -> Unit,
-    onEditTags: (fromFileName: Boolean) -> Unit,
+    onEditTags: () -> Unit,
+    onFindCover: () -> Unit,
 ) {
     ListRow(
         title = file.name,
@@ -494,7 +494,7 @@ private fun TrackRow(
             if (selecting) {
                 if (!markLeft) SelectionMark(selected, Modifier.padding(horizontal = 10.dp))
             } else {
-                TrackMenu(onAction, onDownloadCover, onEditTags, local = !MStreamPaths.isRemote(file.path), path = file.path)
+                TrackMenu(onAction, onEditTags, onFindCover, local = !MStreamPaths.isRemote(file.path), path = file.path)
             }
         },
     )
