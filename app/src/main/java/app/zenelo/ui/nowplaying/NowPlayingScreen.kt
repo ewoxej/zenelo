@@ -1,5 +1,6 @@
 package app.zenelo.ui.nowplaying
 
+import app.zenelo.ui.components.applicableQueueSwipes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -614,7 +615,7 @@ private fun QueuePage(player: PlayerController) {
                 val played = offset < 0
                 ReorderableItem(reorderState, key = id) { dragging ->
                     SwipeableRow(
-                        options = swipeOptions,
+                        options = applicableQueueSwipes(swipeOptions, settings.queueSwipes, queue.pathOf(id)),
                         onSwipe = { slot -> onSwipe(id, slot) },
                         enabled = !isCurrent && !selecting,
                     ) {

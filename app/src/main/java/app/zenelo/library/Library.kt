@@ -39,7 +39,10 @@ class Library(
     private val isCached: (String) -> Boolean = { false },
     /** The scan's folders: local tracks outside them don't show (see [ScanScope.inLibrary]). */
     scanScope: Flow<ScanScope> = kotlinx.coroutines.flow.flowOf(ScanScope()),
+    /** Hidden tracks / folders ("Hide"): left out everywhere. */
+    hidden: Flow<Hidden> = kotlinx.coroutines.flow.flowOf(Hidden()),
 ) {
+    private val hidden = hidden.distinctUntilChanged()
     private val scanScope = scanScope.distinctUntilChanged()
     private val online = online.distinctUntilChanged()
     private val tracks = db.tracks()
@@ -56,6 +59,7 @@ class Library(
         val visible = LibraryMerge.visible(inScope, src, links)
         if (online) visible else visible.filter { playsOffline(it.path, links) }
     }
+        .let { flow -> combine(flow, this.hidden, links) { list, hidden, links -> withoutHidden(list, hidden, links) { it.path } } }
         .flowOn(Dispatchers.Default)
         .shareIn(scope, SharingStarted.WhileSubscribed(5_000), replay = 1)
 
@@ -94,6 +98,14 @@ class Library(
                 LibrarySource.MSTREAM -> list.filter { MStreamPaths.isRemote(it.path) }
             }
         }.let { flow -> combine(flow, online, links) { list, online, links -> if (online) list else list.filter { playsOffline(it.path, links) } } }
+            .let { flow -> combine(flow, hidden, links) { list, hidden, links -> withoutHidden(list, hidden, links) { it.path } } }
+
+    /** [list] without hidden tracks (under either of their paths: [links] is server → local copy). */
+    private fun <T> withoutHidden(list: List<T>, hidden: Hidden, links: Map<String, String>, path: (T) -> String): List<T> {
+        if (hidden.isEmpty) return list
+        val toServer = links.entries.associate { (server, local) -> local to server }
+        return list.filterNot { item -> path(item).let { p -> hidden.hides(p, listOfNotNull(links[p], toServer[p])) } }
+    }
 
     /** Offline: local files, and server tracks with a local copy or in the queue cache. */
     private fun playsOffline(path: String, links: Map<String, String>): Boolean =

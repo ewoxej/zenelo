@@ -279,3 +279,18 @@ data class DownloadEntity(
     val addedAt: Long = System.currentTimeMillis(),
     val attempts: Int = 0,
 )
+
+/**
+ * A track or folder the user hid ("Hide"): left out of the library, search, Home, Recently
+ * played, Favorites, playlists and the folder browser — the file stays. Shown again from
+ * Settings → Library → Hidden. [path]: the track as it was hidden (a server track's local copy
+ * counts too), or a folder's index path (`mstream://…` for the server's).
+ */
+@Entity(tableName = "hidden")
+data class HiddenEntity(
+    @PrimaryKey val path: String,
+    val title: String,
+    val subtitle: String? = null,
+    val folder: Boolean = false,
+    val hiddenAt: Long = System.currentTimeMillis(),
+)

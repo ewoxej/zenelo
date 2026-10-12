@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
@@ -160,6 +161,14 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
 
     // Declared after every property: goHome() can run synchronously and reach open().
     init {
+        // Hidden or shown again (here, another page, Settings): the folder on screen follows.
+        viewModelScope.launch {
+            container.hidden.current.drop(1).collect {
+                val dir = _state.value.dir ?: return@collect
+                val listing = fs.list(dir)
+                _state.update { s -> if (s.dir != dir) s else s.copy(folders = listing.folders, files = listing.files) }
+            }
+        }
         // Recursive track counts for the subfolders on screen, straight from the index: folders
         // never opened still show what's inside once the background pass has read them.
         viewModelScope.launch {
@@ -358,13 +367,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
             SwipeAction.PLAY_NEXT -> queueSubtree(folder, next = true)
             SwipeAction.FAVORITE -> toggleFolderFavorite(folder)
             SwipeAction.ADD_TO_PLAYLIST -> addFolderToPlaylist(folder)
-            SwipeAction.REMOVE_FROM_LIST, SwipeAction.HIDE -> {
-                val before = _state.value.folders
-                _state.update { it.copy(folders = it.folders - folder) }
-                viewModelScope.launch {
-                    _events.send(BrowserEvent.Message("Removed from list", undo = { _state.update { it.copy(folders = before) } }, action = action))
-                }
-            }
+            SwipeAction.HIDE -> hide(listOf(folder), emptyList())
             SwipeAction.DELETE_FILE -> showMessage("Folders can't be deleted from here")
             SwipeAction.SONIC_PATH -> showMessage("Sonic Path runs between two tracks")
             SwipeAction.DOWNLOAD -> viewModelScope.launch {
@@ -405,15 +408,9 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                     _events.send(BrowserEvent.Message(action = action, text = if (added) "Added to favorites" else "Removed from favorites"))
                 }
                 SwipeAction.ADD_TO_PLAYLIST -> container.playlistPicker.pick(listOf(file.path))
-                // TODO: persist hidden files.
-                SwipeAction.REMOVE_FROM_LIST, SwipeAction.HIDE ->
-                    if (settings.value.confirmRemove) {
-                        _events.send(BrowserEvent.Confirm(file, deleteFile = false))
-                    } else {
-                        val before = _state.value.files
-                        removeFromList(file)
-                        _events.send(BrowserEvent.Message(action = action, text = "Removed from list", undo = { _state.update { it.copy(files = before) } }))
-                    }
+                SwipeAction.HIDE ->
+                    if (settings.value.confirmRemove) _events.send(BrowserEvent.Confirm(file, deleteFile = false))
+                    else hide(emptyList(), listOf(file))
                 SwipeAction.DELETE_FILE -> _events.send(BrowserEvent.Confirm(file, deleteFile = true))
                 SwipeAction.DOWNLOAD -> container.mstreamDownloads.request(listOf(file.path))?.let { _events.send(BrowserEvent.Message(it, action = action)) }
                 SwipeAction.SONIC_PATH -> container.sonicPath.add(file.path)
@@ -458,16 +455,8 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                     ).joinToString(" · ")
                     _events.send(BrowserEvent.Message("$what added to favorites", action = action))
                 }
-                SwipeAction.REMOVE_FROM_LIST, SwipeAction.HIDE -> {
-                    val before = _state.value
-                    _state.update { it.copy(files = it.files - files.toSet(), folders = it.folders - folders.toSet()) }
-                    _events.send(
-                        BrowserEvent.Message(
-                            "${folders.size + files.size} removed from list",
-                            undo = { _state.update { it.copy(files = before.files, folders = before.folders) } },
-                            action = action,
-                        ),
-                    )
+                SwipeAction.HIDE -> {
+                    hide(folders, files)
                 }
                 SwipeAction.DELETE_FILE -> {
                     val deleted = withContext(Dispatchers.IO) { files.filter { !MStreamPaths.isRemote(it.path) && File(it.path).delete() } }
@@ -489,8 +478,28 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
 
     private fun tracks(n: Int) = "$n track${if (n == 1) "" else "s"}"
 
-    fun removeFromList(file: AudioFile) {
-        _state.update { it.copy(files = it.files - file) }
+    /**
+     * "Hide": the folders (with everything in them) and files leave every list until shown again
+     * (Settings → Library → Hidden); undo shows them at once.
+     */
+    fun hide(folders: List<File>, files: List<AudioFile>) {
+        if (folders.isEmpty() && files.isEmpty()) return
+        val before = _state.value
+        _state.update { it.copy(files = it.files - files.toSet(), folders = it.folders - folders.toSet()) }
+        viewModelScope.launch {
+            val hidden = container.hidden
+            val done = folders.flatMap { hidden.hideFolder(RemoteFolders.indexPath(it), it.name) } + hidden.hideTracks(files.map { it.path })
+            _events.send(
+                BrowserEvent.Message(
+                    if (done.size == 1) "Hidden" else "${done.size} hidden",
+                    undo = {
+                        viewModelScope.launch { hidden.show(done) }
+                        _state.update { it.copy(files = before.files, folders = before.folders) }
+                    },
+                    action = SwipeAction.HIDE,
+                ),
+            )
+        }
     }
 
     fun deleteFile(file: AudioFile) {

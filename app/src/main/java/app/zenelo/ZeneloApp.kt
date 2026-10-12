@@ -37,6 +37,7 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import java.io.File
@@ -95,10 +96,17 @@ class AppContainer(context: Context, upgradedInstall: Boolean) {
     val thumbnails = Thumbnails(context, db.tracks(), metadata)
     val loudness = LoudnessRepository(db)
     val network = app.zenelo.online.Network(context)
+    val hidden = app.zenelo.library.HiddenTracks(db, appScope)
+
+    /** Every favorite's path (tracks, folders, albums, artists): which rows can still be liked. */
+    val favoritePaths: kotlinx.coroutines.flow.StateFlow<Set<String>> = db.favorites().observeAll()
+        .map { list -> list.mapTo(HashSet()) { it.path } }
+        .stateIn(appScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, emptySet())
     val library = Library(
         db, settings.settings.map { it.artistSplitter }, settings.settings.map { it.librarySource }, appScope,
         online = network.online, isCached = { mstreamFiles.isCached(it) },
         scanScope = settings.settings.map { it.effectiveScanScope() },
+        hidden = hidden.current,
     )
     val queue = PlayQueue(db.tracks(), db.plays(), settings.settings, metadata, File(context.filesDir, "queue.txt"))
     val tagWriter = TagWriter(pendingWrites)
@@ -113,6 +121,9 @@ class AppContainer(context: Context, upgradedInstall: Boolean) {
     val sonicPath = MStreamSonicPath(db, settings, mstream, serverLinks, network.online, appScope)
 
     init {
+        fileBrowser.hidden = { hidden.current.value }
+        fileBrowser.copies = { serverLinks.current.copiesOf(it) }
+        autoDj.hidden = { hidden.current.value }
         // Likes of server tracks become ratings on the server (and unlikes clear them).
         @OptIn(kotlinx.coroutines.FlowPreview::class)
         appScope.launch { db.favorites().observeAll().debounce(300).collect { mstreamSync.onFavoritesChanged() } }

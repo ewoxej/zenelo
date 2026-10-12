@@ -1,5 +1,10 @@
 package app.zenelo.ui.browser
 
+import app.zenelo.data.settings.SortField
+import app.zenelo.library.LibrarySort
+import app.zenelo.ui.library.LetterRail
+import app.zenelo.ui.components.ScrollToTopOn
+import app.zenelo.ui.components.applicableSwipes
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -153,6 +158,7 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
         val (index, offset) = viewModel.scrollPosition(state.dir)
         LazyListState(index, offset)
     }
+    ScrollToTopOn(listState)
     DisposableEffect(state.dir) {
         val dir = state.dir
         onDispose { viewModel.saveScrollPosition(dir, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) }
@@ -172,6 +178,28 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
     val sort = settings.sorts[SortPage.BROWSER] ?: SortPage.BROWSER.default
     val folders = remember(state.folders, state.query, sort, state.folderModified, state.folderTracks) { state.visibleFolders(sort) }
     val files = remember(state.files, state.query, sort, state.tracks) { state.visibleFiles(sort) }
+    // A long list sorted by text gets the A–Z rail: over the files (else the folders, by name).
+    val rail = remember(folders, files, sort, state.tracks, state.query) {
+        if (state.query.isNotBlank()) return@remember null
+        val positions = LinkedHashMap<String, Int>()
+        val foldersEnd = if (folders.isEmpty()) 0 else 1 + folders.size
+        when {
+            // Files keep name order under the folder sort (number of tracks).
+            files.size > LETTER_RAIL_MIN && sort.sortBy in setOf(SortField.NAME, SortField.ARTIST, SortField.ALBUM, SortField.TRACKS) -> files.forEachIndexed { i, f ->
+                val t = state.tracks[f.path]
+                val letter = when (sort.sortBy) {
+                    SortField.ARTIST -> LibrarySort.letter(t?.artist ?: t?.albumArtist)
+                    SortField.ALBUM -> LibrarySort.letter(t?.album)
+                    else -> LibrarySort.letter(f.name)
+                }
+                positions.putIfAbsent(letter, foldersEnd + 1 + i)
+            }
+            folders.size > LETTER_RAIL_MIN && sort.sortBy == SortField.NAME -> folders.forEachIndexed { i, f -> positions.putIfAbsent(LibrarySort.letter(f.name), 1 + i) }
+            else -> return@remember null
+        }
+        // One letter for all: nothing to jump between.
+        positions.keys.toList().takeIf { it.size > 1 }?.let { it to positions }
+    }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -207,13 +235,13 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
                 TopBar(state, canGoUp, sortOpen, { sortOpen = !sortOpen }, viewModel)
             }
             Box(Modifier.weight(1f)) {
-            LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 80.dp)) {
+            LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(end = if (rail != null) 18.dp else 0.dp, bottom = 80.dp)) {
                 if (folders.isNotEmpty()) {
                     item(key = "h-folders") { SectionHeader("Folders · ${folders.size}") }
                     items(folders, key = { it.absolutePath }) { folder ->
                         // Same swipe actions as tracks, applied to everything in the folder.
                         SwipeableRow(
-                            options = swipeOptions,
+                            options = applicableSwipes(swipeOptions, settings.swipes, folder.path, folder = true, cloudInside = state.folderStorage[folder.path]?.cloud ?: 0),
                             onSwipe = { slot -> settings.swipes[slot]?.let { viewModel.onFolderSwipe(folder, it) } },
                             enabled = !selecting,
                         ) {
@@ -238,7 +266,7 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
                     }
                     items(files, key = { it.path }) { file ->
                         SwipeableRow(
-                            options = swipeOptions,
+                            options = applicableSwipes(swipeOptions, settings.swipes, file.path),
                             onSwipe = { slot -> settings.swipes[slot]?.let { viewModel.onSwipe(file, it) } },
                             enabled = !selecting,
                         ) {
@@ -262,6 +290,7 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
                     item(key = "empty") { SectionHeader(if (state.query.isNotBlank()) "Nothing found" else "Empty folder") }
                 }
             }
+            rail?.let { (letters, positions) -> LetterRail(letters, listState, positions, Modifier.align(Alignment.CenterEnd), bottomInset = 88.dp) }
             if (sortOpen) {
                 SortMenu(SortPage.BROWSER.fields, sort, onSelect = { viewModel.setSort(it); sortOpen = false }, onDismiss = { sortOpen = false })
             }
@@ -320,16 +349,16 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
         AlertDialog(
             onDismissRequest = { pendingConfirm = null },
             containerColor = ZeneloColors.Card,
-            title = { Text(if (confirm.deleteFile) "Delete file?" else "Remove from list?") },
+            title = { Text(if (confirm.deleteFile) "Delete file?" else "Hide?") },
             text = { Text(confirm.file.name) },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        if (confirm.deleteFile) viewModel.deleteFile(confirm.file) else viewModel.removeFromList(confirm.file)
+                        if (confirm.deleteFile) viewModel.deleteFile(confirm.file) else viewModel.hide(emptyList(), listOf(confirm.file))
                         pendingConfirm = null
                     },
                 ) {
-                    Text(if (confirm.deleteFile) "Delete" else "Remove", color = ZeneloColors.Danger)
+                    Text(if (confirm.deleteFile) "Delete" else "Hide", color = ZeneloColors.Danger)
                 }
             },
             dismissButton = { TextButton(onClick = { pendingConfirm = null }) { Text("Cancel") } },
@@ -524,3 +553,5 @@ private fun FolderMenu(folder: File, viewModel: BrowserViewModel) {
     }
 }
 
+/** Files (or folders) before the A–Z rail shows. */
+private const val LETTER_RAIL_MIN = 30

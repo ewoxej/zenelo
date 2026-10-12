@@ -1,5 +1,8 @@
 package app.zenelo.ui
 
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.filter
+import app.zenelo.ui.components.LocalScrollToTop
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -248,6 +251,7 @@ private fun MainContent(settings: ZeneloSettings) {
     }
 
     val sheet = remember { PlayerSheet(scope) }
+    val reselected = remember { kotlinx.coroutines.flow.MutableSharedFlow<Int>(extraBufferCapacity = 1) }
     val sheetVisible by remember { derivedStateOf { sheet.fraction < 1f } }
     // The mini player only shows while the sheet is (nearly) collapsed: it fades into Now Playing.
     // Kept (invisible) while a finger is down: removing it would cut off the drag it started.
@@ -311,8 +315,7 @@ private fun MainContent(settings: ZeneloSettings) {
                 isActive = isActive,
             )
             Section.FAVORITES -> FavoritesScreen(
-                currentMediaId = playerState.mediaId,
-                isPlaying = playerState.isPlaying,
+                libraryViewModel,
                 onOpenFolder = { openFolderInBrowser(File(it)) },
                 onOpenAlbum = libraryNav.onOpenAlbum,
                 onOpenArtist = libraryNav.onOpenArtist,
@@ -359,7 +362,11 @@ private fun MainContent(settings: ZeneloSettings) {
                             snapAnimationSpec = spring(stiffness = Spring.StiffnessMedium),
                         ),
                     ) { page ->
-                        pages.getOrNull(page)?.let { SectionPage(it, isActive = pager.currentPage == page, onBack = null) }
+                        // A tap on this page's tab while it's selected: its list scrolls to the top.
+                        val toTop = remember(page) { reselected.filter { it == page }.map { } }
+                        CompositionLocalProvider(LocalScrollToTop provides toTop) {
+                            pages.getOrNull(page)?.let { SectionPage(it, isActive = pager.currentPage == page, onBack = null) }
+                        }
                     }
                 }
                 composable(Routes.SECTION) { entry ->
@@ -487,8 +494,13 @@ private fun MainContent(settings: ZeneloSettings) {
         ) {
             if (settings.tabs.isNotEmpty()) {
                 BottomBar(settings.tabs, selected = pager.currentPage) { page ->
-                    nav.popBackStack(Routes.MAIN, inclusive = false)
-                    selectPage(page)
+                    // The selected tab again, on its own page: scroll to the top (a sub-page over it goes first).
+                    if (page == pager.currentPage && nav.currentDestination?.route == Routes.MAIN) {
+                        reselected.tryEmit(page)
+                    } else {
+                        nav.popBackStack(Routes.MAIN, inclusive = false)
+                        selectPage(page)
+                    }
                 }
             }
         }

@@ -10,6 +10,9 @@ import app.zenelo.library.LibraryIndexer
 import app.zenelo.player.PlayQueue
 import app.zenelo.work.LibraryWork
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -130,6 +133,52 @@ class MStreamDownloads(
             ?: Progress(db.tracks().get(paths.first(MStreamPaths::isRemote))?.title, count = queued)
         LibraryWork.downloadNow(context)
         return null
+    }
+
+    /** What [removeDownloads] did: files removed and the space freed. */
+    data class Removed(val files: Int, val bytes: Long)
+
+    /** The downloaded files among [paths] (a server track counts through its download): what [removeDownloads] would remove. */
+    fun downloadsOf(paths: List<String>): List<File> {
+        val linked = links.current
+        return paths.mapNotNull(linked::downloadOf).distinct().map(::File).filter { it.isFile }
+    }
+
+    /**
+     * Removes the downloaded copies of [paths] (never the user's own files matched to the server):
+     * the tracks become server tracks again. Favorites and playlist entries of a copy move to its
+     * server track first, so nothing is lost; the copies leave the index and the download queue.
+     */
+    suspend fun removeDownloads(paths: List<String>): Removed = withContext(Dispatchers.IO) {
+        val linked = links.current
+        val removed = ArrayList<String>()
+        var bytes = 0L
+        for (local in paths.mapNotNull(linked::downloadOf).distinct()) {
+            val server = linked.serverOf(local) ?: continue
+            db.favorites().repath(local, server)
+            db.favorites().delete(local)
+            db.playlists().repath(local, server)
+            val file = File(local)
+            val size = file.length()
+            if (file.exists() && !file.delete()) continue
+            bytes += size
+            removed.add(local)
+            db.downloads().remove(server)
+            pruneEmptyDirs(file.parentFile)
+        }
+        if (removed.isNotEmpty()) {
+            db.tracks().delete(removed)
+            links.forgetDeleted(removed)
+            android.util.Log.i("Zenelo", "removed ${removed.size} downloads, ${bytes / 1_000_000} MB")
+        }
+        Removed(removed.size, bytes)
+    }
+
+    /** Empty folders left in the download folder (the server's layout), up to the folder itself. */
+    private fun pruneEmptyDirs(dir: File?) {
+        var d = dir
+        val root = files.downloadDir
+        while (d != null && d != root && d.path.startsWith(root.path + "/") && d.list()?.isEmpty() == true && d.delete()) d = d.parentFile
     }
 
     /**

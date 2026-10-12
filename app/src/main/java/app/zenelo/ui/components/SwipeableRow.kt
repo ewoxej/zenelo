@@ -22,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -167,5 +168,60 @@ private fun SwipeBackground(
             Spacer(Modifier.width(8.dp))
             Text(option.label, style = MaterialTheme.typography.labelMedium, color = ZeneloColors.TextPrimary)
         }
+    }
+}
+
+/**
+ * [options] without the actions that don't apply to the row's track ([path]) or folder ([folder]):
+ * they count as Nothing there (see [app.zenelo.data.settings.SwipeRules]) — a liked track isn't
+ * offered "Add to favorites", a track on the device "Download", a server track "Delete file".
+ */
+@Composable
+fun applicableSwipes(
+    options: Map<SwipeSlot, SwipeOption>,
+    swipes: Map<SwipeSlot, SwipeAction>,
+    path: String?,
+    folder: Boolean = false,
+    cloudInside: Int = 0,
+): Map<SwipeSlot, SwipeOption> {
+    val target = rememberSwipeTarget(path, folder, cloudInside)
+    val available by appContainer().sonicPath.available.collectAsStateWithLifecycle()
+    return remember(options, swipes, target, available) {
+        options.filterKeys { slot -> swipes[slot]?.let { app.zenelo.data.settings.SwipeRules.applies(it, target, available) } == true }
+    }
+}
+
+/** The queue's left swipes, [applicableSwipes]-style. */
+@Composable
+fun applicableQueueSwipes(
+    options: Map<SwipeSlot, SwipeOption>,
+    swipes: Map<app.zenelo.data.settings.QueueSwipeSlot, app.zenelo.data.settings.QueueSwipeAction>,
+    path: String?,
+): Map<SwipeSlot, SwipeOption> {
+    val target = rememberSwipeTarget(path, folder = false, cloudInside = 0)
+    val available by appContainer().sonicPath.available.collectAsStateWithLifecycle()
+    return remember(options, swipes, target, available) {
+        options.filterKeys { slot ->
+            swipes.entries.firstOrNull { it.key.slot == slot }?.value?.let { app.zenelo.data.settings.SwipeRules.applies(it, target, available) } == true
+        }
+    }
+}
+
+@Composable
+private fun rememberSwipeTarget(path: String?, folder: Boolean, cloudInside: Int): app.zenelo.data.settings.SwipeRules.Target {
+    val container = appContainer()
+    val favorites by container.favoritePaths.collectAsStateWithLifecycle()
+    val links by container.serverLinks.links.collectAsStateWithLifecycle()
+    return remember(path, folder, cloudInside, favorites, links) {
+        val remote = app.zenelo.mstream.MStreamPaths.isRemote(path)
+        app.zenelo.data.settings.SwipeRules.Target(
+            remote = remote,
+            // A song liked under either of its paths (server track / local copy) is liked.
+            favorite = path != null && (path in favorites || links.copiesOf(path).any { it in favorites }),
+            hasLocalCopy = remote && links.localOf(path) != null,
+            onServer = path != null && links.serverOf(path) != null,
+            folder = folder,
+            cloudInside = cloudInside,
+        )
     }
 }

@@ -24,8 +24,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PlayOutboxEntity::class,
         DownloadEntity::class,
         ServerLinkEntity::class,
+        HiddenEntity::class,
     ],
-    version = 13,
+    version = 14,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
@@ -40,6 +41,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AutoMigration(from = 10, to = 11, spec = ZeneloDatabase.ReadGenres::class),
         AutoMigration(from = 11, to = 12),
         AutoMigration(from = 12, to = 13),
+        AutoMigration(from = 13, to = 14),
     ],
 )
 abstract class ZeneloDatabase : RoomDatabase() {
@@ -55,6 +57,7 @@ abstract class ZeneloDatabase : RoomDatabase() {
     abstract fun mstreamOutbox(): MStreamOutboxDao
     abstract fun downloads(): DownloadDao
     abstract fun serverLinks(): ServerLinkDao
+    abstract fun hidden(): HiddenDao
 
     /**
      * 5 adds ReplayGain peaks: files with ReplayGain tags get a stale stamp so the next scan reads

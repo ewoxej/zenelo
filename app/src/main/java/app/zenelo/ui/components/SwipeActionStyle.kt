@@ -26,7 +26,6 @@ val SwipeAction.icon: ImageVector
         SwipeAction.PLAY_NEXT -> Icons.AutoMirrored.Rounded.PlaylistPlay
         SwipeAction.FAVORITE -> Icons.Outlined.FavoriteBorder
         SwipeAction.ADD_TO_PLAYLIST -> Icons.AutoMirrored.Rounded.PlaylistAdd
-        SwipeAction.REMOVE_FROM_LIST -> Icons.Outlined.RemoveCircleOutline
         SwipeAction.HIDE -> Icons.Outlined.VisibilityOff
         SwipeAction.DELETE_FILE -> Icons.Outlined.DeleteOutline
         SwipeAction.DOWNLOAD -> Icons.Outlined.Download
@@ -39,7 +38,7 @@ val SwipeAction.accent: Color
         SwipeAction.ADD_TO_QUEUE, SwipeAction.PLAY_NEXT, SwipeAction.ADD_TO_PLAYLIST -> ZeneloColors.Mustard
         SwipeAction.FAVORITE -> ZeneloColors.Info
         SwipeAction.DOWNLOAD, SwipeAction.SONIC_PATH -> ZeneloColors.Celadon
-        SwipeAction.REMOVE_FROM_LIST, SwipeAction.DELETE_FILE -> ZeneloColors.Danger
+        SwipeAction.DELETE_FILE -> ZeneloColors.Danger
     }
 
 val QueueSwipeAction.icon: ImageVector

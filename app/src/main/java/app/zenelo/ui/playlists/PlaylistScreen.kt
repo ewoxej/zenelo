@@ -1,5 +1,6 @@
 package app.zenelo.ui.playlists
 
+import app.zenelo.ui.components.applicableSwipes
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
@@ -68,8 +69,8 @@ private fun PlaylistTrack.toAudioFile(): AudioFile {
 }
 
 /**
- * One playlist: play it, drag the handles to reorder, remove tracks ("Remove from list" swipe,
- * or select several), rename or delete it from ⋮.
+ * One playlist: play it, drag the handles to reorder, remove tracks (a track's ⋮ "Remove from
+ * playlist", or select several), rename or delete it from ⋮. Hidden tracks stay in it, unseen.
  */
 @Composable
 fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
@@ -96,7 +97,10 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
     val reorder = rememberReorderableLazyListState(listState) { from, to ->
         itemsState.value = itemsState.value.toMutableList().apply { add(to.index, removeAt(from.index)) }
     }
-    val visible = if (search.query.isBlank()) items else items.filter { search.matches(it.name(), it.artist, it.album) }
+    // Hidden tracks ("Hide") stay in the playlist but don't show or play until shown again.
+    val hidden by appContainer().hidden.current.collectAsStateWithLifecycle()
+    val shown = remember(items, hidden, links) { if (hidden.isEmpty) items else items.filterNot { hidden.hides(it.path, links.copiesOf(it.path)) } }
+    val visible = if (search.query.isBlank()) shown else shown.filter { search.matches(it.name(), it.artist, it.album) }
     val files = remember(visible) { visible.map(PlaylistTrack::toAudioFile) }
     val chosen = { visible.filter { it.position in selection.keys } }
     fun save(list: List<PlaylistTrack>) = scope.launch { dao.replace(id, list.map(PlaylistTrack::path)) }
@@ -129,7 +133,7 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
 
     LibraryScaffold(
         title = playlist?.name ?: "Playlist",
-        count = tracks?.size,
+        count = tracks?.let { shown.size },
         caption = when {
             total >= 60_000 -> formatTotal(total).uppercase() + serverNote
             total > 0 -> formatDuration(total) + serverNote
@@ -188,15 +192,9 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
                 ReorderableItem(reorder, key = track.position) { dragging ->
                     val file = remember(track) { track.toAudioFile() }
                     val title = track.name()
-                    val act = { action: SwipeAction ->
-                        // Here "remove from list" takes the track out of the playlist.
-                        if (action == SwipeAction.REMOVE_FROM_LIST || action == SwipeAction.HIDE) {
-                            remove(setOf(track.position))
-                        }
-                        else vm.onTrack(file, title, track.artist, action)
-                    }
+                    val act = { action: SwipeAction -> vm.onTrack(file, title, track.artist, action) }
                     SwipeableRow(
-                        options = swipeOptions,
+                        options = applicableSwipes(swipeOptions, settings.swipes, track.path),
                         onSwipe = { slot -> settings.swipes[slot]?.let(act) },
                         enabled = !selection.active && !dragging,
                     ) {
@@ -222,6 +220,8 @@ fun PlaylistScreen(vm: LibraryViewModel, id: Long, onBack: () -> Unit) {
                                     onEditTags = { vm.openDialog(TrackDialog.EditTags(track.path, it)) },
                                     local = !MStreamPaths.isRemote(track.path),
                                     path = track.path,
+                                    onRemove = { remove(setOf(track.position)) },
+                                    removeLabel = "Remove from playlist",
                                 )
                                 // Reordering only makes sense over the whole list.
                                 if (search.query.isBlank()) {

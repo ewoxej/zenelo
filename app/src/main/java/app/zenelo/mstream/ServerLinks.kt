@@ -30,6 +30,7 @@ class ServerLinks(private val db: ZeneloDatabase, private val scope: CoroutineSc
     class Links(rows: List<ServerLinkEntity>) {
         private val toServer: Map<String, String> = rows.associate { it.localPath to it.serverPath }
         private val toLocal: Map<String, String> = rows.associate { it.serverPath to it.localPath }
+        private val downloads: Set<String> = rows.filter { it.download }.mapTo(HashSet()) { it.localPath }
 
         /** The server's track for [path]: itself for a server track, its link for a local file. */
         fun serverOf(path: String?): String? = when {
@@ -49,6 +50,12 @@ class ServerLinks(private val db: ZeneloDatabase, private val scope: CoroutineSc
 
         /** The same track under its other path: the server track of a local copy, or the local copy of a server track. */
         fun copiesOf(path: String?): List<String> = listOfNotNull(path?.let(toServer::get), path?.let(toLocal::get))
+
+        /**
+         * The downloaded file of [path] (itself, or a server track's copy) — "Download" saved it, so
+         * it may be removed again; the user's own files matched to the server are never offered.
+         */
+        fun downloadOf(path: String?): String? = (if (MStreamPaths.isRemote(path)) localOf(path) else path)?.takeIf { it in downloads }
 
         /** Server track → local copy. */
         val localCopies: Map<String, String> get() = toLocal

@@ -12,6 +12,10 @@ abstract class FavoriteDao {
     @Query("SELECT * FROM favorites ORDER BY addedAt DESC")
     abstract fun observeAll(): Flow<List<FavoriteEntity>>
 
+    /** A favorite under [from] goes under [to] (kept as it is when [to] is a favorite already). */
+    @Query("UPDATE OR IGNORE favorites SET path = :to WHERE path = :from")
+    abstract suspend fun repath(from: String, to: String)
+
     @Query("SELECT EXISTS(SELECT 1 FROM favorites WHERE path = :path)")
     abstract fun observeIsFavorite(path: String): Flow<Boolean>
 
@@ -60,6 +64,10 @@ abstract class FavoriteDao {
 
 @Dao
 abstract class PlaylistDao {
+    /** Entries of [from] point at [to] instead (a removed download → its server track). */
+    @Query("UPDATE playlist_entries SET path = :to WHERE path = :from")
+    abstract suspend fun repath(from: String, to: String)
+
     @Query(
         """
         SELECT p.id, p.name, p.createdAt,
@@ -519,4 +527,19 @@ interface DownloadDao {
 
     @Query("SELECT COUNT(*) FROM downloads WHERE attempts >= :maxAttempts")
     fun observeFailed(maxAttempts: Int): Flow<Int>
+}
+
+@Dao
+interface HiddenDao {
+    @Query("SELECT * FROM hidden ORDER BY hiddenAt DESC")
+    fun observeAll(): Flow<List<HiddenEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(rows: List<HiddenEntity>)
+
+    @Query("DELETE FROM hidden WHERE path IN (:paths)")
+    suspend fun delete(paths: List<String>)
+
+    @Query("DELETE FROM hidden")
+    suspend fun deleteAll()
 }

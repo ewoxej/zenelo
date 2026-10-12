@@ -64,4 +64,24 @@ class LibrarySortTest {
         assertEquals("#", LibrarySort.letter("!L!VE!"))
         assertEquals("#", LibrarySort.letter(null))
     }
+
+    @Test
+    fun letteredListsHaveAHeaderPerLetter() {
+        val names = listOf("Abba", "Air", "Björk", "Blur", "Cher")
+        val items = LibrarySort.lettered(names) { LibrarySort.letter(it) }
+        assertEquals(
+            listOf("A", "Abba", "Air", "B", "Björk", "Blur", "C", "Cher"),
+            items.map { if (it is Lettered.Header) it.letter else (it as Lettered.Row).item },
+        )
+        // No letters (a non-text sort): just the rows.
+        assertEquals(names.size, LibrarySort.lettered(names) { null }.size)
+    }
+
+    @Test
+    fun albumHeadersFollowTheSort() {
+        val a = album("Kid A", 10, 0, artist = "Radiohead")
+        assertEquals("K", LibrarySort.albumHeader(a, SortOrder(SortField.NAME)))
+        assertEquals("R", LibrarySort.albumHeader(a, SortOrder(SortField.ARTIST)))
+        assertNull(LibrarySort.albumHeader(a, SortOrder(SortField.DATE_ADDED)))
+    }
 }

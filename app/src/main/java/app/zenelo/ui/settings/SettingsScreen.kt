@@ -1,11 +1,13 @@
 package app.zenelo.ui.settings
 
+import app.zenelo.ui.components.rememberTopScrollState
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.ui.text.style.TextAlign
@@ -131,11 +133,13 @@ enum class SettingsPage(val title: String, val summary: String, val icon: ImageV
     /** Sub-pages of mStream's, not on the main list. */
     AUTO_DJ("Auto DJ", "", Icons.Outlined.Cloud, listed = false),
     DOWNLOADS("Downloads", "", Icons.Outlined.Cloud, listed = false),
+    /** Library's sub-page: hidden tracks and folders. */
+    HIDDEN("Hidden", "", Icons.Outlined.VisibilityOff, listed = false),
 }
 
 @Composable
 fun SettingsScreen(onOpenPage: (SettingsPage) -> Unit, onBack: (() -> Unit)? = null) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberTopScrollState())) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (onBack != null) BackButton(onBack)
             ScreenTitle("Settings", Modifier.padding(start = if (onBack != null) 0.dp else 20.dp, top = 12.dp, bottom = 12.dp))
@@ -168,7 +172,8 @@ fun SettingsPageScreen(
         when (page) {
             SettingsPage.PLAYBACK -> PlaybackSettings()
             SettingsPage.INTERFACE -> InterfaceSettings(onOpenSwipeSettings, onCustomizeHome, onCustomizeTabs)
-            SettingsPage.LIBRARY -> LibrarySettings(onMessage)
+            SettingsPage.LIBRARY -> LibrarySettings(onMessage, onOpenPage)
+            SettingsPage.HIDDEN -> HiddenPage()
             SettingsPage.COVERS -> CoversSettings()
             SettingsPage.BACKUP -> BackupRows(onMessage)
             SettingsPage.MSTREAM -> MStreamSettings(onMessage, onOpenPage)
@@ -348,11 +353,21 @@ private fun CoversSettings() {
 }
 
 @Composable
-private fun LibrarySettings(onMessage: (String) -> Unit) {
+private fun LibrarySettings(onMessage: (String) -> Unit, onOpenPage: (SettingsPage) -> Unit) {
     val repo = appContainer().settings
     val settings = rememberSettings()
     val scope = rememberCoroutineScope()
     LibraryStatus()
+    val container = appContainer()
+    val hiddenFlow = remember { container.hidden.rows }
+    val hidden by hiddenFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    ListRow(
+        title = "Hidden",
+        subtitle = if (hidden.isEmpty()) "Nothing · \"Hide\" on a track or folder leaves it out everywhere" else hiddenSummary(hidden),
+        onClick = { onOpenPage(SettingsPage.HIDDEN) },
+        leading = { IconTile(Icons.Outlined.VisibilityOff, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+        trailing = { Icon(Icons.Rounded.ChevronRight, null, tint = ZeneloColors.TextMuted, modifier = Modifier.padding(12.dp).size(20.dp)) },
+    )
     ScanFolders(settings.scanScope, onMessage)
     var editingArtists by remember { mutableStateOf(false) }
     ListRow(
@@ -377,6 +392,50 @@ private fun LibrarySettings(onMessage: (String) -> Unit) {
         leading = { IconTile(Icons.Outlined.Home, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
         trailing = { Icon(Icons.Outlined.Info, "How to set it", tint = ZeneloColors.TextMuted, modifier = Modifier.padding(12.dp).size(18.dp)) },
     )
+}
+
+private fun hiddenSummary(rows: List<app.zenelo.data.db.HiddenEntity>): String {
+    val folders = rows.count { it.folder }
+    val tracks = rows.size - folders
+    return listOfNotNull(
+        tracks.takeIf { it > 0 }?.let { "$it track${if (it == 1) "" else "s"}" },
+        folders.takeIf { it > 0 }?.let { "$it folder${if (it == 1) "" else "s"}" },
+    ).joinToString(" · ")
+}
+
+/** What "Hide" left out, newest first: "Show" brings one back everywhere, "Show all" all of them. */
+@Composable
+private fun HiddenPage() {
+    val hidden = appContainer().hidden
+    val rowsFlow = remember { hidden.rows }
+    val rows by rowsFlow.collectAsStateWithLifecycle(initialValue = null)
+    val scope = rememberCoroutineScope()
+    val list = rows ?: return
+    if (list.isEmpty()) {
+        Text(
+            "Nothing hidden. \"Hide\" (a swipe, a track's or folder's ⋮ menu, a selection) leaves a track or folder out of the library, folders, playlists and Favorites; it comes back from here.",
+            style = MaterialTheme.typography.bodySmall,
+            color = ZeneloColors.TextMuted,
+            modifier = Modifier.padding(20.dp),
+        )
+        return
+    }
+    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(hiddenSummary(list), style = MaterialTheme.typography.bodySmall, color = ZeneloColors.TextMuted, modifier = Modifier.weight(1f))
+        TextButton(onClick = { scope.launch { hidden.showAll() } }) { Text("Show all") }
+    }
+    list.forEach { row ->
+        ListRow(
+            title = row.title,
+            // A folder: where it is (its parent, as the browser shows it).
+            subtitle = if (row.folder) "Folder in ${app.zenelo.mstream.RemoteFolders.folderPath(row.path.substringBeforeLast('/'))}" else row.subtitle ?: row.path.substringAfterLast('/'),
+            leading = {
+                if (row.folder) IconTile(Icons.Outlined.Folder, ZeneloColors.Mustard, ZeneloColors.MustardTint)
+                else app.zenelo.ui.components.TrackThumb(row.path, false)
+            },
+            trailing = { TextButton(onClick = { scope.launch { hidden.show(listOf(row.path)) } }) { Text("Show") } },
+        )
+    }
 }
 
 /** Name, version, author (the GitHub link opens the browser) and the font's licence. */
@@ -695,7 +754,7 @@ fun SwipeSettingsScreen(onBack: () -> Unit) {
             )
         }
         Text(
-            "Actions: add to queue, play next, favorite, add to playlist, remove from list, hide, delete file.",
+            "Actions: add to queue, play next, favorite, add to playlist, download, Sonic path, hide, delete file.",
             style = MaterialTheme.typography.bodySmall,
             color = ZeneloColors.TextMuted,
             modifier = Modifier.padding(horizontal = 20.dp),

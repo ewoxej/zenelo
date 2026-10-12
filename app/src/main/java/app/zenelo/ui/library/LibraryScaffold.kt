@@ -150,6 +150,8 @@ fun LibraryScaffold(
     headerActions: @Composable () -> Unit = {},
     onSelectionRemove: (() -> Unit)? = null,
     removeLabel: String = "Remove",
+    /** The selection bar's heart (off in Favorites). */
+    selectionFavorite: Boolean = true,
     /** The title opens the library source menu (library pages, while a server is connected). */
     sourceMenu: Boolean = false,
     content: @Composable BoxScope.() -> Unit,
@@ -180,6 +182,7 @@ fun LibraryScaffold(
                 },
                 onRemove = onSelectionRemove?.let { remove -> { remove(); selection.clear() } },
                 removeLabel = removeLabel,
+                favorite = selectionFavorite,
             )
         } else {
             LibraryHeader(

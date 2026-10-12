@@ -1,5 +1,6 @@
 package app.zenelo.ui.home
 
+import app.zenelo.ui.components.rememberTopListState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -106,7 +107,7 @@ fun HomeScreen(vm: LibraryViewModel, nav: HomeNav) {
     val shortcuts = settings.home.filter { it.mode == HomeMode.ICON }
     val cards = settings.home.filter { it.mode == HomeMode.GRID || it.mode == HomeMode.LIST }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), state = rememberTopListState(), contentPadding = PaddingValues(bottom = 24.dp)) {
         item(key = "header") {
             Row(Modifier.fillMaxWidth().height(64.dp).padding(start = 18.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 // The title picks the library source (All / Local / mStream) while a server is connected.
@@ -436,10 +437,12 @@ private fun FavoritesCard(vm: LibraryViewModel, grid: Boolean, nav: HomeNav) {
     val all by flow.collectAsStateWithLifecycle(initialValue = null)
     val playable = rememberPlayableNow()
     val links by container.serverLinks.links.collectAsStateWithLifecycle()
-    val favorites = remember(all, playable, links) {
+    val hidden by container.hidden.current.collectAsStateWithLifecycle()
+    val favorites = remember(all, playable, links, hidden) {
         all?.map { if (it.kind == FavoriteKind.TRACK) it.copy(path = links.canonical(it.path)) else it }
             ?.distinctBy { it.path }
             ?.filter { it.kind != FavoriteKind.TRACK || playable(it.path) }
+            ?.filterNot { it.kind == FavoriteKind.TRACK && hidden.hides(it.path, links.copiesOf(it.path)) }
     }
     val list = favorites.orEmpty()
     val tracks = remember(list) { list.filter { it.kind == FavoriteKind.TRACK }.map { AudioFile.forPath(it.path) } }

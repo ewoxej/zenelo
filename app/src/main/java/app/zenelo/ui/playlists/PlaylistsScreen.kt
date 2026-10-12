@@ -1,5 +1,6 @@
 package app.zenelo.ui.playlists
 
+import app.zenelo.ui.components.rememberTopListState
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.outlined.FileOpen
@@ -87,7 +88,7 @@ fun PlaylistsScreen(onOpenPlaylist: (Long) -> Unit, onMessage: (String) -> Unit,
             }
             IconButton(onClick = { creating = true }) { Icon(Icons.Rounded.Add, "New playlist", tint = ZeneloColors.Mustard) }
         }
-        LazyColumn(Modifier.weight(1f)) {
+        LazyColumn(Modifier.weight(1f), state = rememberTopListState()) {
             items(playlists, key = { it.id }) { playlist ->
                 // Offline with nothing playable in it: faded.
                 Box(Modifier.alpha(if (playlist.id in unplayable) UNPLAYABLE_ALPHA else 1f)) {

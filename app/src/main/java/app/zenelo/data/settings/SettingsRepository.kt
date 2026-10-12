@@ -32,7 +32,7 @@ enum class SwipeAction(val label: String) {
     DOWNLOAD("Download"),
     /** mStream: the track becomes the Sonic Path's start (its end once there's a start). */
     SONIC_PATH("Sonic path"),
-    REMOVE_FROM_LIST("Remove from list"),
+    /** Left out of every list (library, folders, playlists, Favorites…) until shown again in Settings. */
     HIDE("Hide"),
     DELETE_FILE("Delete file"),
 }
@@ -41,7 +41,7 @@ enum class SwipeSlot(val label: String, val default: SwipeAction) {
     RIGHT_SHORT("SWIPE RIGHT · SHORT", SwipeAction.ADD_TO_QUEUE),
     RIGHT_LONG("SWIPE RIGHT · LONG", SwipeAction.PLAY_NEXT),
     LEFT_SHORT("SWIPE LEFT · SHORT", SwipeAction.FAVORITE),
-    LEFT_LONG("SWIPE LEFT · LONG", SwipeAction.REMOVE_FROM_LIST),
+    LEFT_LONG("SWIPE LEFT · LONG", SwipeAction.HIDE),
 }
 
 /** Left swipes on queue rows (right swipes belong to the lyrics / cover / queue pager). */
@@ -385,7 +385,8 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
             nomedia = this[SCAN_NOMEDIA] ?: true,
         ),
         swipes = SwipeSlot.entries.associateWith { slot ->
-            this[slotKey(slot)]?.let { enumOrNull<SwipeAction>(it) } ?: slot.default
+            // "Remove from list" is gone: Hide took its place.
+            this[slotKey(slot)]?.let { if (it == "REMOVE_FROM_LIST") SwipeAction.HIDE else enumOrNull<SwipeAction>(it) } ?: slot.default
         },
         confirmRemove = this[CONFIRM_REMOVE] ?: false,
         normalization = this[NORMALIZATION]?.let { enumOrNull<NormalizationMode>(it) } ?: NormalizationMode.TRACK,

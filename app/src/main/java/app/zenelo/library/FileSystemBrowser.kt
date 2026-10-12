@@ -70,6 +70,14 @@ class FileSystemBrowser(private val context: Context, private val tracks: TrackD
 
     private val cache = LruCache<String, DirListing>(CACHE_SIZE)
 
+    /** Hidden tracks / folders ("Hide"): left out of listings (filtered on the way out, so showing them needs no rescan). */
+    @Volatile
+    var hidden: () -> Hidden = { Hidden() }
+
+    /** A track's other path (server track ↔ local copy), so a track hidden under one is hidden under both. */
+    @Volatile
+    var copies: (String) -> List<String> = { emptyList() }
+
     /** Internal storage and SD card(s), in system order; then the mStream server when [server] (logged in). */
     fun roots(server: Boolean = false): List<StorageRoot> {
         val sm = context.getSystemService(StorageManager::class.java)
@@ -81,14 +89,28 @@ class FileSystemBrowser(private val context: Context, private val tracks: TrackD
     }
 
     /** Last known listing, possibly stale. Cheap, safe on the main thread. */
-    fun cached(dir: File): DirListing? = cache.get(dir.absolutePath)
+    fun cached(dir: File): DirListing? = cache.get(dir.absolutePath)?.let(::visible)
 
     /** Fresh listing: served from cache when the directory is unchanged, rescanned otherwise. */
     suspend fun list(dir: File): DirListing = withContext(Dispatchers.IO) {
-        if (RemoteFolders.isRemote(dir)) return@withContext remote(dir).also { cache.put(dir.absolutePath, it) }
-        val stamp = dir.lastModified()
-        cache.get(dir.absolutePath)?.takeIf { it.stamp == stamp }
-            ?: scan(dir, stamp).also { cache.put(dir.absolutePath, it) }
+        val listing = if (RemoteFolders.isRemote(dir)) {
+            remote(dir).also { cache.put(dir.absolutePath, it) }
+        } else {
+            val stamp = dir.lastModified()
+            cache.get(dir.absolutePath)?.takeIf { it.stamp == stamp }
+                ?: scan(dir, stamp).also { cache.put(dir.absolutePath, it) }
+        }
+        visible(listing)
+    }
+
+    /** [listing] without what "Hide" left out (the cache keeps everything: showing again needs no rescan). */
+    private fun visible(listing: DirListing): DirListing {
+        val h = hidden()
+        return if (h.isEmpty) listing
+        else listing.copy(
+            folders = listing.folders.filterNot { h.hidesFolder(RemoteFolders.indexPath(it)) },
+            files = listing.files.filterNot { h.hides(it.path, copies(it.path)) },
+        )
     }
 
     /** Every audio file under [dir], folder by folder in name order (files before subfolders). */

@@ -38,6 +38,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
+import androidx.compose.material.icons.outlined.FileDownloadOff
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -274,11 +275,11 @@ fun ViewButton(view: LibraryView, onClick: () -> Unit, modifier: Modifier = Modi
 
 /** "TODAY", "A": group header inside a library list. */
 @Composable
-fun GroupHeader(text: String, modifier: Modifier = Modifier) {
+fun GroupHeader(text: String, modifier: Modifier = Modifier, inset: androidx.compose.ui.unit.Dp = 16.dp) {
     Text(
         text.uppercase(),
         style = TextStyle(fontFamily = PlexMono, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.26.sp, color = ZeneloColors.TextMuted),
-        modifier = modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
+        modifier = modifier.padding(start = inset, top = 12.dp, bottom = 4.dp),
     )
 }
 
@@ -428,9 +429,11 @@ fun storageOf(paths: List<String>, links: app.zenelo.mstream.ServerLinks.Links):
     }
 
 /**
- * A page's download button (album, artist, genre, playlist, favorites): shown while some of its
- * tracks are on the server only (and the server is reachable). [kept]: a playlist / favorites kept
- * downloaded — then, all on the device, a "downloaded" button that stops downloading new tracks.
+ * A page's download button (album, artist, genre, playlist, favorites): "Download" while some of
+ * its tracks are on the server only (and the server is reachable); once none is, "Remove
+ * downloads" for the files "Download" saved (confirmed; they become server tracks again). [kept]:
+ * a playlist / favorites kept downloaded — removing stops that first ([onStopKeeping]), and the
+ * dialog can also just stop it.
  */
 @Composable
 fun DownloadAction(paths: List<String>, onDownload: () -> Unit, kept: Boolean = false, onStopKeeping: (() -> Unit)? = null) {
@@ -438,13 +441,63 @@ fun DownloadAction(paths: List<String>, onDownload: () -> Unit, kept: Boolean = 
     val available by container.sonicPath.available.collectAsStateWithLifecycle()
     val links by container.serverLinks.links.collectAsStateWithLifecycle()
     val storage = remember(paths, links) { storageOf(paths, links) }
+    val downloads = remember(paths, links) { paths.mapNotNull(links::downloadOf).distinct().size }
+    var confirming by remember { androidx.compose.runtime.mutableStateOf(false) }
     when {
         storage.cloud > 0 && available -> IconButton(onClick = onDownload) {
             Icon(Icons.Outlined.Download, "Download ${storage.cloud} track${if (storage.cloud == 1) "" else "s"}", tint = ZeneloColors.Celadon, modifier = Modifier.size(22.dp))
         }
+        downloads > 0 -> IconButton(onClick = { confirming = true }) {
+            Icon(Icons.Outlined.FileDownloadOff, "Remove downloads", tint = ZeneloColors.Celadon, modifier = Modifier.size(22.dp))
+        }
         kept && onStopKeeping != null -> IconButton(onClick = onStopKeeping) {
             Icon(Icons.Outlined.DownloadDone, "Downloaded · stop downloading new tracks", tint = ZeneloColors.Celadon, modifier = Modifier.size(22.dp))
         }
+    }
+    if (confirming) {
+        val bytes by androidx.compose.runtime.produceState<Long?>(null, paths) {
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { container.mstreamDownloads.downloadsOf(paths).sumOf { it.length() } }
+        }
+        val what = "$downloads downloaded track${if (downloads == 1) "" else "s"}" + (bytes?.let { " · ${formatSize(it)}" } ?: "")
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirming = false },
+            containerColor = ZeneloColors.Card,
+            title = { Text("Remove downloads?") },
+            text = {
+                Column {
+                    val one = downloads == 1
+                    Text(
+                        "$what ${if (one) "leaves" else "leave"} the device. ${if (one) "It stays" else "They stay"} on the server and in this list, streamed when played." +
+                            // Linked files the user had before (matched to the server) aren't downloads.
+                            (if (storage.downloaded > downloads) " Your own files stay." else "") +
+                            if (kept) " New tracks won't download anymore." else "",
+                    )
+                    if (kept && onStopKeeping != null) {
+                        androidx.compose.material3.TextButton(
+                            onClick = {
+                                confirming = false
+                                onStopKeeping()
+                            },
+                            modifier = Modifier.padding(top = 8.dp),
+                        ) { Text("Only stop downloading new tracks") }
+                    }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    confirming = false
+                    // Stop keeping first, or the removed tracks would be downloaded again.
+                    if (kept) onStopKeeping?.invoke()
+                    container.appScope.launch {
+                        val r = container.mstreamDownloads.removeDownloads(paths)
+                        container.playbackMessages.emit(
+                            if (r.files == 0) "Nothing removed" else "Removed ${r.files} download${if (r.files == 1) "" else "s"} · ${formatSize(r.bytes)} freed",
+                        )
+                    }
+                }) { Text("Remove", color = ZeneloColors.Danger) }
+            },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { confirming = false }) { Text("Cancel") } },
+        )
     }
 }
 

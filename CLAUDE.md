@@ -21,6 +21,10 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
 - Manual DI via `AppContainer` in `ZeneloApp`. Settings in DataStore, favorites/playlists/loudness in Room.
 - Swipes: `SwipeableRow` with short/long threshold per direction → four configurable `SwipeSlot`s.
   A direction without options isn't captured (queue rows: left only, right goes to the pager).
+  Per row, an action that doesn't apply counts as Nothing (`SwipeRules`, unit-tested;
+  `applicableSwipes` / `applicableQueueSwipes`): no heart for a favorite (Favorites itself
+  included), no Download for a track on the device or offline, no Delete for server tracks, no
+  Sonic path off the server; folders take Download only with cloud tracks inside.
   In pointer code read `positionChange()` before `consume()` — a consumed change reports zero.
 - Queue UI edits entries by stable id (index into the queue's paths), not by position.
 - Loudness: `LoudnessAnalyzer` (BS.1770, unit-tested against the reference sine; matches ffmpeg
@@ -91,6 +95,9 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   pages; other sections open as `section/{name}` routes with a back arrow. Settings must stay
   reachable (`Navigation.settingsReachable`): `SettingsRepository.setNavigation` refuses otherwise.
   The last tab is remembered (`lastTab`); MainScaffold waits for settings before composing.
+  Tapping the selected tab again on its page scrolls it to the top: the root gives each tab page its
+  own `LocalScrollToTop` events; pages use `rememberTopListState` / `…GridState` / `…ScrollState`
+  or `ScrollToTopOn` (the browser's per-folder state). Over a sub-page, the tap first goes back.
   First start of this version (DataStore migration `FirstNavigation`, while no `tabs` is stored):
   if the database already existed (an upgrade), the old fixed bar `Navigation.LEGACY_TABS`
   (Folders, Favorites, Playlists, Settings) is written, else `DEFAULT_TABS`.
@@ -98,7 +105,13 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   artist, split into names by `ArtistSplitter` — separators + never-split names are settings, unit-tested —
   and keyed by `artistKey` (lowercase); grouped in Kotlin, not SQL; all tracks, plays) through the activity-scoped `LibraryViewModel`; sorting in
   `LibrarySort` (unit-tested). Per-page sort (`SortPage`) and grid/list view live in settings; the
-  browser uses the same sort menu. No release-date sort: tags don't carry a year in the index.
+  browser uses the same sort menu. Sorted by text (name / artist / album), Albums, Artists, Genres and All tracks
+  get a header per letter (`LibrarySort.lettered`, full-span in grids) and, past 30 items with more
+  than one letter, the A–Z `LetterRail` (tap / drag to jump); the browser gets the rail only (over
+  its files, else its folders), clear of the play button. Letters that don't fit the rail's height
+  become `RailSlots` (unit-tested): evenly picked letters with a dot for each hidden run; slots
+  split the height equally, a finger on a dot picks its hidden letters by position, and a bubble
+  beside the rail shows the letter under the finger. No release-date sort: tags don't carry a year in the index.
 - "Recently played": `PlaybackService` counts a play after 30 s (half of tracks under a minute) into
   the `plays` table; the last 7 days are shown, one row per track.
 - Crossfade (`Crossfader`, setting `crossfadeMs`, 0 = gapless): not a forwarding Player. The main
@@ -135,7 +148,17 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   (same volume only). Entries that don't resolve are matched in the index by their path's tail.
 - Settings: the main screen lists pages (`SettingsPage`: Playback, Interface, Library, Covers & lyrics, Backup, mStream, About), each
   a `settings/page/{page}` route. Favorites can import an M3U too (`PlaylistFiles.importToFavorites`,
-  tracks already there are kept).
+  tracks already there are kept). Favorites is a `LibraryScaffold` page: its tracks have the same swipes,
+  ⋮ menu and selection as any track list; there the heart takes a track out of Favorites with undo
+  (`LibraryViewModel.removeFavorites`). The ⋮ heart item says "Remove from favorites" for a favorite
+  anywhere.
+- Hide (`SwipeAction.HIDE`; "Remove from list" is gone, stored swipes map to it): the `hidden` table
+  (DB v14, `HiddenTracks`, `Hidden` unit-tested) holds tracks and folders (index path, `mstream://…`
+  for the server's) the user hid. Left out of `Library` (all pages, search, Home, Recently played),
+  the browser (`FileSystemBrowser.list` filters on the way out), Favorites, playlists (entries stay)
+  and Auto DJ picks; a track is hidden under both its paths (server ↔ local copy). Undo, and
+  Settings → Library → Hidden (`SettingsPage.HIDDEN`) shows them again. Playlists remove a track
+  with their own ⋮ "Remove from playlist" (`TrackMenu.onRemove`).
 - Backup (`Backup`, format `BackupFormat` = one JSON, unit-tested with org.json as a test dep):
   DataStore values (raw, typed), favorites, playlists, plays. Restore replaces all of them.
 - Fonts: IBM Plex (OFL) TTFs in `res/font`, built from the Home design bundle's woff2 subsets
@@ -188,7 +211,11 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   "Download" also for albums / artists / genres (page header button, selection ⋮), playlists and
   favorites (header button: downloading them keeps them downloaded — `playlists.keepDownloaded`
   (DB v13), setting `keepFavoritesDownloaded`; `MStreamDownloads.start` queues tracks added later;
-  a failed track isn't asked again). Marks everywhere (`Storage` / `StorageMark`, unit-tested):
+  a failed track isn't asked again). Once nothing of a page is on the server only, its button
+  removes the downloads (`DownloadAction` → `MStreamDownloads.removeDownloads`, confirmed): only files
+  "Download" saved (`Links.downloadOf`, never the user's own matched files); their favorites and
+  playlist entries move to the server track first (`repath`), keeping downloaded stops, empty
+  folders go. Marks everywhere (`Storage` / `StorageMark`, unit-tested):
   cloud, partly in the cloud, downloaded — for tracks (`rememberStorageMark`), albums / artists /
   genres (`Library.*Of` with the linked paths), playlists (`rememberPlaylistMarks`), folders
   (`DirStats.cloud / downloaded`), on rows, tiles, Home, Favorites, the queue and the browser.
@@ -233,7 +260,8 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   cursor, artist cooldown, BPM windows / Camelot neighbours via `AutoDjRules` (unit-tested), similar
   artists, `similarTo` = last picks else the playing track); a track the user started resets the
   anchors; picks with a local twin are queued as the local copy. Logs "Auto DJ asks {body}".
-  Server out of reach: one message, then quiet retries every 30 s while the same track plays.
+  Server out of reach: one message per outage (`reportedDown`, in memory: not again on a new track or queue
+  change until a request gets through), quiet retries every 30 s while the same track plays.
   `MStreamSonicPath` + `SonicPathScreen` (`Section.SONIC_PATH`: a tab or a Home shortcut, else
   opened as `section/SONIC_PATH`; not in Settings): "Sonic path" on a track (⋮, Now Playing,
   `SwipeAction.SONIC_PATH` / `QueueSwipeAction.SONIC_PATH`) sets the start, or the end once there's a

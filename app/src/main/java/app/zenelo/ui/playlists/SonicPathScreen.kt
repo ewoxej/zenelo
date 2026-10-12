@@ -1,5 +1,6 @@
 package app.zenelo.ui.playlists
 
+import app.zenelo.ui.components.rememberTopListState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.items
@@ -96,7 +97,7 @@ fun SonicPathScreen(onMessage: (String) -> Unit, onPick: (start: Boolean) -> Uni
             ScreenTitle("Sonic Path", Modifier.weight(1f))
             if (state.start != null || state.end != null) TextButton(onClick = sonicPath::reset) { Text("Start over") }
         }
-        LazyColumn(Modifier.weight(1f)) {
+        LazyColumn(Modifier.weight(1f), state = rememberTopListState()) {
             item {
                 Text(
                     "Pick two tracks — the server fills the way between them with tracks whose sound morphs from one to the other.",

@@ -49,6 +49,10 @@ class MStreamAutoDj(
 ) {
     private val _busy = MutableStateFlow(false)
 
+    /** Hidden tracks ("Hide"): never queued. */
+    @Volatile
+    var hidden: () -> app.zenelo.library.Hidden = { app.zenelo.library.Hidden() }
+
     /** A request is running. */
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
 
@@ -79,6 +83,13 @@ class MStreamAutoDj(
     /** The last pick failed on the network (not on the server's answer). */
     @Volatile
     private var unreachable = false
+
+    /**
+     * "Can't reach the server" was shown for this outage: not again (on a new track or queue change)
+     * until a request gets through (in memory: a new app start shows it once more).
+     */
+    @Volatile
+    private var reportedDown = false
 
     fun start() {
         scope.launch {
@@ -179,7 +190,10 @@ class MStreamAutoDj(
                 }
             }
             // Every try broke the tempo / key: take the last answer rather than stop the music.
-            val songs = chosen ?: last.takeIf { it.isNotEmpty() } ?: return fail("Auto DJ: no tracks match")
+            val answer = chosen ?: last.takeIf { it.isNotEmpty() } ?: return fail("Auto DJ: no tracks match")
+            val hidden = hidden()
+            val songs = answer.filterNot { song -> MStreamPaths.of(song.filepath).let { hidden.hides(it, listOfNotNull(twins[it])) } }
+                .ifEmpty { return fail("Auto DJ: no tracks match") }
             val queued = songs.map { song -> song to (twins[MStreamPaths.of(song.filepath)] ?: MStreamPaths.of(song.filepath)) }
             mutex.withLock {
                 ignoreList = cursor
@@ -188,12 +202,20 @@ class MStreamAutoDj(
                     song.artist?.let(::coolDown)
                 }
             }
+            reportedDown = false
             Log.i(TAG, "Auto DJ queued " + songs.joinToString { it.title ?: it.filepath })
             return queued.map { (_, path) -> AudioFile.forPath(path) }
         } catch (e: IOException) {
-            if (e is MStreamException) return fail("Auto DJ: ${e.message}")
+            if (e is MStreamException) {
+                reportedDown = false
+                return fail("Auto DJ: ${e.message}")
+            }
             unreachable = true
-            return fail("Auto DJ: can't reach the server — trying again")
+            val first = !reportedDown
+            reportedDown = true
+            Log.w(TAG, "Auto DJ: can't reach the server — trying again")
+            if (!quiet && first) _messages.tryEmit("Auto DJ: can't reach the server — trying again")
+            return null
         } finally {
             _busy.value = false
         }

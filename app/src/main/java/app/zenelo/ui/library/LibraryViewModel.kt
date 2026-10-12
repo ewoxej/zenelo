@@ -66,7 +66,7 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
     val settings: StateFlow<ZeneloSettings> =
         container.settings.settings.stateIn(viewModelScope, SharingStarted.Eagerly, ZeneloSettings())
 
-    /** Tracks removed from the lists this session (swipe "Remove from list" / "Hide"). */
+    /** Files deleted this session: out of the lists until the index catches up. */
     private val hidden = MutableStateFlow(emptySet<String>())
 
     private fun sortOf(page: SortPage): Flow<SortOrder> =
@@ -178,6 +178,25 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
 
     fun observeFavorite(id: String) = favorites.observeIsFavorite(id)
 
+    /** Out of Favorites (each under all its paths), with undo. */
+    fun removeFavorites(removed: List<FavoriteEntity>) {
+        if (removed.isEmpty()) return
+        viewModelScope.launch {
+            val links = container.serverLinks.current
+            val all = favorites.observeAll().first()
+            val paths = removed.flatMap { listOf(it.path) + links.copiesOf(it.path) }.toSet()
+            val gone = all.filter { it.path in paths }
+            favorites.deletePaths(paths.toList())
+            _events.send(
+                LibraryEvent.Message(
+                    if (removed.size == 1) "Removed from favorites" else "${removed.size} removed from favorites",
+                    undo = { viewModelScope.launch { favorites.insertAll(gone) } },
+                    action = SwipeAction.FAVORITE,
+                ),
+            )
+        }
+    }
+
     // --- Row actions (swipes, ⋮) and selections
 
     /** A swipe or ⋮ action on one track row. */
@@ -198,14 +217,26 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
                     _events.send(LibraryEvent.Message(if (added) "Added to favorites" else "Removed from favorites", action = action))
                 }
                 SwipeAction.ADD_TO_PLAYLIST -> container.playlistPicker.pick(listOf(file.path))
-                SwipeAction.REMOVE_FROM_LIST, SwipeAction.HIDE -> {
-                    hidden.update { it + file.path }
-                    _events.send(LibraryEvent.Message("Removed from list", undo = { hidden.update { it - file.path } }, action = action))
-                }
+                SwipeAction.HIDE -> hideTracks(listOf(file.path))
                 SwipeAction.DELETE_FILE -> _events.send(LibraryEvent.ConfirmDelete(listOf(file)))
                 SwipeAction.DOWNLOAD -> container.mstreamDownloads.request(listOf(file.path))?.let { _events.send(LibraryEvent.Message(it, action = action)) }
                 SwipeAction.SONIC_PATH -> container.sonicPath.add(file.path)
             }
+        }
+    }
+
+    /** "Hide": left out everywhere until shown again (Settings → Library → Hidden); with undo. */
+    fun hideTracks(paths: List<String>) {
+        if (paths.isEmpty()) return
+        viewModelScope.launch {
+            val done = container.hidden.hideTracks(paths)
+            _events.send(
+                LibraryEvent.Message(
+                    if (done.size == 1) "Hidden" else "${done.size} hidden",
+                    undo = { viewModelScope.launch { container.hidden.show(done) } },
+                    action = SwipeAction.HIDE,
+                ),
+            )
         }
     }
 
@@ -264,6 +295,7 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
             }
             SwipeAction.ADD_TO_PLAYLIST -> container.playlistPicker.pick(files.map(AudioFile::path))
             SwipeAction.DOWNLOAD -> container.mstreamDownloads.request(files.map(AudioFile::path))?.let { _events.send(LibraryEvent.Message(it, action = action)) }
+            SwipeAction.HIDE -> hideTracks(files.map(AudioFile::path))
             else -> Unit
         }
     }

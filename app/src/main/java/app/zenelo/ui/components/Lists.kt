@@ -48,6 +48,9 @@ fun TrackMenu(
     local: Boolean = true,
     /** The track, for "Play similar" / "Sonic path" (while logged in to mStream). */
     path: String? = null,
+    /** A page's own removal, e.g. "Remove from playlist" (after the actions). */
+    onRemove: (() -> Unit)? = null,
+    removeLabel: String = "Remove",
 ) {
     var menu by remember { mutableStateOf(false) }
     Box {
@@ -58,17 +61,32 @@ fun TrackMenu(
             // Server tracks can be downloaded (once), not deleted; local files the other way round.
             // Offline, nothing downloads: not offered.
             val downloaded = rememberDownloaded(path) || !rememberOnline()
+            // The heart toggles: a favorite (under either of its paths) offers to remove it.
+            val container = appContainer()
+            val links by container.serverLinks.links.collectAsStateWithLifecycle()
+            val favoriteFlow = remember(path, links) { path?.let { container.db.favorites().observeIsFavoriteAny(listOf(it) + links.copiesOf(it)) } }
+            val favorite by (favoriteFlow ?: kotlinx.coroutines.flow.flowOf(false)).collectAsStateWithLifecycle(initialValue = false)
             SwipeAction.entries.filter {
                 // Sonic path comes with Play similar below (server tracks only).
                 it != SwipeAction.NONE && it != SwipeAction.SONIC_PATH && it != (if (local) SwipeAction.DOWNLOAD else SwipeAction.DELETE_FILE) &&
                     !(it == SwipeAction.DOWNLOAD && downloaded)
             }.forEach { action ->
                 DropdownMenuItem(
-                    text = { Text(action.label) },
+                    text = { Text(if (action == SwipeAction.FAVORITE && favorite) "Remove from favorites" else action.label) },
                     leadingIcon = { Icon(action.icon, null, tint = action.accent) },
                     onClick = {
                         menu = false
                         onAction(action)
+                    },
+                )
+            }
+            if (onRemove != null) {
+                DropdownMenuItem(
+                    text = { Text(removeLabel) },
+                    leadingIcon = { Icon(Icons.Rounded.RemoveCircleOutline, null, tint = ZeneloColors.Danger) },
+                    onClick = {
+                        menu = false
+                        onRemove()
                     },
                 )
             }
@@ -148,6 +166,8 @@ fun SelectionBar(
     /** An extra ⋮ item for the page, e.g. "Remove from playlist". */
     onRemove: (() -> Unit)? = null,
     removeLabel: String = "Remove",
+    /** The heart button; off where everything is a favorite already. */
+    favorite: Boolean = true,
 ) {
     var menu by remember { mutableStateOf(false) }
     Row(
@@ -159,7 +179,7 @@ fun SelectionBar(
         IconButton(onClick = onSelectAll, modifier = Modifier.size(40.dp)) {
             SelectAllIcon(allSelected)
         }
-        for (action in listOf(SwipeAction.PLAY_NEXT, SwipeAction.ADD_TO_QUEUE, SwipeAction.FAVORITE)) {
+        for (action in listOfNotNull(SwipeAction.PLAY_NEXT, SwipeAction.ADD_TO_QUEUE, SwipeAction.FAVORITE.takeIf { favorite })) {
             IconButton(onClick = { onAction(action) }, enabled = count > 0, modifier = Modifier.size(40.dp)) {
                 Icon(action.icon, action.label, tint = action.accent, modifier = Modifier.size(22.dp))
             }
@@ -179,6 +199,8 @@ fun SelectionBar(
                     val download = SwipeAction.DOWNLOAD
                     IconMenuItem(download.label, download.icon, download.accent) { menu = false; onAction(download) }
                 }
+                val hide = SwipeAction.HIDE
+                IconMenuItem(hide.label, hide.icon, hide.accent) { menu = false; onAction(hide) }
                 if (onRemove != null) {
                     IconMenuItem(removeLabel, Icons.Rounded.RemoveCircleOutline, ZeneloColors.Danger) { menu = false; onRemove() }
                 }

@@ -62,6 +62,32 @@ object LibrarySort {
         else -> letter(trackName(track))
     }
 
+    /** Letter header of an album: by the sorted-by text (title or artist); null for other sorts. */
+    fun albumHeader(album: AlbumRow, order: SortOrder): String? = when (order.sortBy) {
+        SortField.NAME -> letter(album.album)
+        SortField.ARTIST -> letter(album.artist)
+        else -> null
+    }
+
+    fun artistHeader(artist: ArtistRow, order: SortOrder): String? = if (order.sortBy == SortField.NAME) letter(artist.name) else null
+
+    fun genreHeader(genre: GenreRow, order: SortOrder): String? = if (order.sortBy == SortField.NAME) letter(genre.name) else null
+
+    /**
+     * [items] with a header before each new letter ([letterOf] null: no headers). A header's
+     * [Lettered.Header.first] is the index of its first item, so keys stay unique when a letter
+     * comes up twice ("#" for digits first and for unknown values last).
+     */
+    fun <T> lettered(items: List<T>, letterOf: (T) -> String?): List<Lettered<T>> = buildList {
+        var last: String? = null
+        items.forEachIndexed { i, item ->
+            val letter = letterOf(item)
+            if (letter != null && letter != last) add(Lettered.Header(letter, i))
+            last = letter
+            add(Lettered.Row(item, i))
+        }
+    }
+
     /** Headers that are single letters get the A–Z rail. */
     fun hasLetterHeaders(order: SortOrder) = order.sortBy in setOf(SortField.NAME, SortField.ARTIST, SortField.ALBUM)
 
@@ -93,4 +119,10 @@ object LibrarySort {
 
     private fun <T> number(order: SortOrder, key: (T) -> Long): Comparator<T> =
         if (order.descending) compareByDescending(key) else compareBy(key)
+}
+
+/** A row of a list with letter headers ([LibrarySort.lettered]). */
+sealed interface Lettered<out T> {
+    data class Header(val letter: String, val first: Int) : Lettered<Nothing>
+    data class Row<T>(val item: T, val index: Int) : Lettered<T>
 }
