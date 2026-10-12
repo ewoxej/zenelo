@@ -30,6 +30,8 @@ enum class SwipeAction(val label: String) {
     ADD_TO_PLAYLIST("Add to playlist"),
     /** mStream tracks: keep a copy on the device. */
     DOWNLOAD("Download"),
+    /** mStream: the track becomes the Sonic Path's start (its end once there's a start). */
+    SONIC_PATH("Sonic path"),
     REMOVE_FROM_LIST("Remove from list"),
     HIDE("Hide"),
     DELETE_FILE("Delete file"),
@@ -49,6 +51,7 @@ enum class QueueSwipeAction(val label: String) {
     PLAY_NEXT("Play next"),
     MOVE_TO_END("Move to end"),
     FAVORITE("Add to favorites"),
+    SONIC_PATH("Sonic path"),
 }
 
 enum class QueueSwipeSlot(val label: String, val slot: SwipeSlot, val default: QueueSwipeAction) {

@@ -568,6 +568,7 @@ private fun QueuePage(player: PlayerController) {
             QueueSwipeAction.REMOVE -> player.removeFromQueue(setOf(id))
             QueueSwipeAction.PLAY_NEXT -> player.playNextInQueue(id)
             QueueSwipeAction.MOVE_TO_END -> player.moveInQueue(id, beforeId = null)
+            QueueSwipeAction.SONIC_PATH -> container.sonicPath.add(queue.pathOf(id))
             QueueSwipeAction.FAVORITE -> scope.launch {
                 val path = queue.pathOf(id)
                 val info = player.queue.info(path)

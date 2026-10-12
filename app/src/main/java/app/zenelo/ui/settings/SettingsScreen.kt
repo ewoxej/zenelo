@@ -5,7 +5,8 @@ import android.net.Uri
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.ui.text.style.TextAlign
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -121,7 +122,9 @@ private fun rememberSettings(): ZeneloSettings {
 enum class SettingsPage(val title: String, val summary: String, val icon: ImageVector, val listed: Boolean = true) {
     PLAYBACK("Playback", "Shuffle · normalization · crossfade", Icons.Outlined.GraphicEq),
     INTERFACE("Interface", "Bottom bar · Home · swipes · lists", Icons.Outlined.Tune),
-    OTHER("Other", "Covers & lyrics · library · backup", Icons.Outlined.Settings),
+    LIBRARY("Library", "Folders · artists · home folder", Icons.Outlined.LibraryMusic),
+    COVERS("Covers & lyrics", "Online · file names · Last.fm", Icons.Outlined.Image),
+    BACKUP("Backup", "Save · restore", Icons.Outlined.Save),
     MSTREAM("mStream", "Stream your server's library", Icons.Outlined.Cloud),
     ABOUT("About", "Version · author", Icons.Outlined.Info),
 
@@ -165,7 +168,9 @@ fun SettingsPageScreen(
         when (page) {
             SettingsPage.PLAYBACK -> PlaybackSettings()
             SettingsPage.INTERFACE -> InterfaceSettings(onOpenSwipeSettings, onCustomizeHome, onCustomizeTabs)
-            SettingsPage.OTHER -> OtherSettings(onMessage)
+            SettingsPage.LIBRARY -> LibrarySettings(onMessage)
+            SettingsPage.COVERS -> CoversSettings()
+            SettingsPage.BACKUP -> BackupRows(onMessage)
             SettingsPage.MSTREAM -> MStreamSettings(onMessage, onOpenPage)
             SettingsPage.AUTO_DJ -> AutoDjPage()
             SettingsPage.DOWNLOADS -> DownloadsPage(onMessage)
@@ -300,11 +305,10 @@ private fun InterfaceSettings(onOpenSwipeSettings: () -> Unit, onCustomizeHome: 
 }
 
 @Composable
-private fun OtherSettings(onMessage: (String) -> Unit) {
+private fun CoversSettings() {
     val repo = appContainer().settings
     val settings = rememberSettings()
     val scope = rememberCoroutineScope()
-    SectionHeader("Covers & lyrics")
     SwitchRow(
         title = "Download covers & lyrics",
         subtitle = "Wi-Fi only · Deezer, iTunes, MusicBrainz, LRCLIB",
@@ -341,8 +345,13 @@ private fun OtherSettings(onMessage: (String) -> Unit) {
             editingKey = false
         }
     }
+}
 
-    SectionHeader("Library")
+@Composable
+private fun LibrarySettings(onMessage: (String) -> Unit) {
+    val repo = appContainer().settings
+    val settings = rememberSettings()
+    val scope = rememberCoroutineScope()
     LibraryStatus()
     ScanFolders(settings.scanScope, onMessage)
     var editingArtists by remember { mutableStateOf(false) }
@@ -362,12 +371,12 @@ private fun OtherSettings(onMessage: (String) -> Unit) {
     }
     ListRow(
         title = "Home folder",
-        subtitle = settings.homeFolder ?: "Long-press the home button in Folders",
+        subtitle = settings.homeFolder ?: "Not set · the storage root",
+        // Set from the browser, where the folder is at hand: the row only says how.
+        onClick = { onMessage("To set it: in Folders, open the folder and long-press the home button (⌂) at the top") },
         leading = { IconTile(Icons.Outlined.Home, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
+        trailing = { Icon(Icons.Outlined.Info, "How to set it", tint = ZeneloColors.TextMuted, modifier = Modifier.padding(12.dp).size(18.dp)) },
     )
-
-    SectionHeader("Backup")
-    BackupRows(onMessage)
 }
 
 /** Name, version, author (the GitHub link opens the browser) and the font's licence. */
@@ -427,13 +436,13 @@ private fun BackupRows(onMessage: (String) -> Unit) {
     }
     ListRow(
         title = "Back up",
-        subtitle = "Settings, favorites, playlists, play history · one file",
+        subtitle = "Settings, favorites, playlists, plays · one file",
         onClick = { writer.launch("zenelo-backup-${LocalDate.now()}.json") },
         leading = { IconTile(Icons.Outlined.Save, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
     )
     ListRow(
         title = "Restore",
-        subtitle = "From a backup file · replaces all of the above",
+        subtitle = "From a backup file · replaces all of them",
         onClick = { reader.launch(arrayOf("application/json", "application/octet-stream", "text/plain")) },
         leading = { IconTile(Icons.Outlined.Restore, ZeneloColors.Mustard, ZeneloColors.MustardTint) },
     )

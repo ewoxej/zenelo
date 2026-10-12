@@ -133,7 +133,7 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   real paths (tree vs document URIs told apart by the path: `isDocumentUri(null, …)` threw, and every
   picked folder came back null), so relative entries resolve and exports write paths relative to the playlist file
   (same volume only). Entries that don't resolve are matched in the index by their path's tail.
-- Settings: the main screen lists pages (`SettingsPage`: Playback, Interface, Other, About), each
+- Settings: the main screen lists pages (`SettingsPage`: Playback, Interface, Library, Covers & lyrics, Backup, mStream, About), each
   a `settings/page/{page}` route. Favorites can import an M3U too (`PlaylistFiles.importToFavorites`,
   tracks already there are kept).
 - Backup (`Backup`, format `BackupFormat` = one JSON, unit-tested with org.json as a test dep):
@@ -234,8 +234,12 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   artists, `similarTo` = last picks else the playing track); a track the user started resets the
   anchors; picks with a local twin are queued as the local copy. Logs "Auto DJ asks {body}".
   Server out of reach: one message, then quiet retries every 30 s while the same track plays.
-  `MStreamSonicPath` + `SonicPathScreen` (route `sonicpath`): ends set from track menus / Now Playing
-  ("Sonic path from / to here", local tracks → server twin), `discovery/local/path`, play / queue / save.
+  `MStreamSonicPath` + `SonicPathScreen` (`Section.SONIC_PATH`: a tab or a Home shortcut, else
+  opened as `section/SONIC_PATH`; not in Settings): "Sonic path" on a track (⋮, Now Playing,
+  `SwipeAction.SONIC_PATH` / `QueueSwipeAction.SONIC_PATH`) sets the start, or the end once there's a
+  start (`add`), and opens it; ⇅ swaps the ends; tapping an end opens `SonicPathPicker`
+  (`sonicpath/pick/{end}`: search over tracks the server has, else `SonicPathSuggestions`, unit-tested:
+  playing, up next, recent, favorites). Local tracks → server twin. `discovery/local/path`, play / queue / save.
 
 ## Roadmap (not done yet)
 1. FFmpeg decoder dependency (verify DSD support in Jellyfin's prebuilt, else build from source).

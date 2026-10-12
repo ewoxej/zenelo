@@ -10,6 +10,7 @@ import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Route
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.ui.graphics.vector.ImageVector
 import app.zenelo.data.settings.Section
@@ -27,4 +28,5 @@ val Section.icon: ImageVector
         Section.TRACKS -> Icons.Outlined.MusicNote
         Section.RECENT -> Icons.Outlined.History
         Section.GENRES -> Icons.Outlined.Category
+        Section.SONIC_PATH -> Icons.Outlined.Route
     }

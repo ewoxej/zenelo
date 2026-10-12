@@ -12,10 +12,12 @@ enum class Section(val label: String) {
     TRACKS("All tracks"),
     RECENT("Recently played"),
     GENRES("Genres"),
+    /** mStream's Sonic Path: needs a server, so off by default. */
+    SONIC_PATH("Sonic Path"),
     ;
 
-    /** Settings has no content to show in a card, only a shortcut. */
-    val hasCard: Boolean get() = this != SETTINGS && this != HOME
+    /** Settings and Sonic Path have no content to show in a card, only a shortcut. */
+    val hasCard: Boolean get() = this != SETTINGS && this != HOME && this != SONIC_PATH
 }
 
 /** How a section shows on Home: not at all, as a shortcut icon, or as a card. */

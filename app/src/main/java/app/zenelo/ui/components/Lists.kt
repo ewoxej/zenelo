@@ -10,7 +10,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DriveFileRenameOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.Route
 import androidx.compose.material.icons.outlined.Radar
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.material.icons.rounded.Close
@@ -47,7 +46,7 @@ fun TrackMenu(
     onEditTags: (fromFileName: Boolean) -> Unit,
     /** False for mStream tracks: the server's files aren't ours to rewrite or delete. */
     local: Boolean = true,
-    /** The track, for "Sonic path from / to here" (while logged in to mStream). */
+    /** The track, for "Play similar" / "Sonic path" (while logged in to mStream). */
     path: String? = null,
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -60,7 +59,8 @@ fun TrackMenu(
             // Offline, nothing downloads: not offered.
             val downloaded = rememberDownloaded(path) || !rememberOnline()
             SwipeAction.entries.filter {
-                it != SwipeAction.NONE && it != (if (local) SwipeAction.DOWNLOAD else SwipeAction.DELETE_FILE) &&
+                // Sonic path comes with Play similar below (server tracks only).
+                it != SwipeAction.NONE && it != SwipeAction.SONIC_PATH && it != (if (local) SwipeAction.DOWNLOAD else SwipeAction.DELETE_FILE) &&
                     !(it == SwipeAction.DOWNLOAD && downloaded)
             }.forEach { action ->
                 DropdownMenuItem(
@@ -103,7 +103,10 @@ fun TrackMenu(
     }
 }
 
-/** "Sonic path from / to here": sets an end of the Sonic Path and opens it (logged in to mStream only). */
+/**
+ * "Play similar" and "Sonic path" (the track becomes the path's start, or its end once there's a
+ * start, and the screen opens). Logged in to mStream and online only.
+ */
 @Composable
 fun SonicPathItems(path: String, icons: Boolean = true, onDone: () -> Unit) {
     val sonicPath = appContainer().sonicPath
@@ -120,19 +123,11 @@ fun SonicPathItems(path: String, icons: Boolean = true, onDone: () -> Unit) {
         },
     )
     DropdownMenuItem(
-        text = { Text("Sonic path from here") },
-        leadingIcon = if (icons) ({ Icon(Icons.Outlined.Route, null, tint = ZeneloColors.Celadon) }) else null,
+        text = { Text(SwipeAction.SONIC_PATH.label) },
+        leadingIcon = if (icons) ({ Icon(SwipeAction.SONIC_PATH.icon, null, tint = SwipeAction.SONIC_PATH.accent) }) else null,
         onClick = {
             onDone()
-            sonicPath.set(path, start = true)
-        },
-    )
-    DropdownMenuItem(
-        text = { Text("Sonic path to here") },
-        leadingIcon = if (icons) ({ Icon(Icons.Outlined.Route, null, tint = ZeneloColors.Celadon) }) else null,
-        onClick = {
-            onDone()
-            sonicPath.set(path, start = false)
+            sonicPath.add(path)
         },
     )
 }

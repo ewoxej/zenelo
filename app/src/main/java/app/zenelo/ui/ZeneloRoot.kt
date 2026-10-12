@@ -96,6 +96,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import app.zenelo.ui.playlists.PlaylistsScreen
 import app.zenelo.ui.playlists.PlaylistScreen
+import app.zenelo.ui.playlists.SonicPathPicker
 import app.zenelo.ui.playlists.SonicPathScreen
 import app.zenelo.ui.playlists.PlaylistPickerDialog
 import app.zenelo.ui.settings.SettingsPage
@@ -150,7 +151,8 @@ private object Routes {
     const val ARTIST = "artist/{key}"
     const val PLAYLIST = "playlist/{id}"
     const val GENRE = "genre/{key}"
-    const val SONIC_PATH = "sonicpath"
+    /** Picking an end of the Sonic Path: `start` or `end`. */
+    const val SONIC_PICK = "sonicpath/pick/{end}"
 
     fun section(section: Section) = "section/${section.name}"
     fun album(key: String) = "album/${Uri.encode(key)}"
@@ -158,6 +160,7 @@ private object Routes {
     fun playlist(id: Long) = "playlist/$id"
     fun genre(key: String) = "genre/${Uri.encode(key)}"
     fun settingsPage(page: SettingsPage) = "settings/page/${page.name}"
+    fun sonicPick(start: Boolean) = "sonicpath/pick/${if (start) "start" else "end"}"
 }
 
 @Composable
@@ -323,6 +326,7 @@ private fun MainContent(settings: ZeneloSettings) {
             Section.TRACKS -> TracksScreen(libraryViewModel, onBack)
             Section.RECENT -> RecentScreen(libraryViewModel, onBack)
             Section.GENRES -> GenresScreen(libraryViewModel, libraryNav, onBack)
+            Section.SONIC_PATH -> SonicPathScreen(libraryViewModel::showMessage, onPick = { nav.navigate(Routes.sonicPick(it)) }, onBack = onBack)
         }
     }
 
@@ -375,7 +379,9 @@ private fun MainContent(settings: ZeneloSettings) {
                     val id = entry.arguments?.getString("id")?.toLongOrNull()
                     if (id != null) PlaylistScreen(libraryViewModel, id) { nav.popBackStack() }
                 }
-                composable(Routes.SONIC_PATH) { SonicPathScreen(libraryViewModel::showMessage) { nav.popBackStack() } }
+                composable(Routes.SONIC_PICK) { entry ->
+                    SonicPathPicker(libraryViewModel, start = entry.arguments?.getString("end") == "start") { nav.popBackStack() }
+                }
                 composable(Routes.SEARCH) { SearchScreen(libraryViewModel, libraryNav) { nav.popBackStack() } }
                 composable(Routes.SETTINGS_PAGE) { entry ->
                     val page = entry.arguments?.getString("page")?.let { name -> SettingsPage.entries.firstOrNull { it.name == name } }
@@ -406,10 +412,11 @@ private fun MainContent(settings: ZeneloSettings) {
             container.sonicPath.open.collect { problem ->
                 if (problem != null) {
                     libraryViewModel.showMessage(problem)
-                } else if (nav.currentDestination?.route != Routes.SONIC_PATH) {
-                    nav.navigate(Routes.SONIC_PATH)
-                    sheet.close()
                 } else {
+                    // A tab, or a sub-page (not twice on the stack).
+                    val here = nav.currentDestination?.route == Routes.SECTION &&
+                        nav.currentBackStackEntry?.arguments?.getString("section") == Section.SONIC_PATH.name
+                    if (!here) openSection(Section.SONIC_PATH)
                     sheet.close()
                 }
             }

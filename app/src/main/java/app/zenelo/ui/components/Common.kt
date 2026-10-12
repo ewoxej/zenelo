@@ -363,11 +363,11 @@ fun formatSize(bytes: Long): String = when {
     else -> "$bytes B"
 }
 
-/** Borderless inline search input used in screen top bars. Grabs focus when shown. */
+/** Borderless inline search input used in screen top bars. Grabs focus when shown ([autoFocus]). */
 @Composable
-fun SearchField(query: String, onQueryChange: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier) {
+fun SearchField(query: String, onQueryChange: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier, autoFocus: Boolean = true) {
     val focus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { focus.requestFocus() }
+    LaunchedEffect(Unit) { if (autoFocus) focus.requestFocus() }
     Box(modifier, contentAlignment = Alignment.CenterStart) {
         if (query.isEmpty()) Text(placeholder, style = MaterialTheme.typography.titleSmall, color = ZeneloColors.TextMuted)
         BasicTextField(

@@ -8,6 +8,7 @@ import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.RemoveCircleOutline
+import androidx.compose.material.icons.outlined.Route
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.VerticalAlignBottom
@@ -29,6 +30,7 @@ val SwipeAction.icon: ImageVector
         SwipeAction.HIDE -> Icons.Outlined.VisibilityOff
         SwipeAction.DELETE_FILE -> Icons.Outlined.DeleteOutline
         SwipeAction.DOWNLOAD -> Icons.Outlined.Download
+        SwipeAction.SONIC_PATH -> Icons.Outlined.Route
     }
 
 val SwipeAction.accent: Color
@@ -36,7 +38,7 @@ val SwipeAction.accent: Color
         SwipeAction.NONE, SwipeAction.HIDE -> ZeneloColors.TextMuted
         SwipeAction.ADD_TO_QUEUE, SwipeAction.PLAY_NEXT, SwipeAction.ADD_TO_PLAYLIST -> ZeneloColors.Mustard
         SwipeAction.FAVORITE -> ZeneloColors.Info
-        SwipeAction.DOWNLOAD -> ZeneloColors.Celadon
+        SwipeAction.DOWNLOAD, SwipeAction.SONIC_PATH -> ZeneloColors.Celadon
         SwipeAction.REMOVE_FROM_LIST, SwipeAction.DELETE_FILE -> ZeneloColors.Danger
     }
 
@@ -47,6 +49,7 @@ val QueueSwipeAction.icon: ImageVector
         QueueSwipeAction.PLAY_NEXT -> Icons.AutoMirrored.Rounded.PlaylistPlay
         QueueSwipeAction.MOVE_TO_END -> Icons.Rounded.VerticalAlignBottom
         QueueSwipeAction.FAVORITE -> Icons.Outlined.FavoriteBorder
+        QueueSwipeAction.SONIC_PATH -> Icons.Outlined.Route
     }
 
 val QueueSwipeAction.accent: Color
@@ -55,4 +58,5 @@ val QueueSwipeAction.accent: Color
         QueueSwipeAction.REMOVE -> ZeneloColors.Danger
         QueueSwipeAction.PLAY_NEXT, QueueSwipeAction.MOVE_TO_END -> ZeneloColors.Mustard
         QueueSwipeAction.FAVORITE -> ZeneloColors.Info
+        QueueSwipeAction.SONIC_PATH -> ZeneloColors.Celadon
     }

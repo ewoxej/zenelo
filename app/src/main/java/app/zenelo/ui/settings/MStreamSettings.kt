@@ -48,7 +48,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.Route
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import kotlin.math.roundToInt
@@ -182,12 +181,6 @@ private fun Connected(onMessage: (String) -> Unit, onOpenPage: (SettingsPage) ->
     SubPageRow("Auto DJ", if (settings.autoDj.enabled) "On · more tracks when the queue ends" else "Off", Icons.Outlined.AutoAwesome) {
         onOpenPage(SettingsPage.AUTO_DJ)
     }
-    ListRow(
-        title = "Sonic Path",
-        subtitle = "A path of tracks morphing from one sound to another",
-        onClick = { container.sonicPath.show() },
-        leading = { IconTile(Icons.Outlined.Route, ZeneloColors.Celadon, ZeneloColors.CeladonTint) },
-    )
     SectionHeader("On the device")
     SubPageRow("Downloads", downloadsSummary(settings), Icons.Outlined.Download) { onOpenPage(SettingsPage.DOWNLOADS) }
     StreamingSettings(settings)

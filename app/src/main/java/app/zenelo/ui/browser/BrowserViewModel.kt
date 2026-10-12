@@ -366,6 +366,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                 }
             }
             SwipeAction.DELETE_FILE -> showMessage("Folders can't be deleted from here")
+            SwipeAction.SONIC_PATH -> showMessage("Sonic Path runs between two tracks")
             SwipeAction.DOWNLOAD -> viewModelScope.launch {
                 container.mstreamDownloads.request(fs.listRecursive(folder).map { it.path })?.let { _events.send(BrowserEvent.Message(it, action = action)) }
             }
@@ -415,6 +416,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                     }
                 SwipeAction.DELETE_FILE -> _events.send(BrowserEvent.Confirm(file, deleteFile = true))
                 SwipeAction.DOWNLOAD -> container.mstreamDownloads.request(listOf(file.path))?.let { _events.send(BrowserEvent.Message(it, action = action)) }
+                SwipeAction.SONIC_PATH -> container.sonicPath.add(file.path)
             }
         }
     }
@@ -479,7 +481,8 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                     if (all.isEmpty()) _events.send(BrowserEvent.Message("No music selected")) else container.playlistPicker.pick(all.map { it.path })
                 }
                 SwipeAction.DOWNLOAD -> container.mstreamDownloads.request(expand(folders, files).map { it.path })?.let { _events.send(BrowserEvent.Message(it, action = action)) }
-                SwipeAction.NONE -> Unit
+                // Not in the selection bar: one track at a time.
+                SwipeAction.SONIC_PATH, SwipeAction.NONE -> Unit
             }
         }
     }

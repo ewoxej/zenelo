@@ -351,6 +351,8 @@ fun LibraryRow(
     /** Offline and only on the server (not cached): faded — it can't play until the network is back. */
     unplayable: Boolean = rememberUnplayable(coverPath, remote = cloud),
     trailing: @Composable () -> Unit = {},
+    /** Drawn in the cover's place ([coverSize] square), e.g. an icon tile for an empty slot. */
+    leading: (@Composable () -> Unit)? = null,
 ) {
     Row(
         modifier
@@ -365,6 +367,9 @@ fun LibraryRow(
         if (selecting && markLeft) SelectionMark(selected, Modifier.padding(end = 12.dp))
         if (number != null) {
             Text(number, style = TextStyle(fontFamily = PlexMono, fontSize = 11.sp, color = if (isCurrent) ZeneloColors.Celadon else ZeneloColors.TextMuted), modifier = Modifier.width(30.dp))
+        } else if (leading != null) {
+            Box(Modifier.size(coverSize), contentAlignment = Alignment.Center) { leading() }
+            Spacer(Modifier.width(14.dp))
         } else if (showCover) {
             CoverImage(coverPath, Modifier.size(coverSize), shape = coverShape, isCurrent = isCurrent, placeholder = placeholder)
             Spacer(Modifier.width(14.dp))

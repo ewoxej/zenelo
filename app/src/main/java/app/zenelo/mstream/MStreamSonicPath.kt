@@ -23,8 +23,9 @@ import java.io.IOException
 /**
  * Sonic Path (`discovery/local/path`): pick a start and an end track, and the server fills the
  * way between them with tracks whose sound morphs from one to the other (its audio embeddings).
- * The ends are set from any track menu or Now Playing ("Sonic path from / to here") and the
- * screen shows the path to play, queue or save. Local tracks stand for their server twin.
+ * "Sonic path" on a track (menus, swipes, Now Playing) makes it the start — the end once a start
+ * is set — and opens the screen; there the ends are picked, swapped, and the path played, queued or
+ * saved. Local tracks stand for their server twin.
  */
 class MStreamSonicPath(
     private val db: ZeneloDatabase,
@@ -54,6 +55,8 @@ class MStreamSonicPath(
     val available: StateFlow<Boolean> = combine(settings.settings.map { it.mstream != null }, online) { logged, online -> logged && online }
         .stateIn(scope, SharingStarted.Eagerly, false)
 
+    private val logged: StateFlow<Boolean> = settings.settings.map { it.mstream != null }.stateIn(scope, SharingStarted.Eagerly, false)
+
     private val _open = MutableSharedFlow<String?>(extraBufferCapacity = 1)
 
     /** The screen should open; the value is a message to show instead when the track can't be used. */
@@ -61,20 +64,35 @@ class MStreamSonicPath(
 
     private var job: Job? = null
 
-    /** Sets the start ([start]) or end of the path to [path] and opens the screen. */
-    fun set(path: String, start: Boolean) {
+    /**
+     * "Sonic path" on a track: the start while there's none (or it's this track), else the end;
+     * then the screen opens. A message instead when it can't be used.
+     */
+    fun add(path: String) {
+        if (!available.value) {
+            _open.tryEmit(if (logged.value) "Sonic Path needs the network" else "Sonic Path needs an mStream server")
+            return
+        }
+        val start = _state.value.start
+        set(path, start = start == null || start.path == path, open = true)
+    }
+
+    /** Sets the start ([start]) or end of the path to [path]; [open]: and opens the screen. */
+    fun set(path: String, start: Boolean, open: Boolean = false) {
         scope.launch {
             val all = db.tracks().observeAll().first()
             val end = endFor(path, all) ?: return@launch run { _open.tryEmit("Not on the mStream server") }
-            _state.update { if (start) it.copy(start = end, result = null, problem = null) else it.copy(end = end, result = null, problem = null) }
-            _open.tryEmit(null)
+            _state.update {
+                // The other end on the same track would make no path: it's moved here instead.
+                if (start) it.copy(start = end, end = it.end?.takeIf { e -> e.path != path }, result = null, problem = null)
+                else it.copy(end = end, start = it.start?.takeIf { s -> s.path != path }, result = null, problem = null)
+            }
+            if (open) _open.tryEmit(null)
         }
     }
 
-    /** Opens the screen as it is. */
-    fun show() {
-        _open.tryEmit(null)
-    }
+    /** The start becomes the end and the other way round. */
+    fun swap() = _state.update { it.copy(start = it.end, end = it.start, result = null, problem = null) }
 
     fun clear(start: Boolean) = _state.update { if (start) it.copy(start = null, result = null) else it.copy(end = null, result = null) }
 
