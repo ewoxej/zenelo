@@ -281,6 +281,13 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   (`sonicpath/pick/{end}`: search over tracks the server has, else `SonicPathSuggestions`, unit-tested:
   playing, up next, recent, favorites). Local tracks → server twin. `discovery/local/path`, play / queue / save.
 
+## mStream server fork
+`mStream/` is a git submodule: github.com/ewoxej/mStream, the user's fork of mStream (Node.js) — its
+web UI restyled after Zenelo, plus new server features. Not part of the Gradle build. Server-side
+changes go there (commit in the submodule, then the new submodule commit here); the app's API
+notes above still refer to upstream behaviour unless stated otherwise.
+`git clone --recurse-submodules`, or `git submodule update --init` in an existing checkout.
+
 ## Roadmap (not done yet)
 1. FFmpeg decoder dependency (verify DSD support in Jellyfin's prebuilt, else build from source).
 2. mStream server support (github.com/IrosTheBeggar/mStream; API in its `docs/openapi.yaml`). Decisions:
