@@ -621,11 +621,18 @@ private fun MiniPlayer(state: PlayerUiState, player: PlayerController, sheet: Pl
             gapSize = 0.dp,
         )
         Row(Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Artwork(state.artwork, Modifier.size(38.dp), cornerRadius = 4.dp, decodeSizePx = 128, file = state.artworkFile)
+            if (state.remoteDevice != null) {
+                app.zenelo.ui.components.CoverImage(state.mediaId, Modifier.size(38.dp), shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
+            } else {
+                Artwork(state.artwork, Modifier.size(38.dp), cornerRadius = 4.dp, decodeSizePx = 128, file = state.artworkFile)
+            }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(state.title ?: "", style = MaterialTheme.typography.bodyLarge, maxLines = 1, modifier = Modifier.marquee())
-                state.artist?.let {
+                val device = state.remoteDevice
+                if (device != null) {
+                    Text("Playing on ${device.name}", style = MaterialTheme.typography.bodySmall, color = ZeneloColors.Mustard, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                } else state.artist?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = ZeneloColors.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }

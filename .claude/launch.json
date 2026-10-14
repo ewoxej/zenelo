@@ -1,0 +1,25 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mstream",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "mStream/cli-boot-wrapper.js",
+        "-j",
+        "/private/tmp/claude-501/-Users-ewoxej-dev-zenelo/3af0efd1-f966-4b91-a22c-671e4b2a37ae/scratchpad/ms/config.json"
+      ],
+      "port": 3456
+    },
+    {
+      "name": "mstream-nouser",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "mStream/cli-boot-wrapper.js",
+        "-j",
+        "/private/tmp/claude-501/-Users-ewoxej-dev-zenelo/3af0efd1-f966-4b91-a22c-671e4b2a37ae/scratchpad/ms/config-nouser.json"
+      ],
+      "port": 3457
+    }
+  ]
+}

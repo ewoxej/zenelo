@@ -52,6 +52,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.outlined.Album
+import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.rounded.Close
@@ -251,6 +252,18 @@ fun NowPlayingScreen(
             onFindCover = { coverPicker = true },
             onMessage = { coverMessage = it },
         )
+        // Following another device: the same player, a strip saying where the sound is (the devices
+        // button in the top bar moves it).
+        state.remoteDevice?.let { d ->
+            Text(
+                "Playing on ${d.name}",
+                style = MaterialTheme.typography.bodySmall,
+                color = ZeneloColors.Mustard,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).clip(RoundedCornerShape(10.dp))
+                    .background(ZeneloColors.MustardTint).padding(vertical = 6.dp),
+            )
+        }
         HorizontalPager(
             pager,
             Modifier.weight(1f),
@@ -341,6 +354,15 @@ private fun TopBar(
                 textAlign = TextAlign.Center,
             )
         }
+        // The mStream account's devices: move the playback to another one.
+        if (appContainer().settings.settings.collectAsStateWithLifecycle(null).value?.mstream != null) {
+            var devicesOpen by remember { mutableStateOf(false) }
+            IconButton(onClick = { devicesOpen = true }) { Icon(Icons.Outlined.Devices, "Devices") }
+            if (devicesOpen) {
+                val c = appContainer()
+                app.zenelo.ui.components.DevicesSheet(state.isPlaying, onDismiss = { devicesOpen = false }) { c.playbackMessages.tryEmit(it) }
+            }
+        }
         Box {
             IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "More") }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -418,7 +440,11 @@ private fun CoverPage(state: PlayerUiState) {
     // A large square as in the design, capped so it never turns into a full-screen image.
     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         val side = minOf(maxWidth - 56.dp, maxHeight - 24.dp, 300.dp)
-        Artwork(state.artwork, Modifier.size(side), cornerRadius = 12.dp, largePlaceholder = true, file = state.artworkFile)
+        if (state.remoteDevice != null) {
+            app.zenelo.ui.components.CoverImage(state.mediaId, Modifier.size(side), shape = RoundedCornerShape(12.dp), large = true)
+        } else {
+            Artwork(state.artwork, Modifier.size(side), cornerRadius = 12.dp, largePlaceholder = true, file = state.artworkFile)
+        }
     }
 }
 

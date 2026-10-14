@@ -281,12 +281,26 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   (`sonicpath/pick/{end}`: search over tracks the server has, else `SonicPathSuggestions`, unit-tested:
   playing, up next, recent, favorites). Local tracks → server twin. `discovery/local/path`, play / queue / save.
 
+- Playback devices (Spotify Connect–like; needs the fork's `src/api/devices.js`): `MStreamDevices`
+  (attached by `PlaybackService`, so the phone is a device while the service runs) holds an SSE
+  stream (`devices/events`), reports status + the queue as server paths (local tracks without a
+  server copy are left out), runs commands (play/pause/next/previous/seek/goTo/setVolume/takeover)
+  on the player, and moves playback with `playOn` (`devices/transfer`: the source pauses, the
+  target loads the queue at the position — `PlayQueue.load`). Pick-up: another device that
+  played later (`lastPlayedAt`, server clock; a device that only took a queue over doesn't count,
+  or two would hand it back and forth) and is now paused hands its queue over, loaded paused.
+  While another device plays and this one doesn't, the mini player is `RemoteMiniPlayer`
+  ("Playing on …", Play here); the devices sheet is in Now Playing's header.
+
 ## mStream server fork
 `mStream/` is a git submodule: github.com/ewoxej/mStream, the user's fork of mStream (Node.js) — its
 web UI restyled after Zenelo, plus new server features. Not part of the Gradle build. Server-side
 changes go there (commit in the submodule, then the new submodule commit here); the app's API
 notes above still refer to upstream behaviour unless stated otherwise.
 `git clone --recurse-submodules`, or `git submodule update --init` in an existing checkout.
+Docker image `ghcr.io/ewoxej/mstream-zenelo` (`Dockerfile`, `docker/`, workflows `docker.yml` = edge
+on every master push, `docker-release.yml` = manual release): its version is the fork's own `VERSION`
+file, separate from upstream's `package.json`; releases are tagged `zenelo-v<version>`.
 
 ## Roadmap (not done yet)
 1. FFmpeg decoder dependency (verify DSD support in Jellyfin's prebuilt, else build from source).

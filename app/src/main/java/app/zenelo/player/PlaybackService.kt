@@ -115,6 +115,7 @@ class PlaybackService : MediaSessionService() {
             .build()
         player.addListener(PlayerListener())
         container.queue.attach(player)
+        container.devices.attach(player)
         crossfader = Crossfader(
             main = player,
             scope = scope,
@@ -249,6 +250,7 @@ class PlaybackService : MediaSessionService() {
         container.nowPlaying.value = null
         flushPendingWrites()
         crossfader.release()
+        container.devices.detach()
         container.queue.detach()
         session?.run {
             player.release()

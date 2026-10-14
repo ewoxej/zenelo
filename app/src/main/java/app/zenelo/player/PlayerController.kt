@@ -37,6 +37,8 @@ data class PlayerUiState(
     val durationMs: Long = 0,
     val shuffle: Boolean = false,
     val repeatMode: Int = Player.REPEAT_MODE_OFF,
+    /** Another device this phone follows (`MStreamDevices`): the state is its, transport goes to it. */
+    val remoteDevice: app.zenelo.mstream.PlaybackDevice? = null,
 )
 
 /**
@@ -64,6 +66,33 @@ class PlayerController(
 
     private val _position = MutableStateFlow(0L)
     val position: StateFlow<Long> = _position.asStateFlow()
+
+    private var devices: app.zenelo.mstream.MStreamDevices? = null
+    private var remote: app.zenelo.mstream.PlaybackDevice? = null
+    private var local = PlayerUiState()
+
+    /** Follows the device `MStreamDevices` follows: state, position and transport become its. */
+    fun attachDevices(d: app.zenelo.mstream.MStreamDevices) {
+        devices = d
+        scope.launch { d.controlledDevice.collect { remote = it; it?.let { r -> _position.value = r.positionNow() }; publish() } }
+        startTicker()
+    }
+
+    private fun publish() {
+        val r = remote
+        _state.value = if (r == null) local else PlayerUiState(
+            connected = true,
+            mediaId = r.track?.serverPath?.let(app.zenelo.mstream.MStreamPaths::of),
+            title = r.track?.title, artist = r.track?.artist, album = r.track?.album,
+            isPlaying = r.playing, durationMs = r.track?.durationMs ?: 0L, remoteDevice = r,
+        )
+    }
+
+    private fun send(command: String, args: org.json.JSONObject? = null): Boolean {
+        val r = remote ?: return false
+        devices?.command(r.id, command, args)
+        return true
+    }
 
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) = refresh()
@@ -93,7 +122,8 @@ class PlayerController(
         future?.let(MediaController::releaseFuture)
         future = null
         controller = null
-        _state.update { it.copy(connected = false) }
+        local = local.copy(connected = false)
+        publish()
     }
 
     /**
@@ -126,7 +156,9 @@ class PlayerController(
 
     fun skipTo(id: Int) = queue.skipTo(id)
 
-    fun togglePlay() = controller?.run {
+    fun togglePlay() { if (!send("playPause")) togglePlayHere() }
+
+    private fun togglePlayHere() = controller?.run {
         if (isPlaying) {
             pause()
         } else {
@@ -135,29 +167,35 @@ class PlayerController(
         }
     }
 
-    fun play() = controller?.play()
+    fun play() { if (!send("play")) controller?.play() }
 
     /** Stops and clears the queue. */
     fun stop() = queue.stop()
 
     /** Next / previous; after a playback error the player sits idle: prepared again so the new track plays. */
-    fun next() = controller?.run {
+    fun next() { if (!send("next")) nextHere() }
+
+    private fun nextHere() = controller?.run {
         seekToNext()
         if (playbackState == Player.STATE_IDLE) prepare()
     }
 
-    fun previous() = controller?.run {
+    fun previous() { if (!send("previous")) previousHere() }
+
+    private fun previousHere() = controller?.run {
         seekToPrevious()
         if (playbackState == Player.STATE_IDLE) prepare()
     }
 
-    fun seekTo(positionMs: Long) = controller?.seekTo(positionMs)
+    fun seekTo(positionMs: Long) {
+        if (!send("seek", org.json.JSONObject().put("positionMs", positionMs))) controller?.seekTo(positionMs)
+    }
 
-    fun toggleShuffle() = controller?.run { shuffleModeEnabled = !shuffleModeEnabled }
+    fun toggleShuffle() = controller?.takeIf { remote == null }?.run { shuffleModeEnabled = !shuffleModeEnabled }
 
-    fun setRepeat(mode: Int) = controller?.run { repeatMode = mode }
+    fun setRepeat(mode: Int) = controller?.takeIf { remote == null }?.run { repeatMode = mode }
 
-    fun cycleRepeat() = controller?.run {
+    fun cycleRepeat() = controller?.takeIf { remote == null }?.run {
         repeatMode = when (repeatMode) {
             Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
             Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
@@ -169,7 +207,9 @@ class PlayerController(
         ticker?.cancel()
         ticker = scope.launch {
             while (isActive) {
-                controller?.takeIf { it.isPlaying }?.let { _position.value = it.currentPosition }
+                val r = remote
+                if (r != null) _position.value = r.positionNow()
+                else controller?.takeIf { it.isPlaying }?.let { _position.value = it.currentPosition }
                 delay(250)
             }
         }
@@ -179,11 +219,11 @@ class PlayerController(
         val c = controller ?: return
         val metadata = c.mediaMetadata
         val item = c.currentMediaItem
-        _position.value = c.currentPosition
+        if (remote == null) _position.value = c.currentPosition
         // Our tag index wins over the player's copy: it's what a tag edit just updated.
         val info = item?.mediaId?.let(queue::cachedInfo)
         val override = coverOverride.value?.takeIf { it.first == item?.mediaId }
-        _state.value = PlayerUiState(
+        local = PlayerUiState(
             connected = true,
             mediaId = item?.mediaId,
             title = info?.title ?: (metadata.title ?: metadata.displayTitle)?.toString(),
@@ -200,5 +240,6 @@ class PlayerController(
             shuffle = c.shuffleModeEnabled,
             repeatMode = c.repeatMode,
         )
+        publish()
     }
 }

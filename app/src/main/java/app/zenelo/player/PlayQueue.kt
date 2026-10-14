@@ -218,6 +218,37 @@ class PlayQueue(
     }
 
     /**
+     * Replaces the queue with [files] in this order, at [index] and [positionMs]: playing when
+     * [play], else paused there (a queue taken over or picked up from another device, `MStreamDevices`).
+     * Shuffle goes off: the order is the other device's.
+     */
+    fun load(files: List<AudioFile>, index: Int, positionMs: Long, play: Boolean) = launchLocked {
+        val p = player ?: return@launchLocked
+        if (files.isEmpty()) return@launchLocked
+        paths = files.map { resolvePath(it.path) }
+        order = paths.indices.toList()
+        current = index.coerceIn(paths.indices).toLong()
+        shuffled = false
+        p.shuffleModeEnabled = false
+        val positions = windowAround(current)
+        val items = buildItems(positions)
+        window.clear()
+        window.addAll(positions)
+        p.setMediaItems(items, positions.indexOf(current), positionMs.coerceAtLeast(0))
+        p.prepare()
+        if (play) p.play() else p.pause()
+        publish()
+        savePosition(paths[order[current.toInt()]], positionMs)
+    }
+
+    /** The whole queue in play order (played, current, upcoming) and the current one's index in it. */
+    fun inOrder(): Pair<List<String>, Int> {
+        val s = _state.value
+        if (s.total == 0) return emptyList<String>() to -1
+        return List(s.total) { s.pathAt(it - s.history) } to s.history
+    }
+
+    /**
      * Brings back the saved queue, paused at the saved position (service start). Does nothing if
      * the player already has items or nothing was saved.
      */
