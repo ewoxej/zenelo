@@ -190,56 +190,55 @@ class MStreamDevices(
 
     // ── The stream ──────────────────────────────────────────────────────
 
+    /**
+     * Long polling (`devices/poll`), not the SSE stream: behind some proxies (Cloudflare in front of
+     * a home server) not a byte of the stream came through, so no device saw another. Each answer
+     * carries the events since the last one; `ack` tells the server what arrived.
+     */
     private suspend fun stream(account: MStreamAccount) {
         var backoff = 2000L
+        val session = UUID.randomUUID().toString().replace("-", "").take(16)
+        var ack = 0L
         while (true) {
-            val url = "${account.url}/api/v1/devices/events".toHttpUrlOrNull()?.newBuilder()
+            val url = "${account.url}/api/v1/devices/poll".toHttpUrlOrNull()?.newBuilder()
                 ?.addQueryParameter("id", selfId)?.addQueryParameter("name", name)?.addQueryParameter("type", "android")
+                ?.addQueryParameter("session", session)?.addQueryParameter("ack", ack.toString())
                 ?.build() ?: return
-            val call = client.newCall(Request.Builder().url(url).header("x-access-token", account.token).header("Accept", "text/event-stream").build())
+            val call = client.newCall(Request.Builder().url(url).header("x-access-token", account.token).build())
             val handle = currentCoroutineContext().job.invokeOnCompletion { call.cancel() }
-            try {
+            val answer = try {
                 withContext(Dispatchers.IO) {
                     call.execute().use { response ->
                         if (response.code == 404 || response.code == 403) {
                             Log.i(TAG, "devices: not on this server (${response.code})")
-                            return@withContext
-                        }
-                        if (!response.isSuccessful) throw MStreamException("devices ${response.code}", response.code)
-                        val source = response.body?.source() ?: return@withContext
-                        backoff = 2000L
-                        var event = "message"
-                        val data = StringBuilder()
-                        while (true) {
-                            currentCoroutineContext().ensureActive()
-                            val line = source.readUtf8Line() ?: break
-                            when {
-                                line.isEmpty() -> {
-                                    if (data.isNotEmpty()) dispatch(account, event, data.toString())
-                                    event = "message"
-                                    data.setLength(0)
-                                }
-                                line.startsWith(":") -> Unit
-                                line.startsWith("event:") -> event = line.removePrefix("event:").trim()
-                                line.startsWith("data:") -> data.append(line.removePrefix("data:").trimStart())
-                            }
+                            null
+                        } else {
+                            if (!response.isSuccessful) throw MStreamException("devices ${response.code}", response.code)
+                            JSONObject(response.body?.string().orEmpty())
                         }
                     }
-                }
+                } ?: run { _connected.value = false; return }
             } catch (e: Exception) {
                 currentCoroutineContext().ensureActive()
-                Log.i(TAG, "devices stream: ${e.message}")
+                Log.i(TAG, "devices poll: ${e.message}")
+                _connected.value = false
+                delay(backoff)
+                backoff = (backoff * 2).coerceAtMost(30_000L)
+                continue
             } finally {
                 handle.dispose()
-                _connected.value = false
             }
-            delay(backoff)
-            backoff = (backoff * 2).coerceAtMost(60_000L)
+            backoff = 2000L
+            ack = answer.optLong("cursor", ack)
+            val events = answer.optJSONArray("events") ?: JSONArray()
+            for (i in 0 until events.length()) {
+                val e = events.optJSONObject(i) ?: continue
+                dispatch(account, e.optString("event"), e.optJSONObject("data") ?: continue)
+            }
         }
     }
 
-    private suspend fun dispatch(account: MStreamAccount, event: String, data: String) {
-        val json = runCatching { JSONObject(data) }.getOrNull() ?: return
+    private suspend fun dispatch(account: MStreamAccount, event: String, json: JSONObject) {
         when (event) {
             "devices" -> {
                 val list = json.optJSONArray("devices") ?: JSONArray()

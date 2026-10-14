@@ -282,8 +282,8 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   playing, up next, recent, favorites). Local tracks → server twin. `discovery/local/path`, play / queue / save.
 
 - Playback devices (Spotify Connect–like; needs the fork's `src/api/devices.js`): `MStreamDevices`
-  (attached by `PlaybackService`, so the phone is a device while the service runs) holds an SSE
-  stream (`devices/events`), reports status + the queue as server paths (local tracks without a
+  (attached by `PlaybackService`, so the phone is a device while the service runs) long-polls
+  `devices/poll` (not the SSE `devices/events`: behind Cloudflare not a byte of the stream came through), reports status + the queue as server paths (local tracks without a
   server copy are left out), runs commands (play/pause/next/previous/seek/goTo/setVolume/takeover)
   on the player, and moves playback with `playOn` (`devices/transfer`: the source pauses, the
   target loads the queue at the position — `PlayQueue.load`). The player follows the device the
@@ -306,8 +306,8 @@ web UI restyled after Zenelo, plus new server features. Not part of the Gradle b
 changes go there (commit in the submodule, then the new submodule commit here); the app's API
 notes above still refer to upstream behaviour unless stated otherwise.
 `git clone --recurse-submodules`, or `git submodule update --init` in an existing checkout.
-Docker image `ghcr.io/ewoxej/mstream-zenelo` (`Dockerfile`, `docker/`, workflows `docker.yml` = edge
-on every master push, `docker-release.yml` = manual release): its version is the fork's own `VERSION`
+Docker image `ghcr.io/ewoxej/mstream-zenelo` (`Dockerfile`, `docker/`, workflows `docker.yml` =
+run by hand (edge / sha-…; both install a pinned ffmpeg into `bin/ffmpeg` for the unit tests), `docker-release.yml` = manual release): its version is the fork's own `VERSION`
 file, separate from upstream's `package.json`; releases are tagged `zenelo-v<version>`.
 
 ## Roadmap (not done yet)
