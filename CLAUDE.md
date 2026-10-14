@@ -308,7 +308,19 @@ notes above still refer to upstream behaviour unless stated otherwise.
 `git clone --recurse-submodules`, or `git submodule update --init` in an existing checkout.
 Docker image `ghcr.io/ewoxej/mstream-zenelo` (`Dockerfile`, `docker/`, workflows `docker.yml` =
 run by hand (edge / sha-…; both install a pinned ffmpeg into `bin/ffmpeg` for the unit tests), `docker-release.yml` = manual release): its version is the fork's own `VERSION`
-file, separate from upstream's `package.json`; releases are tagged `zenelo-v<version>`.
+file, separate from upstream's `package.json`; releases are tagged `zenelo-v<version>`. The admin's update
+check (`src/util/update-check.js`, `src/util/fork.js`) watches the fork's `zenelo-v…` releases, not upstream's
+(installing an upstream build would drop the fork), and only says which image to pull.
+The old Vue UI (`webapp/classic`, `webapp/alpha`, the standalone `/stats` page) is gone: `/classic` and `/stats`
+redirect to the player. `/server-remote` (server speakers) is the player with `mstream.server-audio.js` as its engine;
+Discover's plug-in jobs (get a network / peer track into the library) are `webapp/app/jobs.js` + `screens/discover-get.js`.
+Single sign-on (`src/api/oidc.js`, admin page "Single sign-on", config `oidc`): the server is an OIDC client
+(Authelia…; code + PKCE + secret, profile / groups from userinfo). Existing users only (username claim), optional
+access / admin groups, mode off / optional / required (required: no password sign-in, password sessions refused;
+switched on only from an OIDC session); `autoRedirect` sends /login straight to the provider (`/login/?local`
+keeps the form). The app: `MStreamOidc` — the mStream login form shows "Sign in with SSO" when `api/v1/auth/oidc`
+offers it (with autoRedirect the password form waits behind "Use a password instead"), the browser signs in, the server hands back `zenelo://oidc?code=…`
+(MainActivity's intent filter), traded at `api/v1/auth/oidc/exchange` for the token.
 
 ## Roadmap (not done yet)
 1. FFmpeg decoder dependency (verify DSD support in Jellyfin's prebuilt, else build from source).

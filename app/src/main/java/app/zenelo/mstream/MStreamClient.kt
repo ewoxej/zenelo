@@ -16,6 +16,12 @@ import java.util.concurrent.TimeUnit
 /** Where the server is and who we are there. The token is mStream's JWT (5-year lifetime). */
 data class MStreamAccount(val url: String, val username: String, val token: String)
 
+/** The server's OIDC sign-in: whether passwords still work there, and whether SSO is meant to come first. */
+data class OidcInfo(val passwordAllowed: Boolean, val autoRedirect: Boolean)
+
+/** Where the server hands an OIDC sign-in back to the app (its registered redirect, `oidc.appRedirects`). */
+const val OIDC_REDIRECT = "zenelo://oidc"
+
 /** One track of the server's library manifest. */
 data class ManifestEntry(
     /** `<vpath>/<rel>`. */
@@ -87,6 +93,41 @@ class MStreamClient(base: OkHttpClient) {
         val json = post(base, "api/v1/auth/login", token = null, body = body) as JSONObject
         val token = json.optString("token").takeIf { it.isNotEmpty() } ?: throw MStreamException("No token in the answer")
         MStreamAccount(base.toString().trimEnd('/'), username, token)
+    }
+
+    /**
+     * What the server offers besides passwords: its OIDC sign-in (the mStream fork's
+     * `api/v1/auth/oidc`), or null when it has none (an older server, or turned off).
+     */
+    suspend fun oidcInfo(url: String): OidcInfo? = withContext(Dispatchers.IO) {
+        val base = normalizeUrl(url) ?: return@withContext null
+        val target = base.resolve("api/v1/auth/oidc") ?: return@withContext null
+        runCatching {
+            client.newCall(Request.Builder().url(target).build()).execute().use { r ->
+                if (!r.isSuccessful) return@use null
+                val json = JSONObject(r.body?.string().orEmpty())
+                val mode = json.optString("mode")
+                if (mode != "optional" && mode != "required") null
+                else OidcInfo(passwordAllowed = json.optBoolean("password", true), autoRedirect = json.optBoolean("autoRedirect", false))
+            }
+        }.getOrNull()
+    }
+
+    /** The browser page that starts an OIDC sign-in for this app ([OIDC_REDIRECT] gets the code back). */
+    fun oidcStartUrl(url: String, state: String): String? {
+        val base = normalizeUrl(url) ?: return null
+        return base.resolve("api/v1/auth/oidc/start")?.newBuilder()
+            ?.addQueryParameter("app", OIDC_REDIRECT)
+            ?.addQueryParameter("state", state)
+            ?.build()?.toString()
+    }
+
+    /** Trades the one-time code the server handed back for the account's token. */
+    suspend fun oidcExchange(url: String, code: String): MStreamAccount = withContext(Dispatchers.IO) {
+        val base = normalizeUrl(url) ?: throw MStreamException("Not a server address")
+        val json = post(base, "api/v1/auth/oidc/exchange", token = null, body = JSONObject().put("code", code)) as JSONObject
+        val token = json.optString("token").takeIf { it.isNotEmpty() } ?: throw MStreamException("No token in the answer")
+        MStreamAccount(base.toString().trimEnd('/'), json.optString("username"), token)
     }
 
     /**

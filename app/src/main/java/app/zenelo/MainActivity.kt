@@ -27,6 +27,13 @@ class MainActivity : ComponentActivity() {
                 ZeneloRoot()
             }
         }
+        // Back from the browser's OIDC sign-in (zenelo://oidc?code=…); not again on a recreate.
+        if (savedInstanceState == null) container.oidc.handle(intent?.data)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        container.oidc.handle(intent.data)
     }
 
     override fun onStart() {

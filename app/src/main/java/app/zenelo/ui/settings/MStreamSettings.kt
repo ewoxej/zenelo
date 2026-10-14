@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.first
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -83,6 +85,18 @@ private fun LoginForm(onMessage: (String) -> Unit) {
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    // The server's single sign-on (OIDC), asked once the address stops changing.
+    var sso by remember { mutableStateOf<app.zenelo.mstream.OidcInfo?>(null) }
+    val ssoBusy by container.oidc.busy.collectAsStateWithLifecycle()
+    LaunchedEffect(url) {
+        sso = null
+        if (url.isBlank()) return@LaunchedEffect
+        kotlinx.coroutines.delay(600)
+        sso = container.mstream.oidcInfo(url)
+    }
+    // SSO set to come first (the server's "redirect to the provider"): the password form waits behind a link.
+    var passwordAnyway by remember { mutableStateOf(false) }
+    val passwords = sso?.passwordAllowed != false && (sso?.autoRedirect != true || passwordAnyway)
 
     SectionHeader("Connect")
     Column(Modifier.padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -92,6 +106,35 @@ private fun LoginForm(onMessage: (String) -> Unit) {
             color = ZeneloColors.TextSecondary,
         )
         Field(url, { url = it }, "Server address", "192.168.1.10:3000", KeyboardType.Uri)
+        sso?.let { info ->
+            val ssoButton: @Composable () -> Unit = {
+                if (ssoBusy) CircularProgressIndicator(color = ZeneloColors.Mustard, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                else Text("Sign in with SSO")
+            }
+            val open = {
+                if (!container.oidc.start(context, url)) error = "No browser to sign in with"
+            }
+            if (passwords) {
+                OutlinedButton(onClick = open, enabled = !ssoBusy, modifier = Modifier.fillMaxWidth()) { ssoButton() }
+            } else {
+                Button(
+                    onClick = open, enabled = !ssoBusy,
+                    colors = ButtonDefaults.buttonColors(containerColor = ZeneloColors.Mustard, contentColor = ZeneloColors.OnMustard),
+                    modifier = Modifier.fillMaxWidth(),
+                ) { ssoButton() }
+                if (info.passwordAllowed) {
+                    androidx.compose.material3.TextButton(onClick = { passwordAnyway = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Use a password instead", color = ZeneloColors.TextSecondary)
+                    }
+                } else {
+                    Text("This server signs in through SSO only.", style = MaterialTheme.typography.bodySmall, color = ZeneloColors.TextMuted)
+                }
+            }
+        }
+        if (!passwords) {
+            error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = ZeneloColors.Danger) }
+            return@Column
+        }
         Field(user, { user = it }, "User name", "", KeyboardType.Text)
         Field(password, { password = it }, "Password", "", KeyboardType.Password, secret = true)
         error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = ZeneloColors.Danger) }

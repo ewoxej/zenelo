@@ -78,6 +78,8 @@ class AppContainer(context: Context, upgradedInstall: Boolean) {
 
     val http = Http(context)
     val mstream = MStreamClient(http.client)
+    /** Sign-in through the server's OIDC provider (Authelia, …): the browser, then zenelo://oidc. */
+    val oidc = app.zenelo.mstream.MStreamOidc(context, mstream, settings, playbackMessages, appScope)
     val indexer = LibraryIndexer(db)
 
     /** Tag / cover writes; the playing file's wait for its track to end but show up everywhere at once. */
