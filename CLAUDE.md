@@ -286,11 +286,19 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   stream (`devices/events`), reports status + the queue as server paths (local tracks without a
   server copy are left out), runs commands (play/pause/next/previous/seek/goTo/setVolume/takeover)
   on the player, and moves playback with `playOn` (`devices/transfer`: the source pauses, the
-  target loads the queue at the position — `PlayQueue.load`). Pick-up: another device that
-  played later (`lastPlayedAt`, server clock; a device that only took a queue over doesn't count,
-  or two would hand it back and forth) and is now paused hands its queue over, loaded paused.
-  While another device plays and this one doesn't, the mini player is `RemoteMiniPlayer`
-  ("Playing on …", Play here); the devices sheet is in Now Playing's header.
+  target loads the queue at the position — `PlayQueue.load`). The player follows the device the
+  music is on (`MStreamDevices.followed`, unit-tested; the web app's `followed` is the same rule):
+  none while this one plays, else one playing, else the one that played last (`lastPlayedAt`,
+  server clock) if it's another one and online — so a paused device stays followed.
+  `PlayerController` then shows its state and sends it the transport; Now Playing's queue page is
+  its queue (`RemoteQueuePage`, a tap = `goTo`); "Playing / Paused on …" in the mini player and Now
+  Playing; the devices sheet (Now Playing's header, lit = playing) moves it. Starting something here
+  (not by a command) pauses the devices playing. Pick-up only from a device gone offline (its
+  queue loaded paused) — pausing an online one used to empty it and stop what it played.
+  Shuffle and repeat ("off" / "all" / "one" / "autodj") are in the status and set by commands
+  (`setShuffle`, `setRepeat`; Auto DJ through `MStreamDevices.setAutoDj`); while another device is
+  followed, the volume keys set its volume (`MainActivity.onKeyDown` → `adjustFollowedVolume`,
+  `RemoteVolumeHud` shows it) — only while the app is in front.
 
 ## mStream server fork
 `mStream/` is a git submodule: github.com/ewoxej/mStream, the user's fork of mStream (Node.js) — its

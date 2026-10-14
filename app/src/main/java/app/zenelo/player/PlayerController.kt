@@ -85,6 +85,8 @@ class PlayerController(
             mediaId = r.track?.serverPath?.let(app.zenelo.mstream.MStreamPaths::of),
             title = r.track?.title, artist = r.track?.artist, album = r.track?.album,
             isPlaying = r.playing, durationMs = r.track?.durationMs ?: 0L, remoteDevice = r,
+            shuffle = r.shuffle == true,
+            repeatMode = when (r.repeat) { "all" -> Player.REPEAT_MODE_ALL; "one" -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_OFF },
         )
     }
 
@@ -191,7 +193,18 @@ class PlayerController(
         if (!send("seek", org.json.JSONObject().put("positionMs", positionMs))) controller?.seekTo(positionMs)
     }
 
-    fun toggleShuffle() = controller?.takeIf { remote == null }?.run { shuffleModeEnabled = !shuffleModeEnabled }
+    fun toggleShuffle() {
+        val r = remote
+        if (r != null) { r.shuffle?.let { send("setShuffle", org.json.JSONObject().put("shuffle", !it)) }; return }
+        controller?.run { shuffleModeEnabled = !shuffleModeEnabled }
+    }
+
+    /** The followed device's repeat: off → all → one → Auto DJ → off (sent to it). */
+    fun cycleRemoteRepeat() {
+        val mode = remote?.repeat ?: return
+        val next = when (mode) { "off" -> "all"; "all" -> "one"; "one" -> "autodj"; else -> "off" }
+        send("setRepeat", org.json.JSONObject().put("mode", next))
+    }
 
     fun setRepeat(mode: Int) = controller?.takeIf { remote == null }?.run { repeatMode = mode }
 

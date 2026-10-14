@@ -256,7 +256,7 @@ fun NowPlayingScreen(
         // button in the top bar moves it).
         state.remoteDevice?.let { d ->
             Text(
-                "Playing on ${d.name}",
+                "${if (d.playing) "Playing" else "Paused"} on ${d.name}",
                 style = MaterialTheme.typography.bodySmall,
                 color = ZeneloColors.Mustard,
                 textAlign = TextAlign.Center,
@@ -277,7 +277,7 @@ fun NowPlayingScreen(
             when (page) {
                 PAGE_LYRICS -> LyricsPage(state, player)
                 PAGE_COVER -> CoverPage(state)
-                PAGE_QUEUE -> QueuePage(player)
+                PAGE_QUEUE -> state.remoteDevice?.let { RemoteQueuePage(it) } ?: QueuePage(player)
             }
         }
         coverMessage?.let {
@@ -360,7 +360,7 @@ private fun TopBar(
             IconButton(onClick = { devicesOpen = true }) { Icon(Icons.Outlined.Devices, "Devices") }
             if (devicesOpen) {
                 val c = appContainer()
-                app.zenelo.ui.components.DevicesSheet(state.isPlaying, onDismiss = { devicesOpen = false }) { c.playbackMessages.tryEmit(it) }
+                app.zenelo.ui.components.DevicesSheet(state.isPlaying && state.remoteDevice == null, onDismiss = { devicesOpen = false }) { c.playbackMessages.tryEmit(it) }
             }
         }
         Box {
@@ -694,6 +694,51 @@ private fun QueuePage(player: PlayerController) {
     }
 }
 
+/**
+ * The queue of the device the player follows (another one): read-only, a tap plays that track
+ * there. Fetched again when that device's queue changes (`queueRev`).
+ */
+@Composable
+private fun RemoteQueuePage(device: app.zenelo.mstream.PlaybackDevice) {
+    val devices = appContainer().devices
+    val remote by produceState<Pair<List<String>, Int>?>(null, device.id, device.queueRev) { value = devices.remoteQueue(device.id) }
+    val paths = remote?.first.orEmpty()
+    val current = device.index
+    val listState = rememberLazyListState()
+    LaunchedEffect(device.id, current, paths.size) {
+        if (current in paths.indices) listState.scrollToItem((current - 1).coerceAtLeast(0))
+    }
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp).height(40.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "UP NEXT · ${(paths.size - current - 1).coerceAtLeast(0)} · ON ${device.name.uppercase()}",
+                style = MaterialTheme.typography.labelSmall,
+                color = ZeneloColors.TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        LazyColumn(Modifier.fillMaxSize(), state = listState) {
+            itemsIndexed(paths, key = { i, p -> "$i:$p" }) { i, path ->
+                QueueRow(
+                    path = path,
+                    revision = 0,
+                    number = if (i < current) null else i - current + 1,
+                    isCurrent = i == current,
+                    played = i < current,
+                    dragging = false,
+                    selected = false,
+                    selecting = false,
+                    markLeft = false,
+                    onClick = { devices.command(device.id, "goTo", org.json.JSONObject().put("index", i)) },
+                    onLongClick = {},
+                    handle = {},
+                )
+            }
+        }
+    }
+}
+
 private fun firstOffsetIndex(showHistory: Boolean, history: Int) = if (showHistory) history else 0
 
 @Composable
@@ -936,7 +981,8 @@ private fun Transport(state: PlayerUiState, player: PlayerController) {
         // tapped shows until the setting catches up — else "repeat off" flashed before ∞.
         var tapped by remember { mutableStateOf<Boolean?>(null) }
         LaunchedEffect(saved) { if (tapped == saved) tapped = null }
-        val dj = server && (tapped ?: saved)
+        val remote = state.remoteDevice
+        val dj = if (remote != null) remote.repeat == "autodj" else server && (tapped ?: saved)
         ToggleTile(
             when {
                 dj -> Icons.Rounded.AllInclusive
@@ -947,6 +993,8 @@ private fun Transport(state: PlayerUiState, player: PlayerController) {
             active = dj || state.repeatMode != Player.REPEAT_MODE_OFF,
         ) {
             when {
+                // Following another device: its repeat (Auto DJ included) cycles there.
+                remote != null -> player.cycleRemoteRepeat()
                 dj -> {
                     tapped = false
                     container.autoDj.setEnabled(false) {}

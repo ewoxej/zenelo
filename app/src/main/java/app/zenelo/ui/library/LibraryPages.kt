@@ -88,11 +88,14 @@ import java.util.Locale
 /** Where the library pages lead: album, artist and genre pages. */
 class LibraryNav(val onOpenAlbum: (String) -> Unit, val onOpenArtist: (String) -> Unit, val onOpenGenre: (String) -> Unit = {})
 
-/** The playing track's path and its album key, for highlighting. */
+/**
+ * The playing track's path, for highlighting, and whether this phone plays (the Stop button): a
+ * device the player follows plays elsewhere, and Stop here wouldn't stop it.
+ */
 @Composable
 fun rememberNowPlaying(): Pair<String?, Boolean> {
     val state by appContainer().player.state.collectAsStateWithLifecycle()
-    return state.mediaId to state.isPlaying
+    return state.mediaId to (state.isPlaying && state.remoteDevice == null)
 }
 
 @Composable

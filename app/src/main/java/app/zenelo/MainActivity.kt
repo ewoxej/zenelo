@@ -1,6 +1,7 @@
 package app.zenelo
 
 import android.os.Bundle
+import android.view.KeyEvent
 import android.graphics.Color
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -34,8 +35,22 @@ class MainActivity : ComponentActivity() {
         LibraryWork.syncServerIfStale(this)
     }
 
+    // While another device is followed, the volume keys set its volume (this phone's is left alone).
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        val delta = when (keyCode) {
+            KeyEvent.KEYCODE_VOLUME_UP -> VOLUME_STEP
+            KeyEvent.KEYCODE_VOLUME_DOWN -> -VOLUME_STEP
+            else -> return super.onKeyDown(keyCode, event)
+        }
+        return container.devices.adjustFollowedVolume(delta) || super.onKeyDown(keyCode, event)
+    }
+
     override fun onStop() {
         container.player.release()
         super.onStop()
+    }
+
+    private companion object {
+        const val VOLUME_STEP = 5
     }
 }

@@ -56,6 +56,11 @@ data class PlaybackDevice(
     val track: RemoteTrack?,
     val queueLength: Int,
     val queueRev: Int = 0,
+    /** The current track's index in its queue (-1: none). */
+    val index: Int = -1,
+    /** Shuffle and repeat ("off" / "all" / "one" / "autodj"); null when the device doesn't report them. */
+    val shuffle: Boolean? = null,
+    val repeat: String? = null,
     /** ISO time it last reported playing (the server's clock). */
     val lastPlayedAt: String?,
     val updatedAt: String?,
@@ -73,11 +78,13 @@ data class PlaybackDevice(
  * Playback devices, Spotify Connect–like (server: the fork's `src/api/devices.js`). This phone is
  * one device while the playback service runs ([attach] … [detach]): it reports what it plays
  * (the queue as server paths — local tracks without a server copy can't move and are left out),
- * runs the commands other devices send, and sees them. The UI follows a device that plays while
- * this one doesn't ("Playing on …") and moves the playback with [playOn].
+ * runs the commands other devices send, and sees them. The player UI follows the device the music
+ * is on ([controlledDevice], [followed]): paused there it stays followed, so play / pause / next /
+ * a pick in the queue go to it. The playback moves only when something new is started here (the
+ * device playing so far pauses) or through the devices button ([playOn]).
  *
- * Pick-up: another device that played more recently than this one and is now paused (or gone)
- * hands its queue over — loaded here paused where it stopped, so play carries on.
+ * Pick-up: a device that played last and has gone offline leaves its queue here, paused where it
+ * stopped, so play carries on.
  *
  * The stream is Server-Sent Events over a long GET (OkHttp, read line by line).
  */
@@ -114,15 +121,18 @@ class MStreamDevices(
     private val _connected = MutableStateFlow(false)
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
 
+    /** Whether this phone plays (as last reported). */
+    private val localPlaying = MutableStateFlow(false)
+    /** The device the playback was just moved to, until it reports playing ([playOn]). */
+    private val hint = MutableStateFlow<String?>(null)
+    private var hintJob: Job? = null
+
     /**
-     * The other device this phone follows: the player UI shows it and its transport controls it
-     * (`PlayerController`). Taken up when a device starts playing while this phone doesn't, kept
-     * while it pauses, dropped when this phone plays, the device goes offline, or the devices
-     * button moves the playback.
+     * The other device this phone follows ([followed]): the player UI shows it and its transport
+     * controls it (`PlayerController`).
      */
-    private val _controlled = MutableStateFlow<String?>(null)
-    val controlledDevice: StateFlow<PlaybackDevice?> = combine(_devices, _controlled) { list, id ->
-        id?.let { i -> list.firstOrNull { it.id == i && it.online } }
+    val controlledDevice: StateFlow<PlaybackDevice?> = combine(_devices, localPlaying, hint) { list, playing, h ->
+        followed(list, selfId, playing, h)
     }.stateIn(scope, SharingStarted.Eagerly, null)
 
     private val attached = MutableStateFlow<Player?>(null)
@@ -137,6 +147,8 @@ class MStreamDevices(
     private var lastSentAt = 0L
     private var pickedKey = ""
     private var transferringUntil = 0L
+    /** When a command (another device's control, a transfer) last came in: the playback it starts isn't this phone taking over. */
+    private var commandedAt = 0L
 
     private val playerListener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) = scheduleReport()
@@ -173,7 +185,7 @@ class MStreamDevices(
         tickJob?.cancel()
         _connected.value = false
         _devices.value = emptyList()
-        _controlled.value = null
+        localPlaying.value = false
     }
 
     // ── The stream ──────────────────────────────────────────────────────
@@ -231,21 +243,37 @@ class MStreamDevices(
         when (event) {
             "devices" -> {
                 val list = json.optJSONArray("devices") ?: JSONArray()
-                _devices.value = List(list.length()) { parse(list.getJSONObject(it)) }
+                val old = _devices.value
+                _devices.value = List(list.length()) { i -> parse(list.getJSONObject(i)).let { d -> smoothed(old.firstOrNull { it.id == d.id }, d) } }
                 _connected.value = true
                 sentQueue = null
                 lastSig = ""
-                withContext(Dispatchers.Main) { updateFollow(); report(force = true); maybePickUp(account) }
+                withContext(Dispatchers.Main) { report(force = true); maybePickUp(account) }
             }
             "device" -> {
-                val d = parse(json)
-                _devices.update { l -> if (l.any { it.id == d.id }) l.map { if (it.id == d.id) d else it } else l + d }
-                withContext(Dispatchers.Main) { updateFollow(); maybePickUp(account) }
+                val fresh = parse(json)
+                lateinit var d: PlaybackDevice
+                _devices.update { l ->
+                    d = smoothed(l.firstOrNull { it.id == fresh.id }, fresh)
+                    if (l.any { it.id == d.id }) l.map { if (it.id == d.id) d else it } else l + d
+                }
+                if (d.playing && d.id == hint.value) hint.value = null
+                withContext(Dispatchers.Main) { maybePickUp(account) }
             }
             "removed" -> _devices.update { l -> l.filterNot { it.id == json.optString("id") } }
             "command" -> withContext(Dispatchers.Main) { run(json.optString("command"), json.optJSONObject("args")) }
         }
     }
+
+    /**
+     * A playing device's playhead runs on this phone's clock: a report keeps the running anchor
+     * unless it shows a jump (seek, another track, play / pause) — re-anchoring on each report made
+     * the seconds stutter.
+     */
+    private fun smoothed(old: PlaybackDevice?, d: PlaybackDevice): PlaybackDevice =
+        if (old != null && old.playing && d.playing && old.track?.serverPath == d.track?.serverPath && old.index == d.index &&
+            kotlin.math.abs(d.positionMs - old.positionNow()) < DRIFT_MS
+        ) d.copy(positionMs = old.positionMs, receivedAt = old.receivedAt) else d
 
     private fun parse(o: JSONObject): PlaybackDevice {
         fun str(j: JSONObject, k: String) = if (j.isNull(k)) null else j.optString(k).takeIf { it.isNotEmpty() }
@@ -261,6 +289,9 @@ class MStreamDevices(
             track = t?.let { RemoteTrack(it.optString("filepath"), str(it, "title"), str(it, "artist"), str(it, "album"), str(it, "art"), it.optLong("durationMs")) },
             queueLength = o.optInt("queueLength"),
             queueRev = o.optInt("queueRev"),
+            index = o.optInt("index", -1),
+            shuffle = if (o.isNull("shuffle") || !o.has("shuffle")) null else o.optBoolean("shuffle"),
+            repeat = str(o, "repeat"),
             lastPlayedAt = str(o, "lastPlayedAt"),
             updatedAt = str(o, "updatedAt"),
             receivedAt = SystemClock.elapsedRealtime(),
@@ -299,9 +330,19 @@ class MStreamDevices(
         val mediaId = p.currentMediaItem?.mediaId
         val serverTrack = l.serverOf(mediaId)
         val playing = p.playingNow()
-        // Playing here: this phone is where the sound is, nothing to follow.
-        if (playing) _controlled.value = null
-        val sig = listOf(index, playing, serverTrack, (p.volume * 100).toInt(), p.currentPosition / 2000).joinToString("|")
+        // Started here (not by a command): the music moves here, the devices playing so far pause.
+        if (playing && !localPlaying.value && SystemClock.elapsedRealtime() - commandedAt > 3000) {
+            _devices.value.filter { it.id != selfId && it.online && it.playing }.forEach { command(it.id, "pause") }
+        }
+        localPlaying.value = playing
+        val repeat = when {
+            autoDjOn -> "autodj"
+            p.repeatMode == Player.REPEAT_MODE_ONE -> "one"
+            p.repeatMode == Player.REPEAT_MODE_ALL -> "all"
+            else -> "off"
+        }
+        val shuffle = p.shuffleModeEnabled
+        val sig = listOf(index, playing, serverTrack, (p.volume * 100).toInt(), shuffle, repeat, p.currentPosition / 2000).joinToString("|")
         val queueChanged = serverPaths != sentQueue
         val now = SystemClock.elapsedRealtime()
         if (!force && !queueChanged && sig == lastSig && !(playing && now - lastSentAt > POSITION_EVERY_MS)) return
@@ -320,6 +361,8 @@ class MStreamDevices(
                 .put("positionMs", position.coerceAtLeast(0))
                 .put("playing", playing)
                 .put("volume", volume)
+                .put("shuffle", shuffle)
+                .put("repeat", repeat)
                 .put("track", if (serverTrack == null) JSONObject.NULL else JSONObject()
                     .put("filepath", MStreamPaths.serverPath(serverTrack))
                     .put("title", info?.title ?: meta.title?.toString() ?: MStreamPaths.fileName(serverTrack))
@@ -334,15 +377,26 @@ class MStreamDevices(
     }
 
     @Volatile private var currentAccount: MStreamAccount? = null
+    @Volatile private var autoDjOn = false
+
+    /** Turns Auto DJ on / off here (set by the container: Auto DJ lives elsewhere). */
+    var setAutoDj: ((Boolean) -> Unit)? = null
 
     init {
         scope.launch { settings.map { it.mstream }.distinctUntilChanged().collect { currentAccount = it } }
+        scope.launch {
+            settings.map { it.autoDj.enabled }.distinctUntilChanged().collect {
+                autoDjOn = it
+                scheduleReport()
+            }
+        }
     }
 
     // ── Commands from other devices (main thread) ───────────────────────
 
     private fun run(command: String, args: JSONObject?) {
         val p = attached.value ?: return
+        commandedAt = SystemClock.elapsedRealtime()
         when (command) {
             "play" -> p.play()
             "pause" -> p.pause()
@@ -352,6 +406,17 @@ class MStreamDevices(
             "seek" -> args?.optLong("positionMs", -1)?.takeIf { it >= 0 }?.let { p.seekTo(it) }
             "goTo" -> args?.optInt("index", -1)?.let { reportedIds.getOrNull(it) }?.let(queue::skipTo)
             "setVolume" -> args?.optInt("volume", -1)?.takeIf { it >= 0 }?.let { p.volume = (it / 100f).coerceIn(0f, 1f) }
+            "setShuffle" -> if (args?.has("shuffle") == true) p.shuffleModeEnabled = args.optBoolean("shuffle")
+            "setRepeat" -> when (val mode = args?.optString("mode")) {
+                "autodj" -> {
+                    p.repeatMode = Player.REPEAT_MODE_OFF
+                    if (!autoDjOn) setAutoDj?.invoke(true)
+                }
+                "off", "all", "one" -> {
+                    if (autoDjOn) setAutoDj?.invoke(false)
+                    p.repeatMode = when (mode) { "all" -> Player.REPEAT_MODE_ALL; "one" -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_OFF }
+                }
+            }
             "takeover" -> if (args != null) {
                 transferringUntil = SystemClock.elapsedRealtime() + 5000
                 load(args, args.optBoolean("play", true))
@@ -371,17 +436,6 @@ class MStreamDevices(
     }
 
     // ── Following another device (main thread) ──────────────────────────
-
-    private fun updateFollow() {
-        val list = _devices.value
-        val current = _controlled.value?.let { id -> list.firstOrNull { it.id == id } }
-        if (_controlled.value != null && current?.online != true) _controlled.value = null
-        if (attached.value?.playingNow() == true) return
-        // A device playing while this phone doesn't: follow it (another one that starts playing
-        // takes over from a followed device that is paused).
-        val playing = list.filter { it.id != selfId && it.online && it.playing }.maxByOrNull { it.updatedAt.orEmpty() } ?: return
-        if (current == null || !current.online || !current.playing) _controlled.value = playing.id
-    }
 
     /** The queue of another device: its library paths (as ours, `mstream://…`) and the current index. */
     suspend fun remoteQueue(id: String): Pair<List<String>, Int>? = withContext(Dispatchers.IO) {
@@ -404,10 +458,9 @@ class MStreamDevices(
         if (p.playingNow() || SystemClock.elapsedRealtime() < transferringUntil) return
         val list = _devices.value
         if (list.any { it.id != selfId && it.online && it.playing }) return   // follow it instead
-        val me = list.firstOrNull { it.id == selfId }
-        val best = list.filter { it.id != selfId && it.lastPlayedAt != null && it.queueLength > 0 }
-            .maxByOrNull { it.lastPlayedAt!! } ?: return
-        if (me?.lastPlayedAt != null && best.lastPlayedAt!! <= me.lastPlayedAt) return
+        // Who played last: a device still online is followed, not emptied; this phone keeps its own queue.
+        val best = list.filter { it.lastPlayedAt != null && it.queueLength > 0 }.maxByOrNull { it.lastPlayedAt!! } ?: return
+        if (best.id == selfId || best.online) return
         val key = "${best.id}|${best.lastPlayedAt}"
         if (key == pickedKey) return
         pickedKey = key
@@ -425,10 +478,6 @@ class MStreamDevices(
 
     // ── Actions for the UI ──────────────────────────────────────────────
 
-    /** The device the bar follows: one playing while this phone doesn't. */
-    fun activeRemote(list: List<PlaybackDevice>, localPlaying: Boolean): PlaybackDevice? =
-        if (localPlaying) null else list.filter { it.id != selfId && it.online && it.playing }.maxByOrNull { it.updatedAt.orEmpty() }
-
     fun command(to: String, command: String, args: JSONObject? = null) {
         val account = currentAccount ?: return
         if (command == "playPause" || command == "play" || command == "pause") {
@@ -441,11 +490,42 @@ class MStreamDevices(
                 }
             }
         }
+        if (command == "setShuffle" || command == "setRepeat" || command == "setVolume") {
+            _devices.update { l ->
+                l.map {
+                    if (it.id != to || args == null) it else when (command) {
+                        "setShuffle" -> it.copy(shuffle = args.optBoolean("shuffle"))
+                        "setRepeat" -> it.copy(repeat = args.optString("mode"))
+                        else -> it.copy(volume = args.optInt("volume"))
+                    }
+                }
+            }
+        }
         scope.launch(Dispatchers.IO) {
             val body = JSONObject().put("from", selfId).put("to", to).put("command", command)
             if (args != null) body.put("args", args)
             runCatching { post(account, "api/v1/devices/command", body) }
         }
+    }
+
+    /** The followed device's volume after a volume key, for the overlay (null: hidden). */
+    private val _volumeHud = MutableStateFlow<Pair<String, Int>?>(null)
+    val volumeHud: StateFlow<Pair<String, Int>?> = _volumeHud.asStateFlow()
+    private var hudJob: Job? = null
+
+    /**
+     * A volume key while another device is followed: its volume moves by [delta] (0–100) instead
+     * of this phone's. False when nothing is followed (the key does what it always does).
+     */
+    fun adjustFollowedVolume(delta: Int): Boolean {
+        val d = controlledDevice.value ?: return false
+        if (d.volume == null) return false
+        val volume = (d.volume + delta).coerceIn(0, 100)
+        command(d.id, "setVolume", JSONObject().put("volume", volume))
+        _volumeHud.value = d.name to volume
+        hudJob?.cancel()
+        hudJob = scope.launch { delay(1500); _volumeHud.value = null }
+        return true
     }
 
     /** Moves the playback to [to] (this phone or another device). Returns a message for the UI, or null. */
@@ -457,27 +537,28 @@ class MStreamDevices(
         val from = when {
             localPlaying -> selfId
             controlledDevice.value != null -> controlledDevice.value!!.id
-            activeRemote(list, false) != null -> activeRemote(list, false)!!.id
             queue.state.value.total > 0 -> selfId
             else -> list.filter { it.lastPlayedAt != null && it.queueLength > 0 }.maxByOrNull { it.lastPlayedAt!! }?.id ?: selfId
         }
         if (from == to) {
-            if (to == selfId) withContext(Dispatchers.Main) { _controlled.value = null; p.play() } else {
-                _controlled.value = to
-                command(to, "play")
-            }
+            if (to == selfId) withContext(Dispatchers.Main) { commandedAt = SystemClock.elapsedRealtime(); p.play() } else command(to, "play")
             return null
         }
         if (from == selfId) withContext(Dispatchers.Main) { report(force = true) }
         delay(if (from == selfId) 400 else 0)
         transferringUntil = SystemClock.elapsedRealtime() + 15_000
+        hintJob?.cancel()
+        hint.value = to.takeIf { it != selfId }
+        if (hint.value != null) hintJob = scope.launch { delay(8000); hint.value = null }
         return try {
             val r = withContext(Dispatchers.IO) { post(account, "api/v1/devices/transfer", transferBody(from, to, play = true)) }
             if (!r.optBoolean("ok")) return if (r.optString("reason") == "offline") "That device is offline" else "Nothing to move"
             withContext(Dispatchers.Main) {
-                if (to == selfId) r.optJSONObject("state")?.let { load(it, play = true) }
+                if (to == selfId) {
+                    commandedAt = SystemClock.elapsedRealtime()
+                    r.optJSONObject("state")?.let { load(it, play = true) }
+                }
                 if (from == selfId && p.playingNow()) p.pause()
-                _controlled.value = if (to == selfId) null else to
             }
             if (to != selfId) "Playing on ${list.firstOrNull { it.id == to }?.name ?: "the other device"}" else null
         } catch (e: Exception) {
@@ -511,9 +592,24 @@ class MStreamDevices(
         }
     }
 
-    private companion object {
-        const val TAG = "Zenelo"
-        const val POSITION_EVERY_MS = 10_000L
-        val JSON = "application/json".toMediaType()
+    companion object {
+        /**
+         * The other device the player follows (null: this phone). Nothing while this phone plays;
+         * else [hint] (the playback was just moved there); else one playing (the latest to start);
+         * else the one that played last, when that isn't this phone and it's still online — so a
+         * device paused stays followed, and this phone's own pause keeps its own player.
+         */
+        fun followed(list: List<PlaybackDevice>, selfId: String, localPlaying: Boolean, hint: String? = null): PlaybackDevice? {
+            if (localPlaying) return null
+            hint?.let { h -> list.firstOrNull { it.id == h && it.online } }?.let { return it }
+            list.filter { it.id != selfId && it.online && it.playing }.maxByOrNull { it.lastPlayedAt.orEmpty() }?.let { return it }
+            val last = list.filter { it.lastPlayedAt != null && it.queueLength > 0 }.maxByOrNull { it.lastPlayedAt!! }
+            return last?.takeIf { it.id != selfId && it.online }
+        }
+
+        private const val TAG = "Zenelo"
+        private const val POSITION_EVERY_MS = 10_000L
+        private const val DRIFT_MS = 2500L
+        private val JSON = "application/json".toMediaType()
     }
 }

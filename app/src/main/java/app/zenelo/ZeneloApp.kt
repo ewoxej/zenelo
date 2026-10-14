@@ -142,7 +142,10 @@ class AppContainer(context: Context, upgradedInstall: Boolean) {
     }
     val player = PlayerController(context, queue, coverOverride)
     /** This phone as a playback device of the mStream account (started by PlaybackService). */
-    val devices = app.zenelo.mstream.MStreamDevices(context, http.client, db, settings.settings, queue, serverLinks, network.online, appScope).also { player.attachDevices(it) }
+    val devices = app.zenelo.mstream.MStreamDevices(context, http.client, db, settings.settings, queue, serverLinks, network.online, appScope).also { d ->
+        player.attachDevices(d)
+        d.setAutoDj = { on -> autoDj.setEnabled(on) { player.playFiles(it) } }
+    }
 
     /** Refreshes the queue / Now Playing (tags) and the thumbnails / Now Playing cover after a write. */
     private fun showChange(path: String, cover: File?) {

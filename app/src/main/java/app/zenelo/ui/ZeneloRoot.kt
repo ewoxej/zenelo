@@ -310,7 +310,7 @@ private fun MainContent(settings: ZeneloSettings) {
             Section.FOLDERS -> BrowserScreen(
                 browserViewModel,
                 currentMediaId = playerState.mediaId,
-                isPlaying = playerState.isPlaying,
+                isPlaying = playerState.isPlaying && playerState.remoteDevice == null,
                 isActive = isActive,
             )
             Section.FAVORITES -> FavoritesScreen(
@@ -412,6 +412,7 @@ private fun MainContent(settings: ZeneloSettings) {
         // Under the messages: a short one covers the popup for a moment.
         DownloadPopup(Modifier.align(Alignment.BottomCenter).padding(bottom = bottomReserved))
         LibraryMessages(libraryViewModel, Modifier.align(Alignment.BottomCenter).padding(bottom = bottomReserved))
+        app.zenelo.ui.components.RemoteVolumeHud(Modifier.align(Alignment.TopCenter))
 
         // Sonic Path ends set from any menu open its screen (over Now Playing too); Auto DJ's failures show here.
         LaunchedEffect(Unit) {
@@ -631,7 +632,7 @@ private fun MiniPlayer(state: PlayerUiState, player: PlayerController, sheet: Pl
                 Text(state.title ?: "", style = MaterialTheme.typography.bodyLarge, maxLines = 1, modifier = Modifier.marquee())
                 val device = state.remoteDevice
                 if (device != null) {
-                    Text("Playing on ${device.name}", style = MaterialTheme.typography.bodySmall, color = ZeneloColors.Mustard, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("${if (device.playing) "Playing" else "Paused"} on ${device.name}", style = MaterialTheme.typography.bodySmall, color = ZeneloColors.Mustard, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 } else state.artist?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = ZeneloColors.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }

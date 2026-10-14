@@ -1,6 +1,15 @@
 package app.zenelo.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.automirrored.rounded.VolumeDown
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -11,34 +20,19 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.DevicesOther
 import androidx.compose.material.icons.outlined.Smartphone
 import androidx.compose.material.icons.rounded.GraphicEq
-import androidx.compose.material.icons.rounded.Pause
-import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -46,74 +40,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import app.zenelo.mstream.MStreamPaths
 import app.zenelo.mstream.PlaybackDevice
 import app.zenelo.ui.theme.PlexMono
 import app.zenelo.ui.theme.PlexSans
 import app.zenelo.ui.theme.ZeneloColors
-import kotlinx.coroutines.delay
 
 private fun typeIcon(type: String): ImageVector = when (type) {
     "android" -> Icons.Outlined.Smartphone
     "web", "desktop" -> Icons.Outlined.Computer
     else -> Icons.Outlined.DevicesOther
-}
-
-/** The other device the player follows: one playing while this phone doesn't (null otherwise). */
-@Composable
-fun rememberActiveRemote(localPlaying: Boolean): PlaybackDevice? {
-    val devices = appContainer().devices
-    val list by devices.devices.collectAsStateWithLifecycle()
-    return devices.activeRemote(list, localPlaying)
-}
-
-/**
- * The mini player while another device plays: its track, the orange play ("Play here": the sound
- * moves to this phone), and pause / next for that device. Opens Now Playing like the local one
- * ([modifier] carries the tap and the drag), which then shows that device too.
- */
-@Composable
-fun RemoteMiniPlayer(remote: PlaybackDevice, onMessage: (String) -> Unit, modifier: Modifier = Modifier) {
-    val devices = appContainer().devices
-    var now by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(remote) { while (true) { now = remote.positionNow(); delay(500) } }
-    val duration = remote.track?.durationMs ?: 0L
-    Column(modifier.fillMaxWidth().background(ZeneloColors.Bar)) {
-        LinearProgressIndicator(
-            progress = { if (duration > 0) now.toFloat() / duration else 0f },
-            modifier = Modifier.fillMaxWidth().height(2.dp),
-            color = ZeneloColors.Mustard,
-            trackColor = ZeneloColors.Bar,
-            drawStopIndicator = {},
-            gapSize = 0.dp,
-        )
-        Row(Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            CoverImage(remote.track?.let { MStreamPaths.of(it.serverPath) }, Modifier.size(38.dp), shape = RoundedCornerShape(4.dp))
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(remote.track?.title ?: "", style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(typeIcon(remote.type), null, tint = ZeneloColors.Mustard, modifier = Modifier.size(13.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        "Playing on ${remote.name}",
-                        style = TextStyle(fontFamily = PlexSans, fontSize = 11.5.sp, color = ZeneloColors.Mustard),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-            // Play here: the sound moves to this phone.
-            IconButton(onClick = { devices.playOnLater(devices.selfId, onMessage) }) {
-                Icon(Icons.Rounded.PlayArrow, "Play here", tint = ZeneloColors.Mustard)
-            }
-            IconButton(onClick = { devices.command(remote.id, "playPause") }) {
-                Icon(if (remote.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Play/pause")
-            }
-            IconButton(onClick = { devices.command(remote.id, "next") }) { Icon(Icons.Rounded.SkipNext, "Next") }
-        }
-        HorizontalDivider(color = ZeneloColors.Background, thickness = 1.dp)
-    }
 }
 
 /**
@@ -127,8 +62,6 @@ fun DevicesSheet(localPlaying: Boolean, onDismiss: () -> Unit, onMessage: (Strin
     val list by devices.devices.collectAsStateWithLifecycle()
     val connected by devices.connected.collectAsStateWithLifecycle()
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val remote = devices.controlledDevice.collectAsStateWithLifecycle().value
-    val current = if (localPlaying) devices.selfId else remote?.id
     val others = list.filter { it.id != devices.selfId && it.online }.sortedWith(compareByDescending<PlaybackDevice> { it.playing }.thenBy { it.name })
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state, containerColor = ZeneloColors.Bar) {
@@ -138,7 +71,7 @@ fun DevicesSheet(localPlaying: Boolean, onDismiss: () -> Unit, onMessage: (Strin
                 if (!connected) Text("OFFLINE", style = CaptionStyle)
             }
             Spacer(Modifier.height(8.dp))
-            DeviceRow(Icons.Outlined.Smartphone, "${devices.name} · this phone", if (localPlaying) "Playing" else "Ready", on = current == devices.selfId) {
+            DeviceRow(Icons.Outlined.Smartphone, "${devices.name} · this phone", if (localPlaying) "Playing" else "Ready", on = localPlaying) {
                 onDismiss()
                 devices.playOnLater(devices.selfId, onMessage)
             }
@@ -157,14 +90,14 @@ fun DevicesSheet(localPlaying: Boolean, onDismiss: () -> Unit, onMessage: (Strin
                         d.track != null -> "Paused · ${d.track.title.orEmpty()}"
                         else -> "Idle"
                     }
-                    DeviceRow(typeIcon(d.type), d.name, status, on = current == d.id) {
+                    DeviceRow(typeIcon(d.type), d.name, status, on = d.playing) {
                         onDismiss()
                         devices.playOnLater(d.id, onMessage)
                     }
                 }
             }
             Text(
-                "Tap a device to move the playback there. A queue paused on one device is picked up on the next.",
+                "Tap a device to move the playback there. The player follows the device the music is on, paused too: its controls and queue act there.",
                 style = TextStyle(fontFamily = PlexSans, fontSize = 11.5.sp, lineHeight = 16.sp, color = ZeneloColors.TextMuted),
                 modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp),
             )
@@ -197,5 +130,42 @@ private fun DeviceRow(icon: ImageVector, name: String, status: String, on: Boole
             )
             Text(status, style = TextStyle(fontFamily = PlexMono, fontSize = 11.sp, color = ZeneloColors.TextMuted), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+    }
+}
+
+/** The followed device's volume after a volume key (`MStreamDevices.adjustFollowedVolume`). */
+@Composable
+fun RemoteVolumeHud(modifier: Modifier = Modifier) {
+    val (name, volume) = appContainer().devices.volumeHud.collectAsStateWithLifecycle().value ?: return
+    Row(
+        modifier
+            .statusBarsPadding()
+            .padding(top = 12.dp)
+            .width(240.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(ZeneloColors.Card)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(
+            when { volume == 0 -> Icons.AutoMirrored.Rounded.VolumeOff; volume < 50 -> Icons.AutoMirrored.Rounded.VolumeDown; else -> Icons.AutoMirrored.Rounded.VolumeUp },
+            null,
+            tint = ZeneloColors.Mustard,
+            modifier = Modifier.size(20.dp),
+        )
+        Column(Modifier.weight(1f)) {
+            Text(name, style = TextStyle(fontFamily = PlexSans, fontSize = 12.sp, color = ZeneloColors.TextSecondary), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(5.dp))
+            LinearProgressIndicator(
+                progress = { volume / 100f },
+                modifier = Modifier.fillMaxWidth().height(3.dp),
+                color = ZeneloColors.Mustard,
+                trackColor = ZeneloColors.Background,
+                drawStopIndicator = {},
+                gapSize = 0.dp,
+            )
+        }
+        Text("$volume", style = TextStyle(fontFamily = PlexMono, fontSize = 12.sp, color = ZeneloColors.TextMuted))
     }
 }
