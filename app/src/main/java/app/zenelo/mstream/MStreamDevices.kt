@@ -140,8 +140,9 @@ class MStreamDevices(
     private var reportJob: Job? = null
     private var tickJob: Job? = null
 
-    /** Queue ids of the entries last reported, index-aligned (for `goTo`). */
+    /** Queue ids of the entries last reported, index-aligned (for `goTo`, `remove`), and their server paths. */
     private var reportedIds: List<Int> = emptyList()
+    private var reportedPaths: List<String> = emptyList()
     private var sentQueue: List<String>? = null
     private var lastSig = ""
     private var lastSentAt = 0L
@@ -348,6 +349,7 @@ class MStreamDevices(
         lastSig = sig
         lastSentAt = now
         reportedIds = ids
+        reportedPaths = serverPaths
         val info = mediaId?.let(queue::cachedInfo)
         val meta = p.mediaMetadata
         val duration = p.duration.takeIf { it > 0 } ?: info?.durationMs ?: 0L
@@ -419,6 +421,20 @@ class MStreamDevices(
             "takeover" -> if (args != null) {
                 transferringUntil = SystemClock.elapsedRealtime() + 5000
                 load(args, args.optBoolean("play", true))
+            }
+            // From guests of Play on (the fork's api/guest.js): queue server tracks, take one out.
+            "enqueue" -> args?.optJSONArray("paths")?.let { list ->
+                val files = List(list.length()) { list.optString(it) }.filter { it.isNotBlank() }
+                    .map { AudioFile.forPath(MStreamPaths.of(it)) }
+                if (files.isNotEmpty()) {
+                    Log.i(TAG, "devices: guest queues ${files.size} track(s), next=${args.optBoolean("next")}")
+                    if (args.optBoolean("next")) queue.playNext(files) else queue.add(files)
+                }
+            }
+            "remove" -> {
+                val i = args?.optInt("index", -1) ?: -1
+                val id = reportedIds.getOrNull(i)
+                if (id != null && reportedPaths.getOrNull(i) == args?.optString("path")) queue.remove(setOf(id))
             }
         }
         scope.launch(Dispatchers.Main) { delay(400); report(force = true) }

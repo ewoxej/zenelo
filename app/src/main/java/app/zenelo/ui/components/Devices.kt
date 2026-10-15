@@ -23,7 +23,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.DevicesOther
+import androidx.compose.material.icons.outlined.QrCode2
 import androidx.compose.material.icons.outlined.Smartphone
+import androidx.compose.material.icons.outlined.Speaker
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
@@ -31,6 +33,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -48,16 +53,22 @@ import app.zenelo.ui.theme.ZeneloColors
 private fun typeIcon(type: String): ImageVector = when (type) {
     "android" -> Icons.Outlined.Smartphone
     "web", "desktop" -> Icons.Outlined.Computer
+    "server" -> Icons.Outlined.Speaker
     else -> Icons.Outlined.DevicesOther
 }
 
 /**
  * The devices of the mStream account: this phone and the others with what they play. A tap moves
- * the playback there (the device playing so far pauses).
+ * the playback there (the device playing so far pauses). "Invite guests" opens [GuestsSheet].
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DevicesSheet(localPlaying: Boolean, onDismiss: () -> Unit, onMessage: (String) -> Unit) {
+    var inviting by remember { mutableStateOf(false) }
+    if (inviting) {
+        GuestsSheet(onDismiss = onDismiss, onMessage = onMessage)
+        return
+    }
     val devices = appContainer().devices
     val list by devices.devices.collectAsStateWithLifecycle()
     val connected by devices.connected.collectAsStateWithLifecycle()
@@ -95,6 +106,9 @@ fun DevicesSheet(localPlaying: Boolean, onDismiss: () -> Unit, onMessage: (Strin
                         devices.playOnLater(d.id, onMessage)
                     }
                 }
+            }
+            if (connected) {
+                DeviceRow(Icons.Outlined.QrCode2, "Invite guests", "A link or QR code to control a device", on = false) { inviting = true }
             }
             Text(
                 "Tap a device to move the playback there. The player follows the device the music is on, paused too: its controls and queue act there.",

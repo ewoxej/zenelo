@@ -284,7 +284,8 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
 - Playback devices (Spotify Connect–like; needs the fork's `src/api/devices.js`): `MStreamDevices`
   (attached by `PlaybackService`, so the phone is a device while the service runs) long-polls
   `devices/poll` (not the SSE `devices/events`: behind Cloudflare not a byte of the stream came through), reports status + the queue as server paths (local tracks without a
-  server copy are left out), runs commands (play/pause/next/previous/seek/goTo/setVolume/takeover)
+  server copy are left out), runs commands (play/pause/next/previous/seek/goTo/setVolume/takeover; `enqueue` /
+  `remove` from guests — `remove` checks the reported path at the index)
   on the player, and moves playback with `playOn` (`devices/transfer`: the source pauses, the
   target loads the queue at the position — `PlayQueue.load`). The player follows the device the
   music is on (`MStreamDevices.followed`, unit-tested; the web app's `followed` is the same rule):
@@ -307,13 +308,29 @@ changes go there (commit in the submodule, then the new submodule commit here); 
 notes above still refer to upstream behaviour unless stated otherwise.
 `git clone --recurse-submodules`, or `git submodule update --init` in an existing checkout.
 Docker image `ghcr.io/ewoxej/mstream-zenelo` (`Dockerfile`, `docker/`, workflows `docker.yml` =
-run by hand (edge / sha-…; both install a pinned ffmpeg into `bin/ffmpeg` for the unit tests), `docker-release.yml` = manual release): its version is the fork's own `VERSION`
+run by hand (edge / sha-…; both install a pinned ffmpeg into `bin/ffmpeg` for the unit tests), `docker-release.yml` = manual release;
+the image has ALSA + its PulseAudio plugin for server speakers on a Linux host — `/dev/snd`, or the host's pulse socket with
+`PULSE_SERVER` (the entrypoint then routes ALSA to it); fetched binaries persist in `/config/data`, see `docker/README.md`): its version is the fork's own `VERSION`
 file, separate from upstream's `package.json`; releases are tagged `zenelo-v<version>`. The admin's update
 check (`src/util/update-check.js`, `src/util/fork.js`) watches the fork's `zenelo-v…` releases, not upstream's
 (installing an upstream build would drop the fork), and only says which image to pull.
 The old Vue UI (`webapp/classic`, `webapp/alpha`, the standalone `/stats` page) is gone: `/classic` and `/stats`
-redirect to the player. `/server-remote` (server speakers) is the player with `mstream.server-audio.js` as its engine;
+redirect to the player. Server audio is a device: while the engine runs, "Server speakers" (`src/state/server-device.js`,
+unit-tested; type `server`) is among the devices of admins and `allow_server_audio` users — status / queue polled from
+the engine, the devices' commands and transfers (`takeover`) turned into engine calls; `/server-remote` (the old page
+and `mstream.server-audio.js`) is gone, it redirects to the player;
 Discover's plug-in jobs (get a network / peer track into the library) are `webapp/app/jobs.js` + `screens/discover-get.js`.
+Guests (replaced the Jukebox, gone with its WebSocket and `/remote`): a guest link (`src/api/guest.js`,
+`src/state/guest-links.js`, kept in `guest-links.json` beside the DB; the web app's Guests screen makes them, QR
+included) lets someone without an account control one device: the page `/guest/#<token>` sees what plays and
+the queue, searches, queues (`enqueue`), skips, pauses, sets the volume, removes (`remove`). A guest token reaches
+only `/api/v1/guest/*` and album art (auth.js). Links last 1 h / 12 h / 7 days or until revoked.
+The app makes them too: the devices sheet's "Invite guests" → `GuestsSheet` (device, duration, name; share / copy /
+revoke; the QR code drawn from `POST api/v1/devices/guests/qr`, a module matrix — the app has no QR encoder).
+Visualizer (`webapp/app/viz.js`): 20 butterchurn presets (`butterchurn-presets-zenelo.js`, picked for reacting most
+to the beat) driven by the music (`viz-drive.js`, unit-tested): an envelope (a hit at once, silence / pause fades it
+out), a per-hit pulse and a tempo speed scale the presets' per-frame motion (appended to their equations), their
+clock and the brightness.
 Single sign-on (`src/api/oidc.js`, admin page "Single sign-on", config `oidc`): the server is an OIDC client
 (Authelia…; code + PKCE + secret, profile / groups from userinfo). Existing users only (username claim), optional
 access / admin groups, mode off / optional / required (required: no password sign-in, password sessions refused;

@@ -19,6 +19,14 @@ data class MStreamAccount(val url: String, val username: String, val token: Stri
 /** The server's OIDC sign-in: whether passwords still work there, and whether SSO is meant to come first. */
 data class OidcInfo(val passwordAllowed: Boolean, val autoRedirect: Boolean)
 
+/** A guest link of Play on (the fork's api/guest.js): someone without an account controls [device]. */
+data class GuestLink(val id: String, val device: String, val deviceName: String, val label: String, val expiresAt: Long?, val token: String)
+
+/** A QR code: [size]² modules, row by row, '1' = dark. */
+data class QrMatrix(val size: Int, val modules: String) {
+    fun dark(x: Int, y: Int): Boolean = modules[y * size + x] == '1'
+}
+
 /** Where the server hands an OIDC sign-in back to the app (its registered redirect, `oidc.appRedirects`). */
 const val OIDC_REDIRECT = "zenelo://oidc"
 
@@ -367,6 +375,44 @@ class MStreamClient(base: OkHttpClient) {
         post(base, "api/v1/playlist/delete", account.token, JSONObject().put("playlistname", name))
         Unit
     }
+
+    /** The user's guest links (newest last). */
+    suspend fun guestLinks(account: MStreamAccount): List<GuestLink> = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url(url(account, "api/v1/devices/guests")).header("x-access-token", account.token).build()
+        client.newCall(request).execute().use { r ->
+            val text = r.body?.string().orEmpty()
+            if (!r.isSuccessful) throw error(r.code, text)
+            val array = JSONObject(text).optJSONArray("links") ?: JSONArray()
+            List(array.length()) { array.getJSONObject(it) }.map { o ->
+                GuestLink(
+                    id = o.optString("id"), device = o.optString("device"), deviceName = o.optString("deviceName"),
+                    label = o.optString("label"), expiresAt = parseTime(o.opt("expiresAt")), token = o.optString("token"),
+                )
+            }
+        }
+    }
+
+    /** Makes a guest link for [device] lasting [duration] ("1h", "12h", "7d", "never"); returns its id. */
+    suspend fun createGuestLink(account: MStreamAccount, device: String, duration: String, label: String): String = withContext(Dispatchers.IO) {
+        val base = "${account.url}/".toHttpUrlOrNull() ?: throw MStreamException("Bad address")
+        val o = post(base, "api/v1/devices/guests", account.token, JSONObject().put("device", device).put("duration", duration).put("label", label)) as JSONObject
+        o.optString("id")
+    }
+
+    suspend fun revokeGuestLink(account: MStreamAccount, id: String) = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url(url(account, "api/v1/devices/guests/$id")).header("x-access-token", account.token).delete().build()
+        client.newCall(request).execute().use { r -> if (!r.isSuccessful && r.code != 404) throw error(r.code, r.body?.string().orEmpty()) }
+    }
+
+    /** The QR code of [text], made by the server (the app has no encoder). */
+    suspend fun qr(account: MStreamAccount, text: String): QrMatrix = withContext(Dispatchers.IO) {
+        val base = "${account.url}/".toHttpUrlOrNull() ?: throw MStreamException("Bad address")
+        val o = post(base, "api/v1/devices/guests/qr", account.token, JSONObject().put("text", text)) as JSONObject
+        QrMatrix(o.optInt("size"), o.optString("modules"))
+    }
+
+    /** The page a guest opens: the token rides the fragment, never sent in a request. */
+    fun guestUrl(account: MStreamAccount, token: String): String = "${account.url.trimEnd('/')}/guest/#$token"
 
     /** The server's transcoded stream of a track (`/transcode/<vpath>/<rel>`). */
     fun transcodeUrl(account: MStreamAccount, serverPath: String, codec: String, bitrate: String): HttpUrl =
