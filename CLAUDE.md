@@ -307,6 +307,9 @@ web UI restyled after Zenelo, plus new server features. Not part of the Gradle b
 changes go there (commit in the submodule, then the new submodule commit here); the app's API
 notes above still refer to upstream behaviour unless stated otherwise.
 `git clone --recurse-submodules`, or `git submodule update --init` in an existing checkout.
+The fork's CI is `docker.yml` / `docker-release.yml` (and `test.yml` on a `full-ci`-labelled PR); upstream's workflows
+(Bun / launcher / parser builds that commit binaries, API docs, npm, demo, website, manifest updates) are kept
+manual-only (`workflow_dispatch`) — their push / release / schedule triggers fired on fork commits.
 Docker image `ghcr.io/ewoxej/mstream-zenelo` (`Dockerfile`, `docker/`, workflows `docker.yml` =
 run by hand (edge / sha-…; both install a pinned ffmpeg into `bin/ffmpeg` for the unit tests), `docker-release.yml` = manual release;
 the image has ALSA + its PulseAudio plugin for server speakers on a Linux host — `/dev/snd`, or the host's pulse socket with
@@ -327,6 +330,10 @@ the queue, searches, queues (`enqueue`), skips, pauses, sets the volume, removes
 only `/api/v1/guest/*` and album art (auth.js). Links last 1 h / 12 h / 7 days or until revoked.
 The app makes them too: the devices sheet's "Invite guests" → `GuestsSheet` (device, duration, name; share / copy /
 revoke; the QR code drawn from `POST api/v1/devices/guests/qr`, a module matrix — the app has no QR encoder).
+Web player caching: the next tracks of the queue (setting `prefetchAhead`, default 2, ≤ 400 MB) are fetched whole
+into blob URLs (`webapp/app/prefetch.js`; the engine plays them via `MSTREAMPLAYER.cachedUrl`) — no stalls between
+tracks; the All tracks list is kept in IndexedDB per server + account (`app/idb.js`, `library.allSongs`), shown at
+once and refetched only when the sync manifest's revision changed (a 304 otherwise); dropped on log out.
 Visualizer (`webapp/app/viz.js`): 20 butterchurn presets (`butterchurn-presets-zenelo.js`, picked for reacting most
 to the beat) driven by the music (`viz-drive.js`, unit-tested): an envelope (a hit at once, silence / pause fades it
 out), a per-hit pulse and a tempo speed scale the presets' per-frame motion (appended to their equations), their
