@@ -532,10 +532,13 @@ fun rememberUnplayable(path: String?, remote: Boolean = app.zenelo.mstream.MStre
     return links.localOf(path) == null && !container.mstreamFiles.isCached(path)
 }
 
-/** A local file or server track the server knows (a server track, or a local file with a server copy). */
+/**
+ * A local file or server track the server knows (a server track, or a local file with a server
+ * copy). A federated peer's track isn't our server's.
+ */
 @Composable
 fun rememberOnServer(path: String?): Boolean {
-    if (path == null) return false
+    if (path == null || app.zenelo.mstream.MStreamPaths.isPeer(path)) return false
     if (app.zenelo.mstream.MStreamPaths.isRemote(path)) return true
     return rememberDownloaded(path)
 }

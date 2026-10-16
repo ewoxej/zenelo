@@ -1,5 +1,7 @@
 package app.zenelo.player
 
+import app.zenelo.mstream.MStreamPaths
+
 import android.util.LruCache
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
@@ -119,6 +121,10 @@ class PlayQueue(
 
     private val infoCache = LruCache<String, TrackEntity>(2000)
 
+    /** Tags of a federated peer's track (not in the index): what browsing it found. */
+    @Volatile
+    var peerInfo: (String) -> TrackEntity? = { null }
+
     private val _state = MutableStateFlow(QueueSnapshot.EMPTY)
     val state: StateFlow<QueueSnapshot> = _state.asStateFlow()
 
@@ -177,7 +183,7 @@ class PlayQueue(
     }
 
     /** Tags for queue rows; cached, loaded from the index on demand. */
-    suspend fun info(path: String): TrackEntity? = infoCache.get(path) ?: tracks.get(path)?.also { infoCache.put(path, it) }
+    suspend fun info(path: String): TrackEntity? = infoCache.get(path) ?: (tracks.get(path) ?: peerInfo(path))?.also { infoCache.put(path, it) }
 
     fun cachedInfo(path: String): TrackEntity? = infoCache.get(path)
 
@@ -504,6 +510,7 @@ class PlayQueue(
         val wanted = positions.map(::pathAt)
         val missing = wanted.distinct().filter { infoCache.get(it) == null }
         if (missing.isNotEmpty()) tracks.getMany(missing).forEach { infoCache.put(it.path, it) }
+        missing.filter { MStreamPaths.isPeer(it) }.forEach { p -> peerInfo(p)?.let { infoCache.put(p, it) } }
         val infos = wanted.mapNotNull { infoCache.get(it) }
         val covers = fetcher.localCovers(infos)
         return wanted.map { path ->

@@ -27,6 +27,7 @@ class RemoteMedia(
     private val context: Context,
     private val client: MStreamClient,
     private val files: MStreamFiles,
+    private val peers: MStreamPeers,
     private val loadAccount: suspend () -> MStreamAccount?,
 ) {
     /** The current login, pushed from settings; read on the loader thread. */
@@ -46,6 +47,16 @@ class RemoteMedia(
         return ResolvingDataSource.Factory(DefaultDataSource.Factory(context, http)) { spec ->
             if (spec.uri.scheme != SCHEME) return@Factory spec
             val serverPath = spec.uri.getQueryParameter("p") ?: throw IOException("No mStream path in ${spec.uri}")
+            // A federated peer's track: streamed through our server's proxy (no transcoding there).
+            if (MStreamPaths.isPeer(MStreamPaths.of(serverPath))) {
+                val login = account ?: runBlocking { loadAccount() }?.also { account = it }
+                    ?: throw IOException("Not connected to an mStream server")
+                Log.i(TAG, "open ${serverPath.substringAfterLast('/')} from a peer")
+                return@Factory spec.buildUpon()
+                    .setUri(Uri.parse(peers.streamUrl(login, MStreamPaths.of(serverPath)).toString()))
+                    .setHttpRequestHeaders(spec.httpRequestHeaders + ("x-access-token" to login.token))
+                    .build()
+            }
             // Downloaded or in the queue cache: the file, no network.
             files.localCopy(MStreamPaths.of(serverPath))?.let {
                 Log.i(TAG, "open ${serverPath.substringAfterLast('/')} from ${it.path}")

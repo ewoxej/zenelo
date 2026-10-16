@@ -329,6 +329,7 @@ private fun MainContent(settings: ZeneloSettings) {
             Section.RECENT -> RecentScreen(libraryViewModel, onBack)
             Section.GENRES -> GenresScreen(libraryViewModel, libraryNav, onBack)
             Section.SONIC_PATH -> SonicPathScreen(libraryViewModel::showMessage, onPick = { nav.navigate(Routes.sonicPick(it)) }, onBack = onBack)
+            Section.DISCOVER -> app.zenelo.ui.discover.DiscoverScreen(libraryViewModel::showMessage, onOpenArtist = libraryNav.onOpenArtist, onBack = onBack)
         }
     }
 
@@ -429,6 +430,9 @@ private fun MainContent(settings: ZeneloSettings) {
             }
         }
         LaunchedEffect(Unit) { container.autoDj.messages.collect(libraryViewModel::showMessage) }
+        LaunchedEffect(Unit) { container.peers.messages.collect(libraryViewModel::showMessage) }
+        // The visualizer (Now Playing's button): over everything, the player sheet included.
+        val vizOpen by container.visualizerOpen.collectAsStateWithLifecycle()
         LaunchedEffect(Unit) { container.playbackMessages.collect(libraryViewModel::showMessage) }
 
         // The player sheet: collapsed it is just the mini player above the tab bar; dragged up it
@@ -504,6 +508,7 @@ private fun MainContent(settings: ZeneloSettings) {
                 }
             }
         }
+        if (vizOpen) app.zenelo.ui.nowplaying.VisualizerOverlay(onDismiss = { container.visualizerOpen.value = false })
     }
 }
 

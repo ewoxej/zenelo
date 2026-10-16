@@ -91,6 +91,7 @@ import app.zenelo.data.settings.DEFAULT_FILENAME_PATTERNS
 import app.zenelo.data.settings.QueueSwipeAction
 import app.zenelo.data.settings.QueueSwipeSlot
 import app.zenelo.data.settings.PullDownArea
+import app.zenelo.data.settings.PlayerButton
 import app.zenelo.data.settings.SelectionMarkerSide
 import app.zenelo.data.settings.SwipeAction
 import app.zenelo.library.FilenamePattern
@@ -301,6 +302,12 @@ private fun InterfaceSettings(onOpenSwipeSettings: () -> Unit, onCustomizeHome: 
         choices = PullDownArea.entries,
         label = { it.label },
     ) { scope.launch { repo.setPullDownArea(it) } }
+    ChoiceRow(
+        title = "Player header button",
+        current = settings.playerButton,
+        choices = PlayerButton.entries,
+        label = { it.label },
+    ) { scope.launch { repo.setPlayerButton(it) } }
     ChoiceRow(
         title = "Selection mark",
         current = settings.selectionMarker,

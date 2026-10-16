@@ -21,6 +21,27 @@ object MStreamPaths {
 
     /** Parent folder, in our form: `mstream://music/Artist/Album`. */
     fun dir(path: String): String = path.substringBeforeLast('/')
+
+    /**
+     * A federated peer's track, browsed and played through our server (never in the index):
+     * `mstream://@peer/<peer id>/<the peer's vpath>/<rel>`. Library names are letters, digits and
+     * dashes, so `@peer` never names one of ours. Such a path is remote (no file here) but not our
+     * server's: [isServer] is false and [ServerLinks] gives it no server track.
+     */
+    private const val PEER = "@peer/"
+
+    fun isPeer(path: String?): Boolean = path != null && path.startsWith(SCHEME + PEER)
+
+    /** One of our server's tracks (not a peer's). */
+    fun isServer(path: String?): Boolean = isRemote(path) && !isPeer(path)
+
+    fun peer(peerId: Long, peerPath: String): String = SCHEME + PEER + peerId + "/" + peerPath.trimStart('/')
+
+    /** The peer of a peer path (or folder index dir), null for anything else. */
+    fun peerId(path: String): Long? = if (isPeer(path)) path.removePrefix(SCHEME + PEER).substringBefore('/').toLongOrNull() else null
+
+    /** The peer's own path (`<vpath>/<rel>`) of a peer path; "" for the peer's root. */
+    fun peerPath(path: String): String = path.removePrefix(SCHEME + PEER).substringAfter('/', "")
 }
 
 /**
@@ -39,6 +60,11 @@ object RemoteFolders {
     /** `mstream://music/A` → `/mstream/music/A`. */
     fun folder(indexDir: String): java.io.File =
         if (indexDir.length <= MStreamPaths.SCHEME.length) ROOT else java.io.File(ROOT, indexDir.removePrefix(MStreamPaths.SCHEME))
+
+    /** A peer's root folder in the browser (`/mstream/@peer/<id>`): its libraries below. */
+    fun peerRoot(peerId: Long): java.io.File = java.io.File(ROOT, "@peer/$peerId")
+
+    fun isPeer(dir: java.io.File?): Boolean = dir != null && isRemote(dir) && MStreamPaths.isPeer(indexDir(dir))
 
     /** The index dir for any folder: remote ones mapped, local ones as they are. */
     fun indexPath(dir: java.io.File): String = if (isRemote(dir)) indexDir(dir) else dir.absolutePath

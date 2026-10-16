@@ -72,7 +72,7 @@ class MStreamDownloads(
 
     /** Queues server tracks for download (local ones and those already downloaded are skipped). */
     suspend fun enqueue(paths: List<String>): Int {
-        val wanted = paths.distinct().filter { MStreamPaths.isRemote(it) && !files.isDownloaded(it) && files.downloaded(it) == null }
+        val wanted = paths.distinct().filter { MStreamPaths.isServer(it) && !files.isDownloaded(it) && files.downloaded(it) == null }
         db.downloads().add(wanted.map { DownloadEntity(it) })
         return wanted.size
     }
@@ -124,13 +124,13 @@ class MStreamDownloads(
      * show when nothing was queued; else null — the download popup ([progress]) shows at once.
      */
     suspend fun request(paths: List<String>): String? {
-        val remote = paths.count(MStreamPaths::isRemote)
+        val remote = paths.count(MStreamPaths::isServer)
         if (remote == 0) return "Already on the device"
         val queued = enqueue(paths)
         if (queued == 0) return "Already downloaded"
         val running = _progress.value?.takeIf { !it.finished }
         _progress.value = running?.copy(count = running.count + queued)
-            ?: Progress(db.tracks().get(paths.first(MStreamPaths::isRemote))?.title, count = queued)
+            ?: Progress(db.tracks().get(paths.first(MStreamPaths::isServer))?.title, count = queued)
         LibraryWork.downloadNow(context)
         return null
     }
@@ -197,7 +197,7 @@ class MStreamDownloads(
                 else kotlinx.coroutines.flow.flowOf(emptyList())
             }
             combine(db.playlists().observeKeptPaths(), favorites, links.links, settings.settings.map { it.mstream != null }.distinctUntilChanged()) { kept, liked, linked, server ->
-                if (!server) emptyList() else (kept + liked).distinct().filter { MStreamPaths.isRemote(it) && linked.localOf(it) == null }
+                if (!server) emptyList() else (kept + liked).distinct().filter { MStreamPaths.isServer(it) && linked.localOf(it) == null }
             }.debounce(KEEP_DEBOUNCE_MS).distinctUntilChanged().collect { wanted ->
                 if (wanted.isEmpty()) return@collect
                 val queued = db.downloads().paths().toHashSet()
@@ -211,7 +211,7 @@ class MStreamDownloads(
         scope.launch {
             combine(queue.state, settings.settings) { snapshot, s ->
                 if (!s.autoDownload || s.mstream == null) emptyList()
-                else (1 until minOf(snapshot.size, s.autoDownloadAhead + 1)).map { snapshot.pathAt(it) }.filter(MStreamPaths::isRemote)
+                else (1 until minOf(snapshot.size, s.autoDownloadAhead + 1)).map { snapshot.pathAt(it) }.filter(MStreamPaths::isServer)
             }.distinctUntilChanged().collectLatest { ahead -> cacheAhead(ahead) }
         }
     }

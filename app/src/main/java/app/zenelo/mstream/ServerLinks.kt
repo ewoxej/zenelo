@@ -35,6 +35,7 @@ class ServerLinks(private val db: ZeneloDatabase, private val scope: CoroutineSc
         /** The server's track for [path]: itself for a server track, its link for a local file. */
         fun serverOf(path: String?): String? = when {
             path == null -> null
+            MStreamPaths.isPeer(path) -> null
             MStreamPaths.isRemote(path) -> path
             else -> toServer[path]
         }

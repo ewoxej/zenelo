@@ -63,7 +63,7 @@ class MStreamFiles(context: Context, base: OkHttpClient, private val links: Serv
      * one in the download folder, else in the queue cache (using it keeps it from eviction longest).
      */
     fun localCopy(path: String): File? {
-        if (!MStreamPaths.isRemote(path)) return null
+        if (!MStreamPaths.isServer(path)) return null
         links.current.localOf(path)?.let(::File)?.takeIf { it.isFile }?.let { return it }
         downloaded(path)?.let { return it }
         return cached(path)?.also { it.setLastModified(System.currentTimeMillis()) }

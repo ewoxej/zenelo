@@ -24,6 +24,10 @@ import java.security.MessageDigest
  * decoded at once so fast scrolling through a 7000-file folder doesn't flood the disk.
  */
 class Thumbnails(context: Context, private val tracks: TrackDao, private val fetcher: MetadataFetcher) {
+    /** Tags of a federated peer's track (not in the index). */
+    @Volatile
+    var peerInfo: (String) -> TrackEntity? = { null }
+
     private val dir = File(context.cacheDir, "thumbs").apply { mkdirs() }
     private val largeDir = File(context.cacheDir, "thumbs-large").apply { mkdirs() }
     private val memory = object : LruCache<String, Bitmap>(12 * 1024 * 1024) {
@@ -82,7 +86,7 @@ class Thumbnails(context: Context, private val tracks: TrackDao, private val fet
                 val bitmap = if (cached.exists()) {
                     BitmapFactory.decodeFile(cached.path)
                 } else {
-                    val info = tracks.get(path)
+                    val info = tracks.get(path) ?: peerInfo(path)
                     val bytes = if (MStreamPaths.isRemote(path)) remoteSource(info) else source(file, info)
                     bytes?.let { decode(it, if (large) LARGE else SIZE)?.also { b -> save(b, cached) } }
                 }

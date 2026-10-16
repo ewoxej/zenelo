@@ -77,6 +77,15 @@ enum class SelectionMarkerSide(val label: String) {
     RIGHT("Right"),
 }
 
+/** The one button in Now Playing's header beside ⋮ (the rest are in ⋮). */
+enum class PlayerButton(val label: String) {
+    DEVICES("Play on device"),
+    VISUALIZER("Visualizer"),
+    ADD_TO_PLAYLIST("Add to playlist"),
+    GO_TO_ALBUM("Go to album"),
+    NONE("None"),
+}
+
 /** When mStream tracks are streamed transcoded (the server's `/transcode`) instead of as the file. */
 enum class TranscodeMode(val label: String) {
     OFF("Off · original files"),
@@ -135,6 +144,7 @@ data class ZeneloSettings(
     val lastTab: Section? = null,
     val pullDownArea: PullDownArea = PullDownArea.TOP_THIRD,
     val selectionMarker: SelectionMarkerSide = SelectionMarkerSide.RIGHT,
+    val playerButton: PlayerButton = PlayerButton.DEVICES,
     val shuffleMode: ShuffleMode = ShuffleMode.TRACKS,
     /** Split multi-artist tags ("A; B") on these; empty = never split. See [ArtistSplitter]. */
     val artistSeparators: List<String> = ArtistSplitter.DEFAULT_SEPARATORS,
@@ -359,6 +369,7 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
     suspend fun setPullDownArea(area: PullDownArea) = store.edit { it[PULL_DOWN_AREA] = area.name }
 
     suspend fun setSelectionMarker(side: SelectionMarkerSide) = store.edit { it[SELECTION_MARKER] = side.name }
+    suspend fun setPlayerButton(button: PlayerButton) = store.edit { it[PLAYER_BUTTON] = button.name }
 
     suspend fun setQueueHistory(value: Boolean) = store.edit { it[QUEUE_HISTORY] = value }
 
@@ -415,6 +426,7 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
         lastTab = this[LAST_TAB]?.let { enumOrNull<Section>(it) },
         pullDownArea = this[PULL_DOWN_AREA]?.let { enumOrNull<PullDownArea>(it) } ?: PullDownArea.TOP_THIRD,
         selectionMarker = this[SELECTION_MARKER]?.let { enumOrNull<SelectionMarkerSide>(it) } ?: SelectionMarkerSide.RIGHT,
+        playerButton = this[PLAYER_BUTTON]?.let { enumOrNull<PlayerButton>(it) } ?: PlayerButton.DEVICES,
         filenamePatterns = this[FILENAME_PATTERNS]?.split('\n')?.filter(String::isNotBlank) ?: DEFAULT_FILENAME_PATTERNS,
         artistSeparators = this[ARTIST_SEPARATORS]?.split('\n')?.filter(String::isNotBlank) ?: ArtistSplitter.DEFAULT_SEPARATORS,
         mstream = this[MSTREAM_TOKEN]?.let { token ->
@@ -499,6 +511,7 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
         val BROWSER_SORT = stringPreferencesKey("browser_sort")
         val PULL_DOWN_AREA = stringPreferencesKey("pull_down_area")
         val SELECTION_MARKER = stringPreferencesKey("selection_marker")
+        val PLAYER_BUTTON = stringPreferencesKey("player_button")
         val ALBUMS_VIEW = stringPreferencesKey("albums_view")
         val ARTISTS_VIEW = stringPreferencesKey("artists_view")
         val TABS = stringPreferencesKey("tabs")

@@ -122,6 +122,58 @@ class MStreamTest {
     }
 
     @Test
+    fun peerPaths() {
+        val p = MStreamPaths.peer(3, "shared/Nova/Night Ferry/01 #1?.mp3")
+        assertEquals("mstream://@peer/3/shared/Nova/Night Ferry/01 #1?.mp3", p)
+        // Remote (no file here), but not our server's: never sent to its API.
+        assertTrue(MStreamPaths.isRemote(p))
+        assertTrue(MStreamPaths.isPeer(p))
+        assertFalse(MStreamPaths.isServer(p))
+        assertTrue(MStreamPaths.isServer(MStreamPaths.of("music/a.mp3")))
+        assertEquals(3L, MStreamPaths.peerId(p))
+        assertEquals("shared/Nova/Night Ferry/01 #1?.mp3", MStreamPaths.peerPath(p))
+        assertNull(MStreamPaths.peerId(MStreamPaths.of("music/a.mp3")))
+        assertNull(ServerLinks.Links(emptyList()).serverOf(p))
+
+        // Its folders in the browser, under the mStream root.
+        val root = RemoteFolders.peerRoot(3)
+        assertEquals("mstream://@peer/3", RemoteFolders.indexDir(root))
+        assertEquals("", MStreamPaths.peerPath(RemoteFolders.indexDir(root)))
+        val album = java.io.File(root, "shared/Nova/Night Ferry")
+        assertTrue(RemoteFolders.isPeer(album))
+        assertEquals(MStreamPaths.dir(p), RemoteFolders.indexDir(album))
+        assertEquals(album, RemoteFolders.folder(MStreamPaths.dir(p)))
+        assertFalse(RemoteFolders.isPeer(java.io.File("/mstream/music")))
+        assertFalse(RemoteFolders.isPeer(java.io.File("/storage/emulated/0/@peer/3")))
+    }
+
+    @Test
+    fun leadsAndJobs() {
+        val peer = Lead.of(JSONObject("""{"title":"Glide","artist":"Nova","album":"Second Wind","duration":40.1,"similarity":0.91,
+            "filepath":"shared/Nova/Second Wind/02 Glide.mp3","peer":{"id":1,"name":"Peer NAS"},"genreTags":["x"]}"""), peers = true)
+        assertTrue(peer.fromPeer)
+        assertEquals(1L, peer.peerId)
+        assertEquals("federation", peer.raw.getString("source"))
+        val net = Lead.of(JSONObject("""{"title":"Song","artist":"Band","album":null,"duration":null,"similarity":0.5,
+            "recordingMbid":"abc","peer":{"endpointId":"e1","name":"A server"}}"""), peers = false)
+        assertFalse(net.fromPeer)
+        assertNull(net.album)
+        assertNull(net.durationSec)
+        assertEquals("p2p", net.raw.getString("source"))
+
+        val album = DiscoverJob.of(JSONObject("""{"id":7,"plugin":"federation-copy","state":"running","progress":0.25,"statusText":"2 of 8",
+            "recommendation":{"title":"Glide","artist":"Nova","album":"Second Wind"},"params":{"scope":"album"}}"""))
+        assertTrue(album.live)
+        assertEquals("Second Wind · Nova", album.title)
+        assertEquals(0.25, album.progress!!, 0.0)
+        val folder = DiscoverJob.of(JSONObject("""{"id":8,"plugin":"federation-copy","state":"done","progress":null,
+            "recommendation":{"filepath":"shared/Nova/Night Ferry"},"params":{"scope":"folder"}}"""))
+        assertFalse(folder.live)
+        assertEquals("Night Ferry", folder.title)
+        assertNull(folder.progress)
+    }
+
+    @Test
     fun serverTimes() {
         assertEquals(1_790_709_133_745L, MStreamClient.parseTime("2026-09-29 19:12:13.745"))
         assertEquals(1_790_709_133_000L, MStreamClient.parseTime("2026-09-29T19:12:13Z"))

@@ -64,6 +64,12 @@ class AppContainer(context: Context, upgradedInstall: Boolean) {
     /** Path of the track the service is playing; files in use are never rewritten. */
     val nowPlaying = MutableStateFlow<String?>(null)
 
+    /** The player's audio session while the playback service runs (0: none), for the visualizer. */
+    val audioSession = MutableStateFlow(0)
+
+    /** The visualizer is open (full screen over the whole app, drawn by the root). */
+    val visualizerOpen = MutableStateFlow(false)
+
     /**
      * Cover found for the playing track while it plays (download or manual pick): shown by the UI
      * right away, without touching the player's items, which would interrupt playback.
@@ -121,10 +127,19 @@ class AppContainer(context: Context, upgradedInstall: Boolean) {
     val mstreamDownloads = MStreamDownloads(context, db, settings, mstream, mstreamFiles, indexer, queue, serverLinks, appScope).also { it.start() }
     val autoDj = MStreamAutoDj(db, settings, mstream, queue, serverLinks, network.online, appScope).also { it.start() }
     val sonicPath = MStreamSonicPath(db, settings, mstream, serverLinks, network.online, appScope)
+    /** Federated peers (browsed, played through our server) and Discover's plug-in jobs. */
+    val peers = app.zenelo.mstream.MStreamPeers(mstream, settings, network.online, appScope) {
+        app.zenelo.work.LibraryWork.syncServer(context, force = true)
+    }.also { it.start() }
 
     init {
         fileBrowser.hidden = { hidden.current.value }
         fileBrowser.copies = { serverLinks.current.copiesOf(it) }
+        fileBrowser.peers = peers
+        // Peers' tracks aren't indexed: their tags and covers come from what was browsed.
+        queue.peerInfo = peers::info
+        thumbnails.peerInfo = peers::info
+        metadata.peerArt = peers::art
         autoDj.hidden = { hidden.current.value }
         // Likes of server tracks become ratings on the server (and unlikes clear them).
         @OptIn(kotlinx.coroutines.FlowPreview::class)

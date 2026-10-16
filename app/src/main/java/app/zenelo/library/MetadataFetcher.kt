@@ -43,6 +43,10 @@ class MetadataFetcher(
     private val pendingWrites: PendingWrites,
     private val mstream: MStreamClient,
 ) {
+    /** A federated peer's cover of one of its tracks (set by the app container). */
+    @Volatile
+    var peerArt: suspend (String) -> ByteArray? = { null }
+
     private val remoteTracks = db.remoteTracks()
     private val covers = db.covers()
     private val lyrics = db.lyrics()
@@ -244,6 +248,7 @@ class MetadataFetcher(
 
     /** The server's album art for one of its tracks, or null (none, or not reachable). */
     private suspend fun serverCover(track: TrackEntity): ByteArray? {
+        if (MStreamPaths.isPeer(track.path)) return peerArt(track.path)
         val account = settings.settings.first().mstream ?: return null
         val art = remoteTracks.get(track.path)?.artFile ?: return null
         return mstream.albumArt(account, art)
@@ -252,7 +257,7 @@ class MetadataFetcher(
     /** Lyrics stored on the server for one of its tracks, saved like any other; null when it has none. */
     private suspend fun serverLyrics(track: TrackEntity): LyricsEntity? {
         val account = settings.settings.first().mstream ?: return null
-        if (remoteTracks.get(track.path)?.hasLyrics != true) return null
+        if (MStreamPaths.isPeer(track.path) || remoteTracks.get(track.path)?.hasLyrics != true) return null
         val (synced, plain) = runCatching { mstream.lyrics(account, MStreamPaths.serverPath(track.path)) }.getOrNull() ?: return null
         if (synced == null && plain == null) return null
         return LyricsEntity(track.path, synced, plain, false, SOURCE_MSTREAM, now()).also { lyrics.upsert(it) }

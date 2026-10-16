@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.LibraryAdd
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.MusicNote
@@ -47,6 +48,7 @@ import app.zenelo.ui.components.SortToggle
 import app.zenelo.ui.components.SelectionBar
 import app.zenelo.ui.components.SelectableLeading
 import app.zenelo.ui.components.IconMenuItem
+import app.zenelo.ui.components.appContainer
 import app.zenelo.ui.components.TrackMenu
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -172,6 +174,8 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
         if (selected.isEmpty()) selecting = false
     }
     fun startSelection(path: String) {
+        // A peer's rows: play, queue and "Add to my library" from their menus, no selection.
+        if (viewModel.onPeer) return
         selecting = true
         selected = selected + path
     }
@@ -282,6 +286,7 @@ fun BrowserScreen(viewModel: BrowserViewModel, currentMediaId: String?, isPlayin
                                 onAction = { viewModel.onSwipe(file, it) },
                                 onEditTags = { tagEditorFor = file.path },
                                 onFindCover = { coverPickerFor = file.path },
+                                onCopy = { scope -> viewModel.copyTrack(file, scope) },
                             )
                         }
                     }
@@ -399,6 +404,11 @@ private fun TopBar(state: BrowserState, canGoUp: Boolean, sortOpen: Boolean, onS
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                // A peer's folder (below its libraries): copied whole into our library.
+                val dir = state.dir
+                if (dir != null && RemoteFolders.isPeer(dir) && app.zenelo.mstream.MStreamPaths.peerPath(RemoteFolders.indexDir(dir)).contains('/') && rememberCanCopy()) {
+                    IconButton(onClick = { viewModel.copyFolder(dir) }) { Icon(Icons.Outlined.LibraryAdd, "Add this folder to my library", Modifier.size(22.dp), tint = ZeneloColors.Celadon) }
+                }
                 IconButton(onClick = { viewModel.setSearching(true) }) { Icon(Icons.Rounded.Search, "Search", Modifier.size(22.dp)) }
                 SortToggle(sortOpen, onSort)
             }
@@ -480,6 +490,7 @@ private fun TrackRow(
     onAction: (SwipeAction) -> Unit,
     onEditTags: () -> Unit,
     onFindCover: () -> Unit,
+    onCopy: (scope: String?) -> Unit,
 ) {
     ListRow(
         title = file.name,
@@ -493,6 +504,8 @@ private fun TrackRow(
         trailing = {
             if (selecting) {
                 if (!markLeft) SelectionMark(selected, Modifier.padding(horizontal = 10.dp))
+            } else if (MStreamPaths.isPeer(file.path)) {
+                PeerTrackMenu(info, onAction, onCopy)
             } else {
                 TrackMenu(onAction, onEditTags, onFindCover, local = !MStreamPaths.isRemote(file.path), path = file.path)
             }
@@ -543,12 +556,56 @@ private fun FolderMenu(folder: File, viewModel: BrowserViewModel) {
             Icon(Icons.Rounded.MoreVert, "More", tint = ZeneloColors.TextMuted, modifier = Modifier.size(20.dp))
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            val peer = RemoteFolders.isPeer(folder)
             IconMenuItem("Play", Icons.Rounded.PlayArrow, ZeneloColors.Mustard) { menu = false; viewModel.playSubtree(folder, shuffle = false) }
             IconMenuItem("Shuffle", Icons.Rounded.Shuffle, ZeneloColors.Celadon) { menu = false; viewModel.playSubtree(folder, shuffle = true) }
             IconMenuItem("Play next", SwipeAction.PLAY_NEXT.icon, SwipeAction.PLAY_NEXT.accent) { menu = false; viewModel.queueSubtree(folder, next = true) }
             IconMenuItem("Add to queue", SwipeAction.ADD_TO_QUEUE.icon, SwipeAction.ADD_TO_QUEUE.accent) { menu = false; viewModel.queueSubtree(folder, next = false) }
-            IconMenuItem("Favorite", SwipeAction.FAVORITE.icon, SwipeAction.FAVORITE.accent) { menu = false; viewModel.toggleFolderFavorite(folder) }
-            IconMenuItem("Add to playlist…", SwipeAction.ADD_TO_PLAYLIST.icon, SwipeAction.ADD_TO_PLAYLIST.accent) { menu = false; viewModel.addFolderToPlaylist(folder) }
+            if (peer) {
+                // The peer's libraries themselves are too big a press: their folders one by one.
+                if (app.zenelo.mstream.MStreamPaths.peerPath(RemoteFolders.indexDir(folder)).contains('/') && rememberCanCopy()) {
+                    IconMenuItem("Add to my library", Icons.Outlined.LibraryAdd, ZeneloColors.Celadon) { menu = false; viewModel.copyFolder(folder) }
+                }
+            } else {
+                IconMenuItem("Favorite", SwipeAction.FAVORITE.icon, SwipeAction.FAVORITE.accent) { menu = false; viewModel.toggleFolderFavorite(folder) }
+                IconMenuItem("Add to playlist…", SwipeAction.ADD_TO_PLAYLIST.icon, SwipeAction.ADD_TO_PLAYLIST.accent) { menu = false; viewModel.addFolderToPlaylist(folder) }
+            }
+        }
+    }
+}
+
+/** The server copies peers' songs into the library for this account. */
+@Composable
+private fun rememberCanCopy(): Boolean {
+    val plugins by appContainer().peers.plugins.collectAsStateWithLifecycle()
+    return plugins.any { it.name == app.zenelo.mstream.MStreamPeers.COPY }
+}
+
+/**
+ * A federated peer's track: queue it, or have the server copy it into our library — the song, its
+ * album or everything of its artist there.
+ */
+@Composable
+private fun PeerTrackMenu(info: TrackEntity?, onAction: (SwipeAction) -> Unit, onCopy: (scope: String?) -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    val scopes = appContainer().peers.plugins.collectAsStateWithLifecycle().value
+        .firstOrNull { it.name == app.zenelo.mstream.MStreamPeers.COPY }?.scopes
+    Box {
+        IconButton(onClick = { menu = true }, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Rounded.MoreVert, "More", tint = ZeneloColors.TextMuted, modifier = Modifier.size(20.dp))
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            IconMenuItem("Play next", SwipeAction.PLAY_NEXT.icon, SwipeAction.PLAY_NEXT.accent) { menu = false; onAction(SwipeAction.PLAY_NEXT) }
+            IconMenuItem("Add to queue", SwipeAction.ADD_TO_QUEUE.icon, SwipeAction.ADD_TO_QUEUE.accent) { menu = false; onAction(SwipeAction.ADD_TO_QUEUE) }
+            if (scopes != null) {
+                IconMenuItem("Add to my library", Icons.Outlined.LibraryAdd, ZeneloColors.Celadon) { menu = false; onCopy(null) }
+                if (info?.album != null && "album" in scopes) {
+                    IconMenuItem("Add the album", Icons.Outlined.LibraryAdd, ZeneloColors.Celadon) { menu = false; onCopy("album") }
+                }
+                if (info?.artist != null && "artist-missing" in scopes) {
+                    IconMenuItem("Add the artist's albums I lack", Icons.Outlined.LibraryAdd, ZeneloColors.Celadon) { menu = false; onCopy("artist-missing") }
+                }
+            }
         }
     }
 }

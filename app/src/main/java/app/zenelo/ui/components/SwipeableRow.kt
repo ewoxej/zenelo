@@ -222,6 +222,7 @@ private fun rememberSwipeTarget(path: String?, folder: Boolean, cloudInside: Int
             onServer = path != null && links.serverOf(path) != null,
             folder = folder,
             cloudInside = cloudInside,
+            peer = path != null && (app.zenelo.mstream.MStreamPaths.isPeer(path) || app.zenelo.mstream.RemoteFolders.isPeer(java.io.File(path))),
         )
     }
 }

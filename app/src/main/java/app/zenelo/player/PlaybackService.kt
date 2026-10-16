@@ -92,7 +92,7 @@ class PlaybackService : MediaSessionService() {
     )
 
     /** Opens mStream tracks with the current login; kept up to date from settings. */
-    private val remoteMedia by lazy { RemoteMedia(this, container.mstream, container.mstreamFiles) { container.settings.settings.first().mstream } }
+    private val remoteMedia by lazy { RemoteMedia(this, container.mstream, container.mstreamFiles, container.peers) { container.settings.settings.first().mstream } }
 
     override fun onCreate() {
         super.onCreate()
@@ -114,6 +114,7 @@ class PlaybackService : MediaSessionService() {
             .setWakeMode(C.WAKE_MODE_LOCAL)
             .build()
         player.addListener(PlayerListener())
+        container.audioSession.value = player.audioSessionId
         container.queue.attach(player)
         container.devices.attach(player)
         crossfader = Crossfader(
@@ -231,6 +232,8 @@ class PlaybackService : MediaSessionService() {
         if (playCounted) return
         listenedMs += LISTEN_TICK_MS
         val path = player.currentMediaItem?.mediaId ?: return
+        // A peer's track: not ours, not in Recently played or the server's plays.
+        if (MStreamPaths.isPeer(path)) return
         if (listenedMs >= Library.playThresholdMs(player.duration.coerceAtLeast(0L))) {
             playCounted = true
             val played = listenedMs
@@ -248,6 +251,7 @@ class PlaybackService : MediaSessionService() {
         savePosition(now = true)
         // Nothing plays any more: every waiting write can go to its file.
         container.nowPlaying.value = null
+        container.audioSession.value = 0
         flushPendingWrites()
         crossfader.release()
         container.devices.detach()
@@ -395,6 +399,10 @@ class PlaybackService : MediaSessionService() {
     }
 
     private inner class PlayerListener : Player.Listener {
+        override fun onAudioSessionIdChanged(audioSessionId: Int) {
+            container.audioSession.value = audioSessionId
+        }
+
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             // Why tracks change and positions jump: `adb logcat -s Zenelo` when chasing a skip / rewind.
             Log.i(TAG, "track ${mediaItem?.mediaId?.substringAfterLast('/')} reason=${transitionReason(reason)} fading=${crossfader.fading}")
@@ -480,6 +488,8 @@ class PlaybackService : MediaSessionService() {
 
     private fun toggleFavorite() {
         val item = player.currentMediaItem ?: return
+        // A peer's track isn't kept here: nothing to like.
+        if (MStreamPaths.isPeer(item.mediaId)) return
         val metadata = player.mediaMetadata
         scope.launch {
             container.db.favorites().toggle(

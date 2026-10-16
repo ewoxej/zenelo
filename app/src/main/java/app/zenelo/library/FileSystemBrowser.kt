@@ -23,9 +23,10 @@ object AudioFormats {
     fun isAudio(file: File) = file.extension.lowercase() in extensions
 }
 
-data class StorageRoot(val name: String, val dir: File, val removable: Boolean, val remote: Boolean = false) {
-    /** Breadcrumb / title label: "SD", "Internal" or "mStream". */
+data class StorageRoot(val name: String, val dir: File, val removable: Boolean, val remote: Boolean = false, val peer: Boolean = false) {
+    /** Breadcrumb / title label: "SD", "Internal", "mStream" or the peer's name. */
     val shortName: String get() = when {
+        peer -> name
         remote -> "mStream"
         removable -> "SD"
         else -> "Internal"
@@ -58,6 +59,8 @@ data class DirListing(
     val files: List<AudioFile>,
     /** Folder mtimes by path, for sorting by date. */
     val folderModified: Map<String, Long> = emptyMap(),
+    /** Why the listing is empty when it couldn't be read (a peer out of reach). */
+    val problem: String? = null,
 )
 
 /**
@@ -78,14 +81,23 @@ class FileSystemBrowser(private val context: Context, private val tracks: TrackD
     @Volatile
     var copies: (String) -> List<String> = { emptyList() }
 
-    /** Internal storage and SD card(s), in system order; then the mStream server when [server] (logged in). */
-    fun roots(server: Boolean = false): List<StorageRoot> {
+    /** The federated peers' folders (listed live, through our server). */
+    @Volatile
+    var peers: app.zenelo.mstream.MStreamPeers? = null
+
+    /**
+     * Internal storage and SD card(s), in system order; then the mStream server when [server]
+     * (logged in), and the servers it's federated with ([peers]).
+     */
+    fun roots(server: Boolean = false, peers: List<app.zenelo.mstream.FederatedPeer> = emptyList()): List<StorageRoot> {
         val sm = context.getSystemService(StorageManager::class.java)
         val local = sm.storageVolumes.mapNotNull { volume ->
             val dir = volume.directory ?: return@mapNotNull null
             StorageRoot(volume.getDescription(context), dir, volume.isRemovable)
         }
-        return if (server) local + StorageRoot("mStream", RemoteFolders.ROOT, removable = false, remote = true) else local
+        if (!server) return local
+        return local + StorageRoot("mStream", RemoteFolders.ROOT, removable = false, remote = true) +
+            peers.map { StorageRoot(it.name, RemoteFolders.peerRoot(it.id), removable = false, remote = true, peer = true) }
     }
 
     /** Last known listing, possibly stale. Cheap, safe on the main thread. */
@@ -93,7 +105,15 @@ class FileSystemBrowser(private val context: Context, private val tracks: TrackD
 
     /** Fresh listing: served from cache when the directory is unchanged, rescanned otherwise. */
     suspend fun list(dir: File): DirListing = withContext(Dispatchers.IO) {
-        val listing = if (RemoteFolders.isRemote(dir)) {
+        val listing = if (RemoteFolders.isPeer(dir)) {
+            // Live from the peer; out of reach, the last listing (if any) with the reason.
+            try {
+                (peers ?: throw IOException("No peers")).list(dir).also { cache.put(dir.absolutePath, it) }
+            } catch (e: IOException) {
+                val why = if ((e as? app.zenelo.mstream.MStreamException)?.code == 502) "The peer is out of reach" else e.message ?: "Couldn't reach the server"
+                (cache.get(dir.absolutePath) ?: DirListing(dir, 0, emptyList(), emptyList())).copy(problem = why)
+            }
+        } else if (RemoteFolders.isRemote(dir)) {
             remote(dir).also { cache.put(dir.absolutePath, it) }
         } else {
             val stamp = dir.lastModified()
@@ -115,6 +135,8 @@ class FileSystemBrowser(private val context: Context, private val tracks: TrackD
 
     /** Every audio file under [dir], folder by folder in name order (files before subfolders). */
     suspend fun listRecursive(dir: File): List<AudioFile> {
+        // A peer's folder: one request for the whole tree.
+        if (RemoteFolders.isPeer(dir)) return runCatching { peers?.listRecursive(dir) }.getOrNull().orEmpty()
         val out = ArrayList<AudioFile>()
         suspend fun walk(d: File) {
             val listing = list(d)
@@ -129,6 +151,8 @@ class FileSystemBrowser(private val context: Context, private val tracks: TrackD
     suspend fun prefetch(dirs: List<File>) = withContext(Dispatchers.IO) {
         for (dir in dirs.take(PREFETCH_LIMIT)) {
             ensureActive()
+            // Peers' folders cost a round trip over the federation each: opened when asked.
+            if (RemoteFolders.isPeer(dir)) continue
             if (cache.get(dir.absolutePath) == null) runCatching { list(dir) }
         }
     }

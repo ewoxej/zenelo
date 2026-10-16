@@ -26,6 +26,18 @@ class SwipeRulesTest {
     }
 
     @Test
+    fun peerTrack() {
+        // A federated peer's track or folder: queued, nothing else (it isn't kept here).
+        val peer = Target(remote = true, peer = true)
+        assertEquals(setOf(SwipeAction.ADD_TO_QUEUE, SwipeAction.PLAY_NEXT), allowed(peer))
+        assertEquals(setOf(SwipeAction.ADD_TO_QUEUE, SwipeAction.PLAY_NEXT), allowed(peer.copy(folder = true, cloudInside = 4)))
+        assertEquals(
+            setOf(QueueSwipeAction.REMOVE, QueueSwipeAction.PLAY_NEXT, QueueSwipeAction.MOVE_TO_END),
+            QueueSwipeAction.entries.filter { SwipeRules.applies(it, peer, serverAvailable = true) }.toSet(),
+        )
+    }
+
+    @Test
     fun folder() {
         assertEquals(always + SwipeAction.FAVORITE, allowed(Target(folder = true)))
         assertEquals(always + SwipeAction.DOWNLOAD, allowed(Target(folder = true, favorite = true, cloudInside = 3)))

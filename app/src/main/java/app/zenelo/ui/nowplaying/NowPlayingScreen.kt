@@ -35,6 +35,7 @@ import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.runtime.rememberUpdatedState
 import app.zenelo.data.settings.PullDownArea
+import app.zenelo.data.settings.PlayerButton
 import app.zenelo.data.settings.SelectionMarkerSide
 import app.zenelo.ui.components.SelectionMark
 import app.zenelo.ui.components.SelectAllIcon
@@ -54,6 +55,8 @@ import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.outlined.Album
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.GraphicEq
+import androidx.compose.material.icons.outlined.LibraryAdd
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Favorite
@@ -284,7 +287,7 @@ fun NowPlayingScreen(
             Text(it, style = MaterialTheme.typography.bodySmall, color = ZeneloColors.Mustard, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
         }
         PageSwitcher(pager.currentPage) { scope.launch { pager.animateScrollToPage(it, animationSpec = tween(180)) } }
-        TrackTitle(state, isFavorite) {
+        TrackTitle(state, isFavorite, canFavorite = !MStreamPaths.isPeer(state.mediaId)) {
             val id = state.mediaId ?: return@TrackTitle
             scope.launch {
                 favorites.toggle(FavoriteEntity(id, FavoriteKind.TRACK, state.title ?: File(id).nameWithoutExtension, state.artist), container.serverLinks.current.copiesOf(id))
@@ -315,6 +318,9 @@ private fun TopBar(
     val picker = appContainer().playlistPicker
     // mStream tracks have no folder here (yet): the label shows the server's path instead.
     val remote = MStreamPaths.isRemote(state.mediaId)
+    // A federated peer's track (through our server): queue and copy only.
+    val peer = MStreamPaths.isPeer(state.mediaId)
+    val peers = appContainer().peers
     val folder = state.mediaId?.let { if (remote) RemoteFolders.folder(MStreamPaths.dir(it)) else File(it).parentFile }
     val roots = appContainer().fileBrowser.let { fs -> remember { fs.roots() } }
     val settingsFlow = appContainer().settings.settings
@@ -336,10 +342,20 @@ private fun TopBar(
     Row(modifier.fillMaxWidth().padding(horizontal = 4.dp).height(64.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onBack) { Icon(Icons.Rounded.KeyboardArrowDown, "Close") }
         Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(if (remote) "PLAYING FROM MSTREAM" else "PLAYING FROM FOLDER", style = MaterialTheme.typography.labelSmall, color = ZeneloColors.TextMuted)
+            Text(
+                when {
+                    peer -> "PLAYING FROM " + (peers.peerName(state.mediaId?.let(MStreamPaths::peerId)) ?: "A PEER").uppercase()
+                    remote -> "PLAYING FROM MSTREAM"
+                    else -> "PLAYING FROM FOLDER"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = ZeneloColors.TextMuted,
+            )
             Text(
                 // Up to three segments below the storage root: "Music / Ambient / Harbor".
-                if (remote) {
+                if (peer) {
+                    MStreamPaths.peerPath(MStreamPaths.dir(state.mediaId!!)).split('/').filter { it.isNotEmpty() }.takeLast(3).joinToString(" / ")
+                } else if (remote) {
                     MStreamPaths.dir(state.mediaId!!).let(MStreamPaths::serverPath).split('/').filter { it.isNotEmpty() }.takeLast(3).joinToString(" / ")
                 } else {
                     folder?.let { f ->
@@ -354,18 +370,56 @@ private fun TopBar(
                 textAlign = TextAlign.Center,
             )
         }
+        // One button beside ⋮, the user's pick (`PlayerButton`); everything else is in ⋮. A pick that
+        // doesn't apply here (no server, no album tag, a peer's track) shows no button.
+        val c = appContainer()
+        val hasServer = settings?.mstream != null
+        val canAddToPlaylist = !peer && state.mediaId != null
+        val button = when (val b = settings?.playerButton) {
+            PlayerButton.DEVICES -> b.takeIf { hasServer }
+            PlayerButton.ADD_TO_PLAYLIST -> b.takeIf { canAddToPlaylist }
+            PlayerButton.GO_TO_ALBUM -> b.takeIf { albumKey != null }
+            PlayerButton.VISUALIZER -> b
+            else -> null
+        }
         // The mStream account's devices: move the playback to another one.
-        if (appContainer().settings.settings.collectAsStateWithLifecycle(null).value?.mstream != null) {
-            var devicesOpen by remember { mutableStateOf(false) }
-            IconButton(onClick = { devicesOpen = true }) { Icon(Icons.Outlined.Devices, "Devices") }
-            if (devicesOpen) {
-                val c = appContainer()
-                app.zenelo.ui.components.DevicesSheet(state.isPlaying && state.remoteDevice == null, onDismiss = { devicesOpen = false }) { c.playbackMessages.tryEmit(it) }
+        var devicesOpen by remember { mutableStateOf(false) }
+        if (devicesOpen) {
+            app.zenelo.ui.components.DevicesSheet(state.isPlaying && state.remoteDevice == null, onDismiss = { devicesOpen = false }) { c.playbackMessages.tryEmit(it) }
+        }
+        when (button) {
+            PlayerButton.DEVICES -> IconButton(onClick = { devicesOpen = true }) { Icon(Icons.Outlined.Devices, "Play on device") }
+            // The visualizer, full screen (the web player's presets, driven by what plays here).
+            PlayerButton.VISUALIZER -> IconButton(onClick = { c.visualizerOpen.value = true }) { Icon(Icons.Outlined.GraphicEq, "Visualizer") }
+            PlayerButton.ADD_TO_PLAYLIST -> IconButton(onClick = { state.mediaId?.let { picker.pick(listOf(it)) } }) {
+                Icon(SwipeAction.ADD_TO_PLAYLIST.icon, "Add to playlist")
             }
+            PlayerButton.GO_TO_ALBUM -> IconButton(onClick = { albumKey?.let(onOpenAlbum) }) { Icon(Icons.Outlined.Album, "Go to album") }
+            else -> {}
         }
         Box {
             IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "More") }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                if (hasServer && button != PlayerButton.DEVICES) {
+                    DropdownMenuItem(
+                        text = { Text("Play on device…") },
+                        leadingIcon = { Icon(Icons.Outlined.Devices, null, tint = ZeneloColors.Celadon) },
+                        onClick = {
+                            menu = false
+                            devicesOpen = true
+                        },
+                    )
+                }
+                if (button != PlayerButton.VISUALIZER) {
+                    DropdownMenuItem(
+                        text = { Text("Visualizer") },
+                        leadingIcon = { Icon(Icons.Outlined.GraphicEq, null, tint = ZeneloColors.Celadon) },
+                        onClick = {
+                            menu = false
+                            c.visualizerOpen.value = true
+                        },
+                    )
+                }
                 DropdownMenuItem(
                     text = { Text("Go to folder") },
                     leadingIcon = { Icon(Icons.Outlined.Folder, null, tint = ZeneloColors.Mustard) },
@@ -375,7 +429,7 @@ private fun TopBar(
                         folder?.let(onOpenFolder)
                     },
                 )
-                if (albumKey != null) {
+                if (albumKey != null && button != PlayerButton.GO_TO_ALBUM) {
                     DropdownMenuItem(
                         text = { Text("Go to album") },
                         leadingIcon = { Icon(Icons.Outlined.Album, null, tint = ZeneloColors.Mustard) },
@@ -395,18 +449,43 @@ private fun TopBar(
                         },
                     )
                 }
-                DropdownMenuItem(
-                    text = { Text("Add to playlist…") },
-                    leadingIcon = { Icon(SwipeAction.ADD_TO_PLAYLIST.icon, null, tint = SwipeAction.ADD_TO_PLAYLIST.accent) },
-                    enabled = state.mediaId != null,
-                    onClick = {
-                        menu = false
-                        state.mediaId?.let { picker.pick(listOf(it)) }
-                    },
-                )
+                if (peer) {
+                    // Copied into our library by the server (its federation-copy plug-in).
+                    val copy = peers.plugins.collectAsStateWithLifecycle().value.firstOrNull { it.name == app.zenelo.mstream.MStreamPeers.COPY }
+                    if (copy != null) {
+                        DropdownMenuItem(
+                            text = { Text("Add to my library") },
+                            leadingIcon = { Icon(Icons.Outlined.LibraryAdd, null, tint = ZeneloColors.Celadon) },
+                            onClick = {
+                                menu = false
+                                state.mediaId?.let { peers.copy(it, tags = Triple(state.title, state.artist, state.album)) }
+                            },
+                        )
+                        if (state.album != null && "album" in copy.scopes) {
+                            DropdownMenuItem(
+                                text = { Text("Add the album") },
+                                leadingIcon = { Icon(Icons.Outlined.LibraryAdd, null, tint = ZeneloColors.Celadon) },
+                                onClick = {
+                                    menu = false
+                                    state.mediaId?.let { peers.copy(it, "album", tags = Triple(state.title, state.artist, state.album)) }
+                                },
+                            )
+                        }
+                    }
+                } else if (button != PlayerButton.ADD_TO_PLAYLIST) {
+                    DropdownMenuItem(
+                        text = { Text("Add to playlist…") },
+                        leadingIcon = { Icon(SwipeAction.ADD_TO_PLAYLIST.icon, null, tint = SwipeAction.ADD_TO_PLAYLIST.accent) },
+                        enabled = state.mediaId != null,
+                        onClick = {
+                            menu = false
+                            state.mediaId?.let { picker.pick(listOf(it)) }
+                        },
+                    )
+                }
                 // Server features need the network: offline they're not offered.
                 val online = rememberOnline()
-                if (remote && online && !rememberDownloaded(state.mediaId)) {
+                if (remote && !peer && online && !rememberDownloaded(state.mediaId)) {
                     DropdownMenuItem(
                         text = { Text("Download") },
                         leadingIcon = { Icon(SwipeAction.DOWNLOAD.icon, null, tint = SwipeAction.DOWNLOAD.accent) },
@@ -421,7 +500,7 @@ private fun TopBar(
                     state.mediaId?.let { path -> SonicPathItems(path) { menu = false } }
                 }
                 // The server's files aren't ours to write: a server track only gets the cover search.
-                DropdownMenuItem(
+                if (!peer) DropdownMenuItem(
                     text = { Text(if (remote) "Find cover…" else "Edit tags…") },
                     leadingIcon = { Icon(if (remote) Icons.Outlined.Image else Icons.Outlined.Edit, null, tint = ZeneloColors.Celadon) },
                     enabled = state.mediaId != null,
@@ -875,7 +954,7 @@ private fun PageSwitcher(current: Int, onSelect: (Int) -> Unit) {
 }
 
 @Composable
-private fun TrackTitle(state: PlayerUiState, isFavorite: Boolean, onToggleFavorite: () -> Unit) {
+private fun TrackTitle(state: PlayerUiState, isFavorite: Boolean, canFavorite: Boolean, onToggleFavorite: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(
@@ -892,12 +971,14 @@ private fun TrackTitle(state: PlayerUiState, isFavorite: Boolean, onToggleFavori
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        IconButton(onClick = onToggleFavorite, enabled = state.mediaId != null) {
-            Icon(
-                if (isFavorite) Icons.Rounded.Favorite else Icons.Outlined.FavoriteBorder,
-                if (isFavorite) "Remove from favorites" else "Add to favorites",
-                tint = ZeneloColors.Celadon,
-            )
+        if (canFavorite) {
+            IconButton(onClick = onToggleFavorite, enabled = state.mediaId != null) {
+                Icon(
+                    if (isFavorite) Icons.Rounded.Favorite else Icons.Outlined.FavoriteBorder,
+                    if (isFavorite) "Remove from favorites" else "Add to favorites",
+                    tint = ZeneloColors.Celadon,
+                )
+            }
         }
     }
 }

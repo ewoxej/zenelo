@@ -300,6 +300,35 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   (`setShuffle`, `setRepeat`; Auto DJ through `MStreamDevices.setAutoDj`); while another device is
   followed, the volume keys set its volume (`MainActivity.onKeyDown` → `adjustFollowedVolume`,
   `RemoteVolumeHud` shows it) — only while the app is in front.
+- Federated peers (the servers ours is paired with; `MStreamPeers`): roots in the folder browser after
+  "mStream" (`/mstream/@peer/<id>/…`, `RemoteFolders.peerRoot`; `rootOf` picks the deepest root), listed live
+  through our server's `federation/peers/:id/api/…` proxy — never indexed, nothing prefetched. Their tracks are
+  `mstream://@peer/<id>/<peer's vpath>/<rel>` (`MStreamPaths.isPeer`; library names can't start with "@"):
+  remote, but not our server's (`isServer` false, `ServerLinks.serverOf` null — so no likes, plays, Recently
+  played, downloads, queue cache, Sonic Path / Play similar, device reports or Auto DJ seeds for them). They
+  play through `federation/peers/:id/stream/…` (`RemoteMedia`); tags and covers come from the listings /
+  Discover's leads, kept in memory (`MStreamPeers.info`, hooked into `PlayQueue` / `Thumbnails` /
+  `MetadataFetcher.peerArt`). Swipes: queue only (`SwipeRules.Target.peer`); no selection there. "Add to my
+  library" (track ⋮ — song / album / the artist's missing albums —, folder ⋮, the folder's header button,
+  Now Playing ⋮) is the server's `federation-copy` plug-in job; `MStreamPeers.jobs` polls while one runs, its
+  end is a message, and a finished copy syncs the library.
+- Discover (`Section.DISCOVER`, `ui/discover`, off by default): more like the playing server track (the last
+  one while a peer's song started from here plays): Library — `discovery/local/similar/tracks` and sound-alike
+  artists; Network — `discovery/p2p/similar` leads (a sheet: the acquire plug-ins' "Get it", copy "Artist -
+  Title", MusicBrainz); Peers — `discovery/federation/similar` (tap plays them through our server, ＋ copies
+  the song / album / artist). Features from `api/v1/ping` (`ServerFeatures`); jobs strip on top.
+- Now Playing's header: one button beside ⋮, a setting (`PlayerButton`, Interface; default Play on device);
+  the rest — the devices sheet, the visualizer, go to… — are ⋮ items (the pinned one isn't repeated there). A pick
+  that doesn't apply (no server, no album tag, a peer's track) shows no button.
+- Visualizer (Now Playing's ⋮ or header button → `AppContainer.visualizerOpen`, drawn by the root over everything —
+  not a Dialog: in a dialog's window the WebView's canvases didn't show): the web player's butterchurn presets and
+  drive in a WebView (`assets/viz`: `butterchurn.min.js`, `butterchurn-presets-zenelo.js` and `viz-drive.js` copied
+  from the fork's webapp — `export`s dropped — refresh them when those change; `viz.js` is the app's own loop).
+  Sound: `SoundTap` = `android.media.audiofx.Visualizer` on the player's audio session (`AppContainer.audioSession`,
+  set by `PlaybackService`), so the picture follows what's heard; it needs RECORD_AUDIO (asked on first open,
+  nothing recorded). `VizMath` (unit-tested) gives the drive its RMS and spectral flux on the web analyser's scale;
+  the page pulls `Zenelo.frame()` each frame and renders with `render({audioLevels})`. Rendered at CSS pixels
+  (`pixelRatio: 1`). The emulator's WebView doesn't composite canvases at all (2D included): judge it on a device.
 
 ## mStream server fork
 `mStream/` is a git submodule: github.com/ewoxej/mStream, the user's fork of mStream (Node.js) — its

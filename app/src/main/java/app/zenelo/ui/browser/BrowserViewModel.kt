@@ -178,6 +178,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
             // keyed back by folder path.
             currentDir.filterNotNull()
                 .flatMapLatest { dir ->
+                    if (RemoteFolders.isPeer(dir)) return@flatMapLatest kotlinx.coroutines.flow.emptyFlow()
                     val prefix = RemoteFolders.indexPath(dir) + "/"
                     container.db.tracks().observeDirStats(prefix, prefix + "\uFFFF").map { rows -> dir to rows }
                 }
@@ -206,26 +207,38 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             // Indexing a big folder re-emits it after every batch: sample, and build the map off the main thread.
             currentDir.filterNotNull()
-                .flatMapLatest { container.db.tracks().observeInDir(RemoteFolders.indexPath(it)) }
+                // A peer's folder isn't indexed: its tags come with its listing (open()).
+                .flatMapLatest { if (RemoteFolders.isPeer(it)) kotlinx.coroutines.flow.emptyFlow() else container.db.tracks().observeInDir(RemoteFolders.indexPath(it)) }
                 .sample(700)
                 .map { rows -> rows.associateBy(TrackEntity::path) }
                 .flowOn(Dispatchers.Default)
                 .collect { tracks -> _state.update { it.copy(tracks = tracks) } }
         }
         viewModelScope.launch { goHome() }
-        // The server's folders appear as a root while logged in and online (offline its tracks can't play).
+        // The server's folders appear as a root while logged in and online (offline its tracks can't
+        // play), and so do the servers it's federated with.
         viewModelScope.launch {
-            kotlinx.coroutines.flow.combine(container.settings.settings.map { it.mstream != null }, container.network.online) { logged, online -> logged && online }
-                .distinctUntilChanged().collect { server ->
-                    _state.update { it.copy(roots = fs.roots(server)) }
-                    if (!server && _state.value.dir?.let(RemoteFolders::isRemote) == true) goHome()
+            kotlinx.coroutines.flow.combine(
+                container.settings.settings.map { it.mstream != null },
+                container.network.online,
+                container.peers.peers,
+            ) { logged, online, peers -> (logged && online) to peers }
+                .distinctUntilChanged().collect { (server, peers) ->
+                    val roots = fs.roots(server, if (server) peers else emptyList())
+                    _state.update { it.copy(roots = roots, root = it.dir?.let { d -> rootOf(d, roots) } ?: it.root) }
+                    val dir = _state.value.dir
+                    if (dir != null && RemoteFolders.isRemote(dir) && rootOf(dir, roots)?.remote != true) goHome()
                 }
         }
     }
 
     /** Shows the cached listing immediately (if any), then revalidates and prefetches subfolders. */
+    /** The root [dir] is under: the deepest one (a peer's folders are under the mStream root's path). */
+    private fun rootOf(dir: File, roots: List<StorageRoot>): StorageRoot? =
+        roots.filter { dir.startsWith(it.dir) }.maxByOrNull { it.dir.path.length }
+
     fun open(dir: File) {
-        val root = _state.value.roots.firstOrNull { dir.startsWith(it.dir) }
+        val root = rootOf(dir, _state.value.roots)
         val cached = fs.cached(dir)
         _state.update {
             it.copy(
@@ -246,6 +259,12 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
             val listing = fs.list(dir)
+            if (RemoteFolders.isPeer(dir)) {
+                // Not indexed: the tags come from the listing, the peer's message when it failed.
+                val tags = listing.files.mapNotNull { container.peers.info(it.path) }.associateBy { it.path }
+                _state.update { if (it.dir != dir) it else it.copy(tracks = tags) }
+                listing.problem?.let { _events.send(BrowserEvent.Message(it)) }
+            }
             if (listing !== cached) {
                 _state.update {
                     if (it.dir != dir) it else it.copy(folders = listing.folders, files = listing.files, folderModified = listing.folderModified, loading = false)
@@ -330,6 +349,22 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun stop() = player.stop()
+
+    /** The current folder is a federated peer's (its tracks can't be liked, downloaded, edited…). */
+    val onPeer: Boolean get() = RemoteFolders.isPeer(_state.value.dir)
+
+    /** "Add to my library": a peer's folder (everything under it) copied into our library by the server. */
+    fun copyFolder(folder: File) {
+        if (!container.peers.canCopy) return showMessage("This server can't copy from its peers for your account")
+        if (MStreamPaths.peerPath(RemoteFolders.indexDir(folder)).isEmpty()) return showMessage("Pick a folder inside the peer")
+        container.peers.copy(RemoteFolders.indexDir(folder), folder = true)
+    }
+
+    /** "Add to my library" on a peer's track: the song, or its album / artist ([scope]). */
+    fun copyTrack(file: AudioFile, scope: String? = null) {
+        if (!container.peers.canCopy) return showMessage("This server can't copy from its peers for your account")
+        container.peers.copy(file.path, scope)
+    }
 
     fun playFrom(file: AudioFile) {
         val files = visibleFiles()

@@ -16,9 +16,16 @@ object SwipeRules {
         val folder: Boolean = false,
         /** A folder's tracks on the server only (what "Download" would fetch). */
         val cloudInside: Int = 0,
+        /** A federated peer's track or folder: played through our server, nothing kept of it here. */
+        val peer: Boolean = false,
     )
 
-    fun applies(action: SwipeAction, t: Target, serverAvailable: Boolean): Boolean = when (action) {
+    fun applies(action: SwipeAction, t: Target, serverAvailable: Boolean): Boolean = when {
+        t.peer -> action == SwipeAction.ADD_TO_QUEUE || action == SwipeAction.PLAY_NEXT
+        else -> appliesHere(action, t, serverAvailable)
+    }
+
+    private fun appliesHere(action: SwipeAction, t: Target, serverAvailable: Boolean): Boolean = when (action) {
         SwipeAction.NONE -> false
         SwipeAction.FAVORITE -> !t.favorite
         SwipeAction.DOWNLOAD -> serverAvailable && if (t.folder) t.cloudInside > 0 else t.remote && !t.hasLocalCopy
@@ -31,7 +38,7 @@ object SwipeRules {
 
     fun applies(action: QueueSwipeAction, t: Target, serverAvailable: Boolean): Boolean = when (action) {
         QueueSwipeAction.NONE -> false
-        QueueSwipeAction.FAVORITE -> !t.favorite
+        QueueSwipeAction.FAVORITE -> !t.favorite && !t.peer
         QueueSwipeAction.SONIC_PATH -> serverAvailable && t.onServer
         QueueSwipeAction.REMOVE, QueueSwipeAction.PLAY_NEXT, QueueSwipeAction.MOVE_TO_END -> true
     }

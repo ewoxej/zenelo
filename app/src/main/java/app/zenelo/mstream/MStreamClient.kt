@@ -73,6 +73,112 @@ data class RandomSongs(val songs: List<ServerSong>, val ignoreList: List<Int>)
 /** A Sonic Path: the songs from start to end (both included), or why there are none. */
 data class SonicPath(val songs: List<ServerSong>, val startNotAnalyzed: Boolean, val endNotAnalyzed: Boolean)
 
+/** `api/v1/ping`'s flags this app reads. */
+data class ServerFeatures(
+    /** Sound analysis (similar tracks, Discover's library tab). */
+    val discovery: Boolean = false,
+    /** The public discovery network (leads from other servers' snapshots). */
+    val network: Boolean = false,
+    /** Plug-ins that act on leads ("Get it", copies from peers). */
+    val plugins: Boolean = false,
+    /** Paired (federated) servers to browse. */
+    val browsePeers: Boolean = false,
+    /** Paired servers asked for sound-alikes. */
+    val peerDiscovery: Boolean = false,
+    /** This account may put files into a library (copies land there). */
+    val uploads: Boolean = false,
+)
+
+data class FederatedPeer(val id: Long, val name: String)
+
+/**
+ * A Discover lead: a song this library doesn't have — on a paired server ([peerId], playable through
+ * ours at [filepath], the peer's path) or seen on the discovery network (a description only).
+ * [raw] is the server's row, handed back as a plug-in job's recommendation.
+ */
+data class Lead(
+    val title: String?,
+    val artist: String?,
+    val album: String?,
+    val durationSec: Double?,
+    val similarity: Double,
+    val filepath: String?,
+    val peerId: Long?,
+    val peerName: String?,
+    val recordingMbid: String?,
+    val raw: JSONObject,
+) {
+    val fromPeer: Boolean get() = peerId != null && filepath != null
+
+    companion object {
+        fun of(o: JSONObject, peers: Boolean): Lead {
+            fun str(key: String) = if (o.isNull(key)) null else o.optString(key).takeIf { it.isNotBlank() }
+            val peer = o.optJSONObject("peer")
+            val raw = JSONObject(o.toString()).put("source", if (peers) "federation" else "p2p")
+            return Lead(
+                title = str("title"),
+                artist = str("artist"),
+                album = str("album"),
+                durationSec = if (o.isNull("duration")) null else o.optDouble("duration").takeIf { it.isFinite() && it > 0 },
+                similarity = o.optDouble("similarity", 0.0),
+                filepath = str("filepath")?.trimStart('/'),
+                peerId = peer?.takeIf { peers && !it.isNull("id") }?.optLong("id"),
+                peerName = peer?.optString("name")?.takeIf { it.isNotBlank() },
+                recordingMbid = str("recordingMbid"),
+                raw = raw,
+            )
+        }
+    }
+}
+
+data class Leads(val rows: List<Lead>, val searched: Int, val unreachable: Int)
+
+data class DiscoveryPlugin(val name: String, val title: String, val capabilities: List<String>, val scopes: List<String>) {
+    /** Gets a song into the library (a download, a copy from a peer). */
+    val acquires: Boolean get() = "acquire" in capabilities
+}
+
+/** A plug-in job of this account (a copy from a peer, a download). */
+data class DiscoverJob(
+    val id: Long,
+    val plugin: String,
+    /** queued / running / done / failed / cancelled */
+    val state: String,
+    val progress: Double?,
+    val statusText: String?,
+    val error: String?,
+    /** What it gets: the song, album, artist or folder, as the user would name it. */
+    val title: String,
+    val scope: String?,
+) {
+    val live: Boolean get() = state == "queued" || state == "running"
+
+    companion object {
+        fun of(o: JSONObject): DiscoverJob {
+            val rec = o.optJSONObject("recommendation") ?: JSONObject()
+            fun str(json: JSONObject, key: String) = if (json.isNull(key)) null else json.optString(key).takeIf { it.isNotBlank() }
+            val scope = o.optJSONObject("params")?.let { str(it, "scope") }
+            val title = when (scope) {
+                "album" -> listOfNotNull(str(rec, "album"), str(rec, "artist")).joinToString(" · ")
+                "artist", "artist-missing" -> str(rec, "artist")
+                "folder" -> str(rec, "filepath")?.trimEnd('/')?.substringAfterLast('/')
+                else -> listOfNotNull(str(rec, "title"), str(rec, "artist")).joinToString(" · ").ifBlank { null }
+                    ?: str(rec, "filepath")?.substringAfterLast('/')
+            }
+            return DiscoverJob(
+                id = o.getLong("id"),
+                plugin = o.optString("plugin"),
+                state = o.optString("state"),
+                progress = if (o.isNull("progress") || !o.has("progress")) null else o.optDouble("progress").takeIf { it.isFinite() },
+                statusText = str(o, "statusText"),
+                error = str(o, "error"),
+                title = title?.ifBlank { null } ?: "Download",
+                scope = scope,
+            )
+        }
+    }
+}
+
 /**
  * The mStream HTTP API (see its `docs/openapi.yaml`). Every call is blocking I/O on
  * [Dispatchers.IO]; failures throw [IOException] ([MStreamException] with the server's message).
@@ -412,6 +518,153 @@ class MStreamClient(base: OkHttpClient) {
     }
 
     /** The page a guest opens: the token rides the fragment, never sent in a request. */
+    // ── Discover, federated peers, plug-in jobs ──────────────────────────
+
+    /** What the server (and this account) can do: `api/v1/ping`'s flags. */
+    suspend fun features(account: MStreamAccount): ServerFeatures = withContext(Dispatchers.IO) {
+        val o = get(account, "api/v1/ping") as JSONObject
+        ServerFeatures(
+            discovery = o.optBoolean("discovery"),
+            network = o.optBoolean("discoveryP2p"),
+            plugins = o.optBoolean("discoveryPlugins"),
+            browsePeers = o.optBoolean("federationBrowse"),
+            peerDiscovery = o.optBoolean("federationDiscovery"),
+            uploads = !o.optBoolean("noUpload"),
+        )
+    }
+
+    /** The federated servers this one is paired with (`federation/peers`). */
+    suspend fun peers(account: MStreamAccount): List<FederatedPeer> = withContext(Dispatchers.IO) {
+        val rows = (get(account, "api/v1/federation/peers") as JSONObject).optJSONArray("peers") ?: JSONArray()
+        List(rows.length()) { rows.getJSONObject(it) }.map { FederatedPeer(it.getLong("id"), it.optString("name").ifBlank { "Peer ${it.getLong("id")}" }) }
+    }
+
+    /**
+     * One folder of a peer (its file explorer, through our server): subfolder names and files
+     * (name + the peer's metadata row, `{filepath, metadata}`). [dir] "" = its libraries.
+     */
+    suspend fun peerFolder(account: MStreamAccount, peerId: Long, dir: String): Pair<List<String>, List<Pair<String, JSONObject?>>> = withContext(Dispatchers.IO) {
+        val body = JSONObject().put("directory", if (dir.isEmpty()) "" else "/" + dir.trim('/')).put("pullMetadata", true)
+        val o = postAny(account, "api/v1/federation/peers/$peerId/api/api/v1/file-explorer", body) as JSONObject
+        val dirs = o.optJSONArray("directories") ?: JSONArray()
+        val files = o.optJSONArray("files") ?: JSONArray()
+        List(dirs.length()) { dirs.getJSONObject(it).optString("name") }.filter { it.isNotEmpty() } to
+            List(files.length()) { files.getJSONObject(it) }.map { it.optString("name") to it.optJSONObject("metadata") }
+    }
+
+    /** Every audio file under a peer's folder (the peer's own paths). */
+    suspend fun peerFolderFiles(account: MStreamAccount, peerId: Long, dir: String): List<String> = withContext(Dispatchers.IO) {
+        val a = postAny(account, "api/v1/federation/peers/$peerId/api/api/v1/file-explorer/recursive", JSONObject().put("directory", "/" + dir.trim('/'))) as JSONArray
+        List(a.length()) { a.optString(it).trimStart('/') }
+    }
+
+    /** The peer's metadata rows (`{filepath, metadata}`) of its paths. */
+    suspend fun peerMetadata(account: MStreamAccount, peerId: Long, paths: List<String>): Map<String, JSONObject> = withContext(Dispatchers.IO) {
+        if (paths.isEmpty()) return@withContext emptyMap()
+        val o = postAny(account, "api/v1/federation/peers/$peerId/api/api/v1/db/metadata/batch", JSONArray(paths)) as JSONObject
+        paths.mapNotNull { p -> o.optJSONObject(p)?.let { p to it } }.toMap()
+    }
+
+    /** A peer's album art file. */
+    suspend fun peerArt(account: MStreamAccount, peerId: Long, file: String): ByteArray? = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url(url(account, "api/v1/federation/peers/$peerId/art/$file")).header("x-access-token", account.token).build()
+        runCatching { client.newCall(request).execute().use { r -> if (r.isSuccessful) r.body?.bytes() else null } }.getOrNull()
+    }
+
+    /** A peer's file streamed through our server (ranges pass through, so it seeks). */
+    fun peerStreamUrl(account: MStreamAccount, peerId: Long, peerPath: String): HttpUrl =
+        url(account, "api/v1/federation/peers/$peerId/stream/" + peerPath.trimStart('/'))
+
+    /** Tracks that sound like [serverPath], with how close (0–1); 409 = not analyzed yet, 403 = discovery off. */
+    suspend fun similarScored(account: MStreamAccount, serverPath: String, limit: Int): List<Pair<ServerSong, Double>> = withContext(Dispatchers.IO) {
+        val json = postAny(account, "api/v1/discovery/local/similar/tracks", JSONObject().put("filePath", serverPath).put("limit", limit)) as JSONObject
+        if (json.optBoolean("notAnalyzed")) throw MStreamException("This track hasn't been analyzed yet", 409)
+        val rows = json.optJSONArray("results") ?: JSONArray()
+        List(rows.length()) { rows.getJSONObject(it) }.map { parseSong(it) to it.optDouble("similarity", 0.0) }
+    }
+
+    /** Library artists that sound like [artist], each with up to two tracks of theirs closest to it. */
+    suspend fun soundAlike(account: MStreamAccount, artist: String, limit: Int): List<Pair<String, List<ServerSong>>> = withContext(Dispatchers.IO) {
+        val json = postAny(account, "api/v1/discovery/local/similar/artists", JSONObject().put("artist", artist).put("limit", limit)) as JSONObject
+        val rows = json.optJSONArray("results") ?: JSONArray()
+        List(rows.length()) { rows.getJSONObject(it) }.map { r ->
+            val entries = r.optJSONArray("entryPoints") ?: JSONArray()
+            r.optString("artist") to List(entries.length()) { parseSong(entries.getJSONObject(it)) }
+        }.filter { it.first.isNotBlank() }
+    }
+
+    /**
+     * Songs this library doesn't have that sound like [serverPath]: from the discovery network
+     * ([peers] false: other servers' published snapshots, leads only) or from the paired servers
+     * ([peers] true: playable through ours).
+     */
+    suspend fun leads(account: MStreamAccount, serverPath: String, peers: Boolean, limit: Int, newArtistsOnly: Boolean): Leads = withContext(Dispatchers.IO) {
+        val body = JSONObject().put("filePath", serverPath).put("limit", limit).put("newArtistsOnly", newArtistsOnly)
+        val json = postAny(account, if (peers) "api/v1/discovery/federation/similar" else "api/v1/discovery/p2p/similar", body) as JSONObject
+        val rows = json.optJSONArray("results") ?: JSONArray()
+        val searched = json.optJSONObject("searched") ?: JSONObject()
+        Leads(List(rows.length()) { Lead.of(rows.getJSONObject(it), peers) }, searched.optInt("peers"), searched.optInt("unreachable"))
+    }
+
+    /** The server's discovery plug-ins, and whether this account may start their jobs. */
+    suspend fun discoveryPlugins(account: MStreamAccount): Pair<List<DiscoveryPlugin>, Boolean> = withContext(Dispatchers.IO) {
+        val o = get(account, "api/v1/discovery/plugins") as JSONObject
+        val rows = o.optJSONArray("plugins") ?: JSONArray()
+        fun list(a: JSONArray?) = if (a == null) emptyList() else List(a.length()) { a.optString(it) }
+        List(rows.length()) { rows.getJSONObject(it) }.map {
+            DiscoveryPlugin(it.optString("name"), it.optString("title").ifBlank { it.optString("name") }, list(it.optJSONArray("capabilities")), list(it.optJSONArray("scopes")))
+        } to (o.optJSONObject("jobs")?.optBoolean("allowed") == true)
+    }
+
+    /** Where copies and downloads land ("vpath / base"), or null: this account may write nowhere. */
+    suspend fun collectionDestination(account: MStreamAccount): String? = withContext(Dispatchers.IO) {
+        val d = (get(account, "api/v1/discovery/collection/destination") as JSONObject).optJSONObject("destination") ?: return@withContext null
+        listOf(d.optString("vpath"), d.optString("base")).filter { it.isNotBlank() }.joinToString(" / ")
+    }
+
+    /** Starts a plug-in's job for [recommendation] ([scope]: song when null). */
+    suspend fun startJob(account: MStreamAccount, plugin: String, recommendation: JSONObject, scope: String?): DiscoverJob = withContext(Dispatchers.IO) {
+        val body = JSONObject().put("recommendation", recommendation).apply { if (scope != null) put("scope", scope) }
+        DiscoverJob.of((postAny(account, "api/v1/discovery/plugins/$plugin/jobs", body) as JSONObject).getJSONObject("job"))
+    }
+
+    /** This account's jobs, newest first. */
+    suspend fun jobs(account: MStreamAccount): List<DiscoverJob> = withContext(Dispatchers.IO) {
+        val rows = (get(account, "api/v1/discovery/plugin-jobs") as JSONObject).optJSONArray("jobs") ?: JSONArray()
+        List(rows.length()) { DiscoverJob.of(rows.getJSONObject(it)) }
+    }
+
+    suspend fun cancelJob(account: MStreamAccount, id: Long) = withContext(Dispatchers.IO) {
+        postAny(account, "api/v1/discovery/plugin-jobs/$id/cancel", JSONObject())
+    }
+
+    suspend fun clearJobs(account: MStreamAccount) = withContext(Dispatchers.IO) {
+        postAny(account, "api/v1/discovery/plugin-jobs/clear", JSONObject())
+    }
+
+    private fun get(account: MStreamAccount, path: String): Any {
+        val request = Request.Builder().url(url(account, path)).header("x-access-token", account.token).build()
+        client.newCall(request).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw error(response.code, text)
+            return if (text.trimStart().startsWith("[")) JSONArray(text) else JSONObject(text)
+        }
+    }
+
+    /** A POST of any JSON body (an object or an array) to [path] (segments escaped). */
+    private fun postAny(account: MStreamAccount, path: String, body: Any): Any {
+        val request = Request.Builder()
+            .url(url(account, path))
+            .header("x-access-token", account.token)
+            .post(body.toString().toRequestBody(JSON))
+            .build()
+        client.newCall(request).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw error(response.code, text)
+            return if (text.trimStart().startsWith("[")) JSONArray(text) else JSONObject(text)
+        }
+    }
+
     fun guestUrl(account: MStreamAccount, token: String): String = "${account.url.trimEnd('/')}/guest/#$token"
 
     /** The server's transcoded stream of a track (`/transcode/<vpath>/<rel>`). */
