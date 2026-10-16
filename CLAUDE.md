@@ -320,15 +320,17 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
 - Now Playing's header: one button beside ⋮, a setting (`PlayerButton`, Interface; default Play on device);
   the rest — the devices sheet, the visualizer, go to… — are ⋮ items (the pinned one isn't repeated there). A pick
   that doesn't apply (no server, no album tag, a peer's track) shows no button.
-- Visualizer (Now Playing's ⋮ or header button → `AppContainer.visualizerOpen`, drawn by the root over everything —
-  not a Dialog: in a dialog's window the WebView's canvases didn't show): the web player's butterchurn presets and
+- Visualizer (Now Playing's ⋮ or header button → `AppContainer.visualizerOpen`, drawn by the root over everything;
+  the WebView needs MATCH_PARENT layout params — AndroidView's WRAP_CONTENT made the page's `100%` heights 0 and the
+  canvas invisible): the web player's butterchurn presets and
   drive in a WebView (`assets/viz`: `butterchurn.min.js`, `butterchurn-presets-zenelo.js` and `viz-drive.js` copied
   from the fork's webapp — `export`s dropped — refresh them when those change; `viz.js` is the app's own loop).
   Sound: `SoundTap` = `android.media.audiofx.Visualizer` on the player's audio session (`AppContainer.audioSession`,
-  set by `PlaybackService`), so the picture follows what's heard; it needs RECORD_AUDIO (asked on first open,
+  set by `PlaybackService`), so the picture follows what's heard — after the volume: muted, it hears silence and the
+  picture stays black (a hint says so after 2.5 s of silence while playing); it needs RECORD_AUDIO (asked on first open,
   nothing recorded). `VizMath` (unit-tested) gives the drive its RMS and spectral flux on the web analyser's scale;
   the page pulls `Zenelo.frame()` each frame and renders with `render({audioLevels})`. Rendered at CSS pixels
-  (`pixelRatio: 1`). The emulator's WebView doesn't composite canvases at all (2D included): judge it on a device.
+  (`pixelRatio: 1`).
 
 ## mStream server fork
 `mStream/` is a git submodule: github.com/ewoxej/mStream, the user's fork of mStream (Node.js) — its

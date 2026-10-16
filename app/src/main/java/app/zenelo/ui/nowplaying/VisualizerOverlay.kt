@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
@@ -86,8 +87,7 @@ import kotlin.math.abs
  */
 @Composable
 fun VisualizerOverlay(onDismiss: () -> Unit) {
-    // Drawn in the activity's own window (the root puts it over everything): in a dialog's window
-    // the WebView's canvases never showed.
+    // Drawn in the activity's own window (the root puts it over everything).
     BackHandler(onBack = onDismiss)
     // The picture gets the whole screen: no status / navigation bars (a swipe shows them).
     val view = LocalView.current
@@ -130,6 +130,16 @@ private fun androidx.compose.foundation.layout.BoxScope.Content(onDismiss: () ->
         }
     }
 
+    // Playing, yet the tap hears silence: the volume is down to mute (the tap listens after it).
+    var silent by remember { mutableStateOf(false) }
+    LaunchedEffect(bridge) {
+        bridge.heardAt = SystemClock.elapsedRealtime()
+        while (true) {
+            delay(500)
+            silent = bridge.playing && bridge.tap != null && SystemClock.elapsedRealtime() - bridge.heardAt > SILENT_MS
+        }
+    }
+
     var web by remember { mutableStateOf<WebView?>(null) }
     fun js(code: String) = web?.evaluateJavascript(code, null)
     var controls by remember { mutableStateOf(true) }
@@ -149,6 +159,9 @@ private fun androidx.compose.foundation.layout.BoxScope.Content(onDismiss: () ->
             factory = { ctx ->
                 if (ctx.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) WebView.setWebContentsDebuggingEnabled(true)
                 WebView(ctx).apply {
+                    // AndroidView's default is WRAP_CONTENT: the WebView then lays the page out to its
+                    // content's height, `100%` is 0, and the canvas was never seen (any device).
+                    layoutParams = android.view.ViewGroup.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
                     setBackgroundColor(android.graphics.Color.BLACK)
                     keepScreenOn = true
                     settings.javaScriptEnabled = true
@@ -199,6 +212,7 @@ private fun androidx.compose.foundation.layout.BoxScope.Content(onDismiss: () ->
         player.remoteDevice != null -> "Playing on ${player.remoteDevice?.name}: the visualizer hears only this phone."
         session == 0 || player.mediaId == null -> "Play something: the picture follows the music."
         deaf -> "Android won't let the app listen to its player on this device."
+        silent -> "Can't hear the music: is the volume muted? The visualizer listens to what comes out."
         else -> null
     }
     if (problem != null) {
@@ -306,8 +320,17 @@ private class VizBridge(private val onPreset: (PresetInfo) -> Unit) {
 
     private val main = Handler(Looper.getMainLooper())
 
+    /** When the tap last heard more than silence (it listens after the volume: muted = nothing). */
+    @Volatile
+    var heardAt = 0L
+
     @JavascriptInterface
-    fun frame(): String = runCatching { tap?.frame() }.getOrNull().orEmpty()
+    fun frame(): String {
+        val f = runCatching { tap?.frame() }.getOrNull().orEmpty()
+        val rms = f.substringAfter(',', "").substringBefore(',').toDoubleOrNull() ?: 0.0
+        if (rms > SILENCE) heardAt = SystemClock.elapsedRealtime()
+        return f
+    }
 
     @JavascriptInterface
     fun playing(): Boolean = playing
@@ -324,3 +347,5 @@ private var cycleOn = true
 private var trackOn = true
 
 private const val CONTROLS_MS = 4000L
+private const val SILENCE = 0.002
+private const val SILENT_MS = 2500L

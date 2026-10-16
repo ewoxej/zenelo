@@ -36,6 +36,7 @@ import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.runtime.rememberUpdatedState
 import app.zenelo.data.settings.PullDownArea
 import app.zenelo.data.settings.PlayerButton
+import app.zenelo.data.settings.Section
 import app.zenelo.data.settings.SelectionMarkerSide
 import app.zenelo.ui.components.SelectionMark
 import app.zenelo.ui.components.SelectAllIcon
@@ -163,6 +164,7 @@ fun NowPlayingScreen(
     onOpenFolder: (File) -> Unit,
     onOpenAlbum: (String) -> Unit,
     onOpenArtist: (String) -> Unit,
+    onOpenDiscover: () -> Unit,
     /** Library artists (null until loaded): only those get a "Go to artist" item. */
     artists: StateFlow<List<ArtistRow>?>,
 ) {
@@ -251,6 +253,7 @@ fun NowPlayingScreen(
             onOpenFolder,
             onOpenAlbum = onOpenAlbum,
             onOpenArtist = onOpenArtist,
+            onOpenDiscover = onOpenDiscover,
             onEditTags = { tagEditor = true },
             onFindCover = { coverPicker = true },
             onMessage = { coverMessage = it },
@@ -307,6 +310,7 @@ private fun TopBar(
     onOpenFolder: (File) -> Unit,
     onOpenAlbum: (String) -> Unit,
     onOpenArtist: (String) -> Unit,
+    onOpenDiscover: () -> Unit,
     onEditTags: () -> Unit,
     onFindCover: () -> Unit,
     onMessage: (String) -> Unit,
@@ -379,6 +383,7 @@ private fun TopBar(
             PlayerButton.DEVICES -> b.takeIf { hasServer }
             PlayerButton.ADD_TO_PLAYLIST -> b.takeIf { canAddToPlaylist }
             PlayerButton.GO_TO_ALBUM -> b.takeIf { albumKey != null }
+            PlayerButton.DISCOVER -> b.takeIf { hasServer }
             PlayerButton.VISUALIZER -> b
             else -> null
         }
@@ -395,6 +400,7 @@ private fun TopBar(
                 Icon(SwipeAction.ADD_TO_PLAYLIST.icon, "Add to playlist")
             }
             PlayerButton.GO_TO_ALBUM -> IconButton(onClick = { albumKey?.let(onOpenAlbum) }) { Icon(Icons.Outlined.Album, "Go to album") }
+            PlayerButton.DISCOVER -> IconButton(onClick = onOpenDiscover) { Icon(Section.DISCOVER.icon, "Discover") }
             else -> {}
         }
         Box {
@@ -498,6 +504,17 @@ private fun TopBar(
                 if (settings?.mstream != null && online) {
                     // Auto DJ is the repeat button's ∞ state.
                     state.mediaId?.let { path -> SonicPathItems(path) { menu = false } }
+                }
+                // More like what plays: the server's Discover (its own page shows what it can't do).
+                if (hasServer && online && button != PlayerButton.DISCOVER) {
+                    DropdownMenuItem(
+                        text = { Text("Discover") },
+                        leadingIcon = { Icon(Section.DISCOVER.icon, null, tint = ZeneloColors.Celadon) },
+                        onClick = {
+                            menu = false
+                            onOpenDiscover()
+                        },
+                    )
                 }
                 // The server's files aren't ours to write: a server track only gets the cover search.
                 if (!peer) DropdownMenuItem(

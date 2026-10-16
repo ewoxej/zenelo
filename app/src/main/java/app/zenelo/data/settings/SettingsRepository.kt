@@ -83,6 +83,7 @@ enum class PlayerButton(val label: String) {
     VISUALIZER("Visualizer"),
     ADD_TO_PLAYLIST("Add to playlist"),
     GO_TO_ALBUM("Go to album"),
+    DISCOVER("Discover"),
     NONE("None"),
 }
 

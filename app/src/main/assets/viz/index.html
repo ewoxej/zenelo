@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
-  canvas { display: block; width: 100%; height: 100%; opacity: 0; }
+  /* Fixed to the viewport: no percentages, which a WebView sized to its content resolves to 0. */
+  canvas { position: fixed; inset: 0; display: block; width: 100vw; height: 100vh; opacity: 0; }
 </style>
 <script src="butterchurn.min.js"></script>
 <script src="butterchurn-presets-zenelo.js"></script>

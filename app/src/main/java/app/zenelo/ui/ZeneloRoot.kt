@@ -469,6 +469,10 @@ private fun MainContent(settings: ZeneloSettings) {
                                     sheet.close()
                                     libraryNav.onOpenArtist(key)
                                 },
+                                onOpenDiscover = {
+                                    sheet.close()
+                                    openSection(Section.DISCOVER)
+                                },
                                 artists = libraryViewModel.artists,
                             )
                         }
