@@ -77,6 +77,24 @@ enum class SelectionMarkerSide(val label: String) {
     RIGHT("Right"),
 }
 
+/** How tracks change when `crossfadeMs` > 0 (see `Crossfader`). */
+enum class FadeMode(val label: String) {
+    /** The ending track fades out over the next one fading in. */
+    CROSSFADE("Crossfade · overlap"),
+    /** The ending track fades out, then the next starts as usual: no overlap. */
+    FADE_OUT("Fade out, then next");
+
+    companion object {
+        /**
+         * Crossfade is off and hidden: on Bluetooth the two players couldn't be lined up reliably
+         * (see `Crossfader`), so it mostly didn't happen. Every stored mode plays as [FADE_OUT].
+         */
+        const val CROSSFADE_AVAILABLE = false
+
+        fun effective(mode: FadeMode) = if (CROSSFADE_AVAILABLE) mode else FADE_OUT
+    }
+}
+
 /** The one button in Now Playing's header beside ⋮ (the rest are in ⋮). */
 enum class PlayerButton(val label: String) {
     DEVICES("Play on device"),
@@ -122,6 +140,7 @@ data class ZeneloSettings(
     /** Added to the normalization gain (dB), −6…+6; still bounded by the peak. */
     val preampDb: Float = 0f,
     val crossfadeMs: Int = 0,
+    val fadeMode: FadeMode = FadeMode.CROSSFADE,
     /** Covers and lyrics from the internet; always Wi-Fi only. */
     val onlineFetch: Boolean = true,
     /** Write downloaded covers into files that have none (and on manual "Download cover"). */
@@ -338,6 +357,7 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
     suspend fun setShuffleMode(mode: ShuffleMode) = store.edit { it[SHUFFLE_MODE] = mode.name }
 
     suspend fun setCrossfadeMs(value: Int) = store.edit { it[CROSSFADE_MS] = value }
+    suspend fun setFadeMode(mode: FadeMode) = store.edit { it[FADE_MODE] = mode.name }
 
     suspend fun setOnlineFetch(value: Boolean) = store.edit { it[ONLINE_FETCH] = value }
 
@@ -405,6 +425,7 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
         confirmRemove = this[CONFIRM_REMOVE] ?: false,
         normalization = this[NORMALIZATION]?.let { enumOrNull<NormalizationMode>(it) } ?: NormalizationMode.TRACK,
         crossfadeMs = this[CROSSFADE_MS] ?: 0,
+        fadeMode = this[FADE_MODE]?.let { enumOrNull<FadeMode>(it) } ?: FadeMode.CROSSFADE,
         shuffleMode = this[SHUFFLE_MODE]?.let { enumOrNull<ShuffleMode>(it) } ?: ShuffleMode.TRACKS,
         preampDb = this[PREAMP_DB] ?: 0f,
         onlineFetch = this[ONLINE_FETCH] ?: true,
@@ -502,6 +523,7 @@ class SettingsRepository(context: Context, upgradedInstall: Boolean) {
         val CONFIRM_REMOVE = booleanPreferencesKey("confirm_remove")
         val NORMALIZATION = stringPreferencesKey("normalization")
         val CROSSFADE_MS = intPreferencesKey("crossfade_ms")
+        val FADE_MODE = stringPreferencesKey("fade_mode")
         val SHUFFLE_MODE = stringPreferencesKey("shuffle_mode")
         val PREAMP_DB = floatPreferencesKey("preamp_db")
         val ONLINE_FETCH = booleanPreferencesKey("online_fetch")

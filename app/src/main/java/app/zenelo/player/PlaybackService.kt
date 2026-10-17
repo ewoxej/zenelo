@@ -129,6 +129,7 @@ class PlaybackService : MediaSessionService() {
             },
             currentGainDb = { normalization.gainDb },
             setMainGainDb = { normalization.gainDb = it },
+            mainNormalization = normalization,
             gainOf = { id -> upcomingGain?.takeIf { it.first == id }?.second },
             onUpcoming = { id ->
                 scope.launch {
@@ -140,7 +141,10 @@ class PlaybackService : MediaSessionService() {
             onFadeEnd = { flushPendingWrites() },
         ).also { it.start() }
         scope.launch {
-            container.settings.settings.map { it.crossfadeMs }.distinctUntilChanged().collect { crossfader.fadeMs = it }
+            container.settings.settings.map { it.crossfadeMs to app.zenelo.data.settings.FadeMode.effective(it.fadeMode) }.distinctUntilChanged().collect { (ms, mode) ->
+                crossfader.fadeMs = ms
+                crossfader.mode = mode
+            }
         }
         // Mode / pre-amp changes apply to the playing track at once (its gain is otherwise set on track change).
         scope.launch {

@@ -91,6 +91,7 @@ import app.zenelo.data.settings.DEFAULT_FILENAME_PATTERNS
 import app.zenelo.data.settings.QueueSwipeAction
 import app.zenelo.data.settings.QueueSwipeSlot
 import app.zenelo.data.settings.PullDownArea
+import app.zenelo.data.settings.FadeMode
 import app.zenelo.data.settings.PlayerButton
 import app.zenelo.data.settings.SelectionMarkerSide
 import app.zenelo.data.settings.SwipeAction
@@ -247,7 +248,8 @@ private fun PlaybackSettings() {
 
     // Local value while dragging; persisted once on release.
     var crossfade by remember(settings.crossfadeMs) { mutableFloatStateOf(settings.crossfadeMs / 1000f) }
-    SectionHeader("Crossfade · ${if (crossfade.roundToInt() == 0) "off (gapless)" else "${crossfade.roundToInt()} s"}")
+    val fadeName = if (FadeMode.effective(settings.fadeMode) == FadeMode.FADE_OUT) "Fade out" else "Crossfade"
+    SectionHeader("$fadeName · ${if (crossfade.roundToInt() == 0) "off (gapless)" else "${crossfade.roundToInt()} s"}")
     ZeneloSlider(
         value = crossfade,
         onValueChange = { crossfade = it },
@@ -255,6 +257,14 @@ private fun PlaybackSettings() {
         valueRange = 0f..12f,
         modifier = Modifier.padding(horizontal = 20.dp),
     )
+    if (FadeMode.CROSSFADE_AVAILABLE && crossfade.roundToInt() > 0) {
+        ChoiceRow(
+            title = "Track change",
+            current = settings.fadeMode,
+            choices = FadeMode.entries,
+            label = { it.label },
+        ) { scope.launch { repo.setFadeMode(it) } }
+    }
 }
 
 @Composable

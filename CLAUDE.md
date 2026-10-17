@@ -125,10 +125,30 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   beside the rail shows the letter under the finger. No release-date sort: tags don't carry a year in the index.
 - "Recently played": `PlaybackService` counts a play after 30 s (half of tracks under a minute) into
   the `plays` table; the last 7 days are shown, one row per track.
-- Crossfade (`Crossfader`, setting `crossfadeMs`, 0 = gapless): not a forwarding Player. The main
+- Track change fades (`Crossfader`, setting `crossfadeMs`, 0 = gapless; `fadeMode`). Crossfade is switched off and
+  hidden (`FadeMode.CROSSFADE_AVAILABLE`; any stored mode plays as fade out, Settings shows "Fade out · N s" and no
+  mode row): on Bluetooth it mostly didn't happen (see the known limit below). The code stays. "Fade out, then next"
+  (`FadeMode.FADE_OUT`, no overlap — users found the old track over the new one's start confusing) turns main's own
+  volume down over the last seconds, set from its position each tick (a late tick can't hold it up), and back up at
+  the transition or a seek; only a track seen before its fade point fades. "Crossfade · overlap" (default): not a forwarding Player. The main
   ExoPlayer stays the only one the queue / session / notification see; a "tail" ExoPlayer (no audio
-  focus, own normalization processor) loads the current track at the fade point 4 s ahead, then
-  plays the old track's end fading out while main skips to the next track fading in. Only natural
+  focus, own normalization processor) loads the current track ~5 s before the fade point, plays it muted and is
+  lined up with main by position — a little faster / slower (Sonic, ±15 %), a seek only when far off — then at the
+  fade point the two swap volumes (main muted first) while main skips to the next track fading in. Not the
+  AudioTrack's own speed: another audio path, ~250 ms off what was heard on Bluetooth. The tail's fade-out ramp
+  doesn't restart at a flush (every speed change flushes the processors). Known limit: on Bluetooth ExoPlayer's
+  positions of the muted tail are off by 200–300 ms for a while after a seek or speed change, so the 60 ms guard
+  often skips the fade there (no repeat; "Fade out, then next" suits Bluetooth). A fix without sync would be
+  swapping the players (old track ends in main, the next one starts in the tail, which becomes main) — not done. Starting the tail at the fade
+  point instead repeated what main had already sent out (Bluetooth latency: "the last word twice"). Further apart than
+  60 ms at the fade point (the tail stuck loading after a move): no fade — the swap would repeat that much (0.9 s seen).
+  The swap is instant: a short ramp between the two, a few ms apart, cancelled frequencies (a dip, phasing).
+  Checking it: debug builds have `MixCapture` (`adb shell am broadcast -n app.zenelo/app.zenelo.debug.MixCapture --ei secs 30`,
+  then `run-as app.zenelo cat files/mix.bin`): a Visualizer on the output mix, polled. Play a frequency sweep into
+  noise: the sweep's frequency is its position, so a repeat or skip shows as a step (the swap was 880 ms back, now ~0). The fades are ramps in the
+  normalization processors, counted in their audio (`NormalizationAudioProcessor.fadeOut` / `fadeIn`, unit-tested;
+  out (1 − p)³, in its mirror — perceptual: cos² was −3 dB at mid-fade and didn't sound like a fade): the tail's from its start at the fade point, main's from its seek's flush — volume steps from the main
+  thread were held up by a busy UI, and the old track went on at full volume for seconds, then stopped. Only natural
   ends fade; pause / seek / skip cut the fade; a track that reaches the fade zone by a seek (tail
   not ready) plays to its end without fading. Pending writes wait for the fade's end (the tail
   still reads the old file). Gains are set before the audio is processed (processors apply the

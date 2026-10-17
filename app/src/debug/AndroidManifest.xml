@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: tools for checking playback by hand (see MixCapture). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name="app.zenelo.debug.MixCapture"
+            android:exported="true" />
+    </application>
+</manifest>
