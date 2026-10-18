@@ -452,7 +452,7 @@ class BrowserViewModel(private val container: AppContainer) : ViewModel() {
                 SwipeAction.DELETE_FILE -> _events.send(BrowserEvent.Confirm(file, deleteFile = true))
                 SwipeAction.DOWNLOAD -> container.mstreamDownloads.request(listOf(file.path))?.let { _events.send(BrowserEvent.Message(it, action = action)) }
                 SwipeAction.SONIC_PATH -> container.sonicPath.add(file.path)
-                SwipeAction.EDIT_TAGS -> if (!MStreamPaths.isRemote(file.path)) _events.send(BrowserEvent.EditTags(file.path))
+                SwipeAction.EDIT_TAGS -> if (!MStreamPaths.isPeer(file.path)) _events.send(BrowserEvent.EditTags(file.path))
             }
         }
     }

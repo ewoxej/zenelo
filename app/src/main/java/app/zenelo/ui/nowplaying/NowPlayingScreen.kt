@@ -80,6 +80,7 @@ import app.zenelo.ui.components.UNPLAYABLE_ALPHA
 import app.zenelo.ui.components.rememberDownloaded
 import app.zenelo.ui.components.rememberUnplayable
 import app.zenelo.ui.components.rememberOnline
+import app.zenelo.ui.components.rememberServerTagEdit
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -516,14 +517,16 @@ private fun TopBar(
                         },
                     )
                 }
-                // The server's files aren't ours to write: a server track only gets the cover search.
+                // A server track's tags go into the server's file when it allows that; else only the
+                // cover search.
+                val findCover = remote && !rememberServerTagEdit(state.mediaId)
                 if (!peer) DropdownMenuItem(
-                    text = { Text(if (remote) "Find cover…" else "Edit tags…") },
-                    leadingIcon = { Icon(if (remote) Icons.Outlined.Image else Icons.Outlined.Edit, null, tint = ZeneloColors.Celadon) },
+                    text = { Text(if (findCover) "Find cover…" else "Edit tags…") },
+                    leadingIcon = { Icon(if (findCover) Icons.Outlined.Image else Icons.Outlined.Edit, null, tint = ZeneloColors.Celadon) },
                     enabled = state.mediaId != null,
                     onClick = {
                         menu = false
-                        if (remote) onFindCover() else onEditTags()
+                        if (findCover) onFindCover() else onEditTags()
                     },
                 )
             }

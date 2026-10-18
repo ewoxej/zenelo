@@ -43,9 +43,9 @@ fun TrackMenu(
     onAction: (SwipeAction) -> Unit,
     /** The full-screen tag editor (tags, cover, fill from file name). */
     onEditTags: () -> Unit,
-    /** Server tracks (no tag editor): the cover search. */
+    /** Server tracks whose tags can't be edited: the cover search. */
     onFindCover: () -> Unit = {},
-    /** False for mStream tracks: the server's files aren't ours to rewrite or delete. */
+    /** False for mStream tracks: not deleted; their tags edited only when the server allows it. */
     local: Boolean = true,
     /** The track, for "Play similar" / "Sonic path" (while logged in to mStream). */
     path: String? = null,
@@ -69,7 +69,7 @@ fun TrackMenu(
             val favorite by (favoriteFlow ?: kotlinx.coroutines.flow.flowOf(false)).collectAsStateWithLifecycle(initialValue = false)
             SwipeAction.entries.filter {
                 // Sonic path comes with Play similar below (server tracks only).
-                // Edit tags has its own item below (local files only).
+                // Edit tags has its own item below.
                 it != SwipeAction.NONE && it != SwipeAction.SONIC_PATH && it != SwipeAction.EDIT_TAGS && it != (if (local) SwipeAction.DOWNLOAD else SwipeAction.DELETE_FILE) &&
                     !(it == SwipeAction.DOWNLOAD && downloaded)
             }.forEach { action ->
@@ -92,7 +92,8 @@ fun TrackMenu(
                     },
                 )
             }
-            if (local) {
+            // A server track's tags go into the server's file when it allows that (else its cover search).
+            if (local || rememberServerTagEdit(path)) {
                 DropdownMenuItem(
                     text = { Text("Edit tags…") },
                     leadingIcon = { Icon(Icons.Outlined.Edit, null, tint = ZeneloColors.Celadon) },

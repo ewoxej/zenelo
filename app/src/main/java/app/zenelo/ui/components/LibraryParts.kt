@@ -543,6 +543,17 @@ fun rememberOnServer(path: String?): Boolean {
     return rememberDownloaded(path)
 }
 
+/**
+ * A server track whose tags this account may write into the server's file (ping's `tagEdit`),
+ * with the server in reach. Not a peer's (another server's) nor a local file.
+ */
+@Composable
+fun rememberServerTagEdit(path: String?): Boolean {
+    val features by appContainer().peers.features.collectAsStateWithLifecycle()
+    val online = rememberOnline()
+    return path != null && app.zenelo.mstream.MStreamPaths.isServer(path) && features.tagEdit && online
+}
+
 /** The small cloud after a title: on the mStream server only (not on the device). */
 @Composable
 fun CloudMark(modifier: Modifier = Modifier) {

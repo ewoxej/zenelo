@@ -17,6 +17,17 @@ class SwipeRulesTest {
     }
 
     @Test
+    fun serverTagsWhenTheServerAllows() {
+        val track = Target(remote = true, onServer = true)
+        assert(SwipeAction.EDIT_TAGS !in allowed(track))
+        assert(SwipeAction.EDIT_TAGS in allowed(track.copy(serverTags = true)))
+        // Out of reach: not offered.
+        assert(SwipeAction.EDIT_TAGS !in allowed(track.copy(serverTags = true), server = false))
+        // A peer's track never (another server's file).
+        assert(SwipeAction.EDIT_TAGS !in allowed(track.copy(serverTags = true, peer = true)))
+    }
+
+    @Test
     fun serverTrack() {
         val cloud = Target(remote = true, onServer = true)
         assertEquals(always + SwipeAction.FAVORITE + SwipeAction.DOWNLOAD + SwipeAction.SONIC_PATH, allowed(cloud))

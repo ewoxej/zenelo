@@ -23,8 +23,8 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   A direction without options isn't captured (queue rows: left only, right goes to the pager).
   Per row, an action that doesn't apply counts as Nothing (`SwipeRules`, unit-tested;
   `applicableSwipes` / `applicableQueueSwipes`): no heart for a favorite (Favorites itself
-  included), no Download for a track on the device or offline, no Delete / Edit tags (`SwipeAction.EDIT_TAGS`,
-  opens the tag editor) for server tracks, no
+  included), no Download for a track on the device or offline, no Delete for server tracks, Edit tags
+  (`SwipeAction.EDIT_TAGS`, opens the tag editor) for server tracks only when the server allows it (`Target.serverTags`), no
   Sonic path off the server; folders take Download only with cloud tracks inside.
   In pointer code read `positionChange()` before `consume()` — a consumed change reports zero.
 - Queue UI edits entries by stable id (index into the queue's paths), not by position.
@@ -43,7 +43,11 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   (`track:<path>`) or the album `SOURCE_REMOVED` in `covers`: no folder image (the file stays),
   cached download or background search for it (`isCoverRemoved`, `localCovers`); a cover picked
   by hand clears the marks. Seen at once: `Thumbnails.forget`, and `coverOverride` = (path, "")
-  for the playing track. Server tracks (no editor) get ⋮ / Now Playing "Find cover…".
+  for the playing track. Server tracks: the same editor when the fork lets this account write tags (ping's `tagEdit`,
+  `ServerFeatures.tagEdit`, `rememberServerTagEdit`, online) — `TagWriter` sends them to `MStreamTags` (the fork's
+  `tags/read` / `tags/write`; a changed track number keeps the file's total, `MStreamTags.changes` unit-tested), and the
+  `tracks` row shows the edit at once (as `MStreamSync` fills it); no cover removal there. Otherwise ⋮ / Now Playing
+  "Find cover…".
 - File name patterns (`FilenamePattern`, unit-tested; `[...]` = optional part) are the fallback for cover / lyrics lookups
   when tags are missing or find nothing.
 - Tags: jaudiotagger in Android mode (`TagReader`). Its `setImageFromData` throws on Android, so FLAC
@@ -389,6 +393,13 @@ Visualizer (`webapp/app/viz.js`): 20 butterchurn presets (`butterchurn-presets-z
 to the beat) driven by the music (`viz-drive.js`, unit-tested): an envelope (a hit at once, silence / pause fades it
 out), a per-hit pulse and a tempo speed scale the presets' per-frame motion (appended to their equations), their
 clock and the brightness.
+Tag editing (`src/api/tags.js`, `test/integration/tag-edit.test.mjs`): `POST api/v1/tags/read` / `tags/write` (title,
+artist, album, album artist, track, disc, year, genre; a key left out stays, "" removes) — ffmpeg remuxes the file with
+every stream and tag copied (`-map 0 -c copy -map_metadata 0`, Ogg's comments on the stream: `-metadata:s:a:0`) into a
+temp file that replaces it, then the folder is rescanned (the scanner moves ratings / plays to the new hash: path is
+identity). mp3, flac, m4a/m4b, ogg, opus. Allowed as writing art into files is (`noFileModify` / `allow_file_modify`)
+with ffmpeg there: `tagEdit` in ping and `/api/`'s user part. The web player: a track's ⋮ "Edit tags…" →
+`webapp/app/tag-editor.js` (`app.tagEditor`).
 Single sign-on (`src/api/oidc.js`, admin page "Single sign-on", config `oidc`): the server is an OIDC client
 (Authelia…; code + PKCE + secret, profile / groups from userinfo). Existing users only (username claim), optional
 access / admin groups, mode off / optional / required (required: no password sign-in, password sessions refused;

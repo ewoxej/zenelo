@@ -224,7 +224,7 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
                 SwipeAction.DELETE_FILE -> _events.send(LibraryEvent.ConfirmDelete(listOf(file)))
                 SwipeAction.DOWNLOAD -> container.mstreamDownloads.request(listOf(file.path))?.let { _events.send(LibraryEvent.Message(it, action = action)) }
                 SwipeAction.SONIC_PATH -> container.sonicPath.add(file.path)
-                SwipeAction.EDIT_TAGS -> if (!MStreamPaths.isRemote(file.path)) openDialog(TrackDialog.EditTags(file.path))
+                SwipeAction.EDIT_TAGS -> if (!MStreamPaths.isPeer(file.path)) openDialog(TrackDialog.EditTags(file.path))
             }
         }
     }

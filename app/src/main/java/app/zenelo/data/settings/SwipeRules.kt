@@ -18,6 +18,8 @@ object SwipeRules {
         val cloudInside: Int = 0,
         /** A federated peer's track or folder: played through our server, nothing kept of it here. */
         val peer: Boolean = false,
+        /** The server lets this account write tags into its files (ping's `tagEdit`). */
+        val serverTags: Boolean = false,
     )
 
     fun applies(action: SwipeAction, t: Target, serverAvailable: Boolean): Boolean = when {
@@ -31,8 +33,8 @@ object SwipeRules {
         SwipeAction.DOWNLOAD -> serverAvailable && if (t.folder) t.cloudInside > 0 else t.remote && !t.hasLocalCopy
         SwipeAction.DELETE_FILE -> !t.folder && !t.remote
         SwipeAction.SONIC_PATH -> !t.folder && serverAvailable && t.onServer
-        // The server's files aren't ours to write.
-        SwipeAction.EDIT_TAGS -> !t.folder && !t.remote
+        // A server track's tags are written into the server's file, when it allows that.
+        SwipeAction.EDIT_TAGS -> !t.folder && (!t.remote || (t.serverTags && serverAvailable))
         SwipeAction.ADD_TO_QUEUE, SwipeAction.PLAY_NEXT, SwipeAction.ADD_TO_PLAYLIST, SwipeAction.HIDE -> true
     }
 

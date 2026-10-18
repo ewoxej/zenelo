@@ -212,7 +212,8 @@ private fun rememberSwipeTarget(path: String?, folder: Boolean, cloudInside: Int
     val container = appContainer()
     val favorites by container.favoritePaths.collectAsStateWithLifecycle()
     val links by container.serverLinks.links.collectAsStateWithLifecycle()
-    return remember(path, folder, cloudInside, favorites, links) {
+    val serverTags by container.peers.features.collectAsStateWithLifecycle()
+    return remember(path, folder, cloudInside, favorites, links, serverTags.tagEdit) {
         val remote = app.zenelo.mstream.MStreamPaths.isRemote(path)
         app.zenelo.data.settings.SwipeRules.Target(
             remote = remote,
@@ -223,6 +224,7 @@ private fun rememberSwipeTarget(path: String?, folder: Boolean, cloudInside: Int
             folder = folder,
             cloudInside = cloudInside,
             peer = path != null && (app.zenelo.mstream.MStreamPaths.isPeer(path) || app.zenelo.mstream.RemoteFolders.isPeer(java.io.File(path))),
+            serverTags = serverTags.tagEdit,
         )
     }
 }

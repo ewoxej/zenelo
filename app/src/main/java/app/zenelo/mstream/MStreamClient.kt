@@ -74,6 +74,31 @@ data class RandomSongs(val songs: List<ServerSong>, val ignoreList: List<Int>)
 data class SonicPath(val songs: List<ServerSong>, val startNotAnalyzed: Boolean, val endNotAnalyzed: Boolean)
 
 /** `api/v1/ping`'s flags this app reads. */
+/** A server file's tags (`tags/read` / `tags/write`). */
+data class ServerTags(
+    val title: String = "",
+    val artist: String = "",
+    val album: String = "",
+    val albumArtist: String = "",
+    val track: String = "",
+    val disc: String = "",
+    val year: String = "",
+    val genre: String = "",
+) {
+    /** The server's names for each field, as `tags/write` takes them. */
+    fun toMap(): Map<String, String> = mapOf(
+        "title" to title, "artist" to artist, "album" to album, "albumArtist" to albumArtist,
+        "track" to track, "disc" to disc, "year" to year, "genre" to genre,
+    )
+
+    companion object {
+        fun of(o: JSONObject) = ServerTags(
+            o.optString("title"), o.optString("artist"), o.optString("album"), o.optString("albumArtist"),
+            o.optString("track"), o.optString("disc"), o.optString("year"), o.optString("genre"),
+        )
+    }
+}
+
 data class ServerFeatures(
     /** Sound analysis (similar tracks, Discover's library tab). */
     val discovery: Boolean = false,
@@ -87,6 +112,8 @@ data class ServerFeatures(
     val peerDiscovery: Boolean = false,
     /** This account may put files into a library (copies land there). */
     val uploads: Boolean = false,
+    /** This account may write tags into the server's files (`tags/write`; the fork, with ffmpeg). */
+    val tagEdit: Boolean = false,
 )
 
 data class FederatedPeer(val id: Long, val name: String)
@@ -530,7 +557,27 @@ class MStreamClient(base: OkHttpClient) {
             browsePeers = o.optBoolean("federationBrowse"),
             peerDiscovery = o.optBoolean("federationDiscovery"),
             uploads = !o.optBoolean("noUpload"),
+            tagEdit = o.optBoolean("tagEdit"),
         )
+    }
+
+    /**
+     * A track's tags as its file has them (`tags/read`, the fork's tag editing): "" for none,
+     * track / disc as "3" or "3/12". Null when the server can't edit this file type.
+     */
+    suspend fun tags(account: MStreamAccount, serverPath: String): ServerTags? = withContext(Dispatchers.IO) {
+        try {
+            ServerTags.of((postAny(account, "api/v1/tags/read", JSONObject().put("filepath", serverPath)) as JSONObject).getJSONObject("tags"))
+        } catch (e: MStreamException) {
+            if (e.code == 415) null else throw e
+        }
+    }
+
+    /** Writes [changed] (our names → value, "" removes) into the file; the tags it has now. */
+    suspend fun writeTags(account: MStreamAccount, serverPath: String, changed: Map<String, String>): ServerTags = withContext(Dispatchers.IO) {
+        val tags = JSONObject().apply { changed.forEach { (k, v) -> put(k, v) } }
+        val o = postAny(account, "api/v1/tags/write", JSONObject().put("filepath", serverPath).put("tags", tags)) as JSONObject
+        ServerTags.of(o.getJSONObject("tags"))
     }
 
     /** The federated servers this one is paired with (`federation/peers`). */

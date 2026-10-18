@@ -55,7 +55,6 @@ import androidx.compose.ui.window.Dialog
 import app.zenelo.library.FilenamePattern
 import app.zenelo.library.PathGuess
 import app.zenelo.library.TagReader.EditableTags
-import app.zenelo.library.TagWriter
 import app.zenelo.ui.theme.ZeneloColors
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -134,7 +133,13 @@ fun TagEditorDialog(path: String, onDismiss: () -> Unit, onDone: (String) -> Uni
     }
 
     LaunchedEffect(path) {
-        val current = container.tagWriter.read(path)
+        val current = try {
+            container.tagWriter.read(path)
+        } catch (e: java.io.IOException) {
+            onDone("Can't read the tags: ${e.message ?: "the server can't be reached"}")
+            onDismiss()
+            return@LaunchedEffect
+        }
         if (current == null) {
             onDone("This file's tags can't be edited")
             onDismiss()
@@ -146,6 +151,8 @@ fun TagEditorDialog(path: String, onDismiss: () -> Unit, onDone: (String) -> Uni
     }
 
     val before = original ?: EditableTags()
+    // A server track: its tags are written into the server's file (the cover only found online).
+    val remote = MStreamPaths.isRemote(path)
     Dialog(onDismissRequest = { close() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(Modifier.fillMaxSize().background(ZeneloColors.Background)) {
             Row(Modifier.fillMaxWidth().height(56.dp).padding(start = 4.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -159,11 +166,7 @@ fun TagEditorDialog(path: String, onDismiss: () -> Unit, onDone: (String) -> Uni
                         saving = true
                         scope.launch {
                             close(
-                                when {
-                                    tags == before -> null
-                                    container.tagWriter.write(path, tags) == TagWriter.Result.SAVED -> "Tags saved"
-                                    else -> "Couldn't write tags to this file"
-                                },
+                                if (tags == before) null else container.tagWriter.write(path, tags) ?: "Tags saved",
                             )
                         }
                     },
@@ -201,11 +204,11 @@ fun TagEditorDialog(path: String, onDismiss: () -> Unit, onDone: (String) -> Uni
                         )
                         EditorAction("Find online", Icons.Rounded.Search, ZeneloColors.Celadon) { status = null; picking = true }
                         if (removal == null) {
-                            // Nothing to remove without a cover.
-                            if (hasCover == true) {
+                            // Nothing to remove without a cover; a server track's cover is the server's.
+                            if (hasCover == true && !remote) {
                                 EditorAction("Remove cover", Icons.Outlined.HideImage, ZeneloColors.Danger) { status = null; removal = CoverRemoval.TRACK }
                             }
-                            if (hasCover == true && albumTracks.size > 1) {
+                            if (hasCover == true && !remote && albumTracks.size > 1) {
                                 EditorAction("Remove from all ${albumTracks.size} album tracks", Icons.Outlined.HideImage, ZeneloColors.Danger) { status = null; removal = CoverRemoval.ALBUM }
                             }
                         } else {

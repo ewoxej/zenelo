@@ -117,7 +117,10 @@ class AppContainer(context: Context, upgradedInstall: Boolean) {
         hidden = hidden.current,
     )
     val queue = PlayQueue(db.tracks(), db.plays(), settings.settings, metadata, File(context.filesDir, "queue.txt"))
-    val tagWriter = TagWriter(pendingWrites)
+    val tagWriter = TagWriter(
+        pendingWrites,
+        app.zenelo.mstream.MStreamTags(mstream, { settings.settings.first().mstream }, db.tracks()) { showChange(it, null) },
+    )
     val playlistPicker = PlaylistPicker()
     val playlistFiles = PlaylistFiles(context, db)
     val backup = Backup(context, db, settings)
