@@ -379,9 +379,11 @@ private fun TopBar(
         // doesn't apply here (no server, no album tag, a peer's track) shows no button.
         val c = appContainer()
         val hasServer = settings?.mstream != null
+        // Upstream mStream has no devices (the fork's): none offered there.
+        val hasDevices = hasServer && c.devices.supported.collectAsStateWithLifecycle().value
         val canAddToPlaylist = !peer && state.mediaId != null
         val button = when (val b = settings?.playerButton) {
-            PlayerButton.DEVICES -> b.takeIf { hasServer }
+            PlayerButton.DEVICES -> b.takeIf { hasDevices }
             PlayerButton.ADD_TO_PLAYLIST -> b.takeIf { canAddToPlaylist }
             PlayerButton.GO_TO_ALBUM -> b.takeIf { albumKey != null }
             PlayerButton.DISCOVER -> b.takeIf { hasServer }
@@ -407,7 +409,7 @@ private fun TopBar(
         Box {
             IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "More") }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                if (hasServer && button != PlayerButton.DEVICES) {
+                if (hasDevices && button != PlayerButton.DEVICES) {
                     DropdownMenuItem(
                         text = { Text("Play on device…") },
                         leadingIcon = { Icon(Icons.Outlined.Devices, null, tint = ZeneloColors.Celadon) },

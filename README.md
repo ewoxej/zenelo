@@ -64,6 +64,10 @@ Sign in (a password, or single sign-on) and the server's library joins yours:
 - **Federated peers**: browse the servers yours is paired with, play their music, and add it to your library.
 - **Tags** of the server's files edited from the phone, when the server allows it.
 
+Upstream [mStream](https://github.com/IrosTheBeggar/mStream) works too (a recent 6.x, with the library sync
+manifest): everything above except devices and guests, editing the server's tags and single sign-on, which are the
+fork's.
+
 <p>
   <img src="docs/screenshots/discover.png" width="240" alt="Discover" />
   <img src="docs/screenshots/sonic-path.png" width="240" alt="Sonic Path" />

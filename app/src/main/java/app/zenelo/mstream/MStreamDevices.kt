@@ -121,6 +121,14 @@ class MStreamDevices(
     private val _connected = MutableStateFlow(false)
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
 
+    /**
+     * False once the server answered `devices/poll` with 404 / 403: upstream mStream (not the fork)
+     * has no devices, so the UI hides them. True again for another account.
+     */
+    private val _supported = MutableStateFlow(true)
+    val supported: StateFlow<Boolean> = _supported.asStateFlow()
+    private var streamedAccount: Pair<String, String>? = null
+
     /** Whether this phone plays (as last reported). */
     private val localPlaying = MutableStateFlow(false)
     /** The device the playback was just moved to, until it reports playing ([playOn]). */
@@ -166,6 +174,13 @@ class MStreamDevices(
                     .distinctUntilChanged()
                     .collectLatest { (account, on, isAttached) ->
                         _connected.value = false
+                        // Another server or user: the last one's devices aren't this one's.
+                        val key = account?.let { it.url to it.username }
+                        if (key != streamedAccount) {
+                            streamedAccount = key
+                            _devices.value = emptyList()
+                            _supported.value = true
+                        }
                         if (account != null && account.token.isNotEmpty() && on && isAttached) stream(account)
                     }
             }
@@ -212,6 +227,8 @@ class MStreamDevices(
                     call.execute().use { response ->
                         if (response.code == 404 || response.code == 403) {
                             Log.i(TAG, "devices: not on this server (${response.code})")
+                            _devices.value = emptyList()
+                            _supported.value = false
                             null
                         } else {
                             if (!response.isSuccessful) throw MStreamException("devices ${response.code}", response.code)

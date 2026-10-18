@@ -229,7 +229,8 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   pending change keep ours), server playlists → read-only `playlists.remote` copies (not in backups,
   not in the picker), server recent plays → `plays`. The other way: a favorites watcher in
   `AppContainer` → `onFavoritesChanged` (like = 10, unlike clears), counted plays → `onPlayed`;
-  both sent at once, else on the next sync. Favorites ↔ ratings run under one mutex.
+  both sent at once, else on the next sync. A rating the server answers 404 (the track is gone there, or
+  another server) is dropped — it used to stop the outbox, so no later rating or play was sent. Favorites ↔ ratings run under one mutex.
   Sync rounds run on app start / login / "Sync now", every 3 h in the background (periodic
   `ServerSyncWorker`, any network), and when the app comes to the front after 15 min
   (`LibraryWork.syncServerIfStale` from `MainActivity.onStart`).
@@ -324,6 +325,9 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   (`setShuffle`, `setRepeat`; Auto DJ through `MStreamDevices.setAutoDj`); while another device is
   followed, the volume keys set its volume (`MainActivity.onKeyDown` → `adjustFollowedVolume`,
   `RemoteVolumeHud` shows it) — only while the app is in front.
+  Upstream mStream has none of this: `devices/poll` answers 404 / 403, `MStreamDevices.supported` goes false and
+  Now Playing offers no devices (button, ⋮); another server or user clears the list (it used to keep the last
+  server's devices).
 - Federated peers (the servers ours is paired with; `MStreamPeers`): roots in the folder browser after
   "mStream" (`/mstream/@peer/<id>/…`, `RemoteFolders.peerRoot`; `rootOf` picks the deepest root), listed live
   through our server's `federation/peers/:id/api/…` proxy — never indexed, nothing prefetched. Their tracks are
@@ -355,6 +359,10 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   nothing recorded). `VizMath` (unit-tested) gives the drive its RMS and spectral flux on the web analyser's scale;
   the page pulls `Zenelo.frame()` each frame and renders with `render({audioLevels})`. Rendered at CSS pixels
   (`pixelRatio: 1`).
+
+Upstream mStream (not the fork) works when it has `sync/manifest` (6.x since 2026-09; checked against 6.31.1:
+sync, streaming, transcoding, ratings ↔ favorites, plays, server playlists, Auto DJ, Play similar, Sonic Path,
+Discover); the fork's devices / guests, server tag editing and SSO are simply not offered there.
 
 ## mStream server fork
 `mStream/` is a git submodule: github.com/ewoxej/mStream, the user's fork of mStream (Node.js) — its

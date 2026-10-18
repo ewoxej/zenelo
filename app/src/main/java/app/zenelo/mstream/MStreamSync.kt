@@ -224,7 +224,14 @@ class MStreamSync(
 
     private suspend fun pushOutbox(account: MStreamAccount) = pushing.withLock {
         for (r in db.mstreamOutbox().ratings()) {
-            client.rate(account, MStreamPaths.serverPath(r.path), r.rating)
+            try {
+                client.rate(account, MStreamPaths.serverPath(r.path), r.rating)
+            } catch (e: MStreamException) {
+                // A track the server no longer has (moved, deleted, another server): dropped,
+                // else it held up every rating and play after it for good.
+                if (e.code != 404) throw e
+                android.util.Log.i("Zenelo", "mStream: rating of ${r.path} dropped, not on the server")
+            }
             db.mstreamOutbox().dropRating(r.path)
         }
         while (true) {
