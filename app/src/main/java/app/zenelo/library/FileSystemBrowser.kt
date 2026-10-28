@@ -21,6 +21,13 @@ object AudioFormats {
     )
 
     fun isAudio(file: File) = file.extension.lowercase() in extensions
+
+    /**
+     * What the player decodes now (Android + ExoPlayer, no FFmpeg decoder yet): APE, WavPack, DSD,
+     * WMA and AIFF (no extractor in media3 1.5) are listed but skipped when played. Folder counts
+     * take only these (`TrackDao.observeDirStats`, its `PLAYABLE_SQL` mirrors this list).
+     */
+    val playable = setOf("flac", "mp3", "m4a", "mp4", "aac", "wav", "ogg", "oga", "opus")
 }
 
 data class StorageRoot(val name: String, val dir: File, val removable: Boolean, val remote: Boolean = false, val peer: Boolean = false) {

@@ -7,6 +7,11 @@ import androidx.room.Query
 import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 
+
+/** Local files the player decodes, by extension (`AudioFormats.playable`; LIKE ignores ASCII case). */
+internal const val PLAYABLE_SQL = "(t.path LIKE '%.flac' OR t.path LIKE '%.mp3' OR t.path LIKE '%.m4a' OR t.path LIKE '%.mp4'" +
+    " OR t.path LIKE '%.aac' OR t.path LIKE '%.wav' OR t.path LIKE '%.ogg' OR t.path LIKE '%.oga' OR t.path LIKE '%.opus')"
+
 @Dao
 abstract class FavoriteDao {
     @Query("SELECT * FROM favorites ORDER BY addedAt DESC")
@@ -322,14 +327,22 @@ interface TrackDao {
     )
     suspend fun needingLoudness(): List<TrackEntity>
 
-    /** Track count, duration and cloud / downloaded counts per folder, for every folder under a path range (see [DirStats]). */
+    /**
+     * Track count, duration and cloud / downloaded counts per folder, for every folder under a path range (see [DirStats]).
+     * Only what can play and is shown: local files of a format the player decodes ([PLAYABLE_SQL], as
+     * `AudioFormats.playable`; the server's tracks can be transcoded), not hidden, not in a hidden folder.
+     */
     @Query(
         """
         SELECT t.dir AS dir, COUNT(*) AS tracks, COALESCE(SUM(t.durationMs), 0) AS durationMs,
             SUM(CASE WHEN t.path LIKE 'mstream://%' AND NOT EXISTS (SELECT 1 FROM server_links s WHERE s.serverPath = t.path) THEN 1 ELSE 0 END) AS cloud,
             SUM(CASE WHEN EXISTS (SELECT 1 FROM server_links s WHERE s.serverPath = t.path) OR EXISTS (SELECT 1 FROM server_links s WHERE s.localPath = t.path) THEN 1 ELSE 0 END) AS downloaded
         FROM tracks t
-        WHERE t.path >= :from AND t.path < :to GROUP BY t.dir
+        WHERE t.path >= :from AND t.path < :to
+            AND (t.path LIKE 'mstream://%' OR """ + PLAYABLE_SQL + """)
+            AND NOT EXISTS (SELECT 1 FROM hidden h WHERE h.path = t.path
+                OR (h.folder AND substr(t.path, 1, length(h.path) + 1) = h.path || '/'))
+        GROUP BY t.dir
         """,
     )
     fun observeDirStats(from: String, to: String): Flow<List<DirStats>>

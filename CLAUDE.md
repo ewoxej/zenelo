@@ -66,6 +66,11 @@ Swipe settings (sub-screen of Settings), Favorites, Notification player. Home + 
   `.nomedia` up the tree). Changed files are found by mtime in whole seconds + size:
   the walk's NIO times are seconds on Android, `File.lastModified` milliseconds — compared exactly,
   every scan re-read the whole library.
+  Dot files are skipped as the browser skips them: macOS leaves `._01 Song.mp3` (AppleDouble) beside every
+  file it copies to a card, and they were indexed as tracks (folders counted twice what they showed). Folder
+  counts (`TrackDao.observeDirStats`) take only what plays and shows: `AudioFormats.playable` (`PLAYABLE_SQL`,
+  unit-tested to match; APE / WavPack / DSD / WMA / AIFF are listed but can't play yet), not hidden tracks or
+  tracks in hidden folders; the server's tracks all count (transcoding plays them).
 - Covers & lyrics (`MetadataFetcher`): online only on Wi-Fi. Covers: embedded → folder image →
   cached → Deezer/iTunes/MusicBrainz (+ Last.fm if the user set an API key). Downloaded covers are
   embedded into files without art. Online search is by tags (album artist + album, else the song);
@@ -401,6 +406,13 @@ Visualizer (`webapp/app/viz.js`): 20 butterchurn presets (`butterchurn-presets-z
 to the beat) driven by the music (`viz-drive.js`, unit-tested): an envelope (a hit at once, silence / pause fades it
 out), a per-hit pulse and a tempo speed scale the presets' per-frame motion (appended to their equations), their
 clock and the brightness.
+Artists in the web player are counted as the app counts them (`webapp/app/artist-split.js`, unit-tested — a port of
+`ArtistSplitter` / `Library.artistsOf`): by album artist tag (the song's `album-artist`, the fork's addition to the
+metadata from `tracks.tag_album_artist`), else the artist tag as written, cut on the separators with the names never
+cut (web settings → Library → Artists, kept in the browser like the app's; defaults the same). Built from the All
+tracks list (its IndexedDB key is `songs|v2|…`, so lists kept without the album artist are fetched again), not the
+server's artist list (it splits on " / ", feat., "; " only). An artist's page: its albums, then all its tracks
+(`TrackTable`'s `top` scrolls the albums with the table).
 Tag editing (`src/api/tags.js`, `test/integration/tag-edit.test.mjs`): `POST api/v1/tags/read` / `tags/write` (title,
 artist, album, album artist, track, disc, year, genre; a key left out stays, "" removes) — ffmpeg remuxes the file with
 every stream and tag copied (`-map 0 -c copy -map_metadata 0`, Ogg's comments on the stream: `-metadata:s:a:0`) into a

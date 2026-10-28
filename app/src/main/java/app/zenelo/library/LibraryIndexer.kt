@@ -107,7 +107,9 @@ class LibraryIndexer(db: ZeneloDatabase) {
 
                     override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
                         val name = file.fileName.toString()
-                        if (attrs.isRegularFile && name.substringAfterLast('.', "").lowercase() in AudioFormats.extensions) {
+                        // Dot files as the browser skips them: macOS leaves "._01 Song.mp3" (AppleDouble,
+                        // not audio) beside each file it copies to a card, and folders counted them twice.
+                        if (attrs.isRegularFile && !name.startsWith('.') && name.substringAfterLast('.', "").lowercase() in AudioFormats.extensions) {
                             out[file.toString()] = attrs.lastModifiedTime().toMillis() to attrs.size()
                         }
                         return FileVisitResult.CONTINUE
