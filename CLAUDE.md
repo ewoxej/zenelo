@@ -413,6 +413,13 @@ cut (web settings → Library → Artists, kept in the browser like the app's; d
 tracks list (its IndexedDB key is `songs|v2|…`, so lists kept without the album artist are fetched again), not the
 server's artist list (it splits on " / ", feat., "; " only). An artist's page: its albums, then all its tracks
 (`TrackTable`'s `top` scrolls the albums with the table).
+Peers in the web player (`webapp/app/screens/peers.js`, sidebar "Peers" when ping's `federationBrowse`): the paired
+servers' libraries through upstream's browse proxy (`api/federation-browse.js`, `MSTREAMAPI.peer.*`) — albums,
+artists, folders (with tags: `pullMetadata`; a folder played whole gets its tags from the peer's `db/metadata/batch`),
+search; `#/peer/<id>/…`. Their tracks carry `federation` like their queued songs (`library.asPeerTracks`), so
+`player.asSongs` streams them through the stream proxy, the track menu is the peer's (queue, "Add to my library…" =
+Discover's `GetSheet` via `app.peerGet`, go to folder / album / artist on the peer) and there's no heart. Peer covers
+are `@peer:<id>/<file>` (`util.peerCover`), which `coverUrl` sends to the art proxy.
 Tag editing (`src/api/tags.js`, `test/integration/tag-edit.test.mjs`): `POST api/v1/tags/read` / `tags/write` (title,
 artist, album, album artist, track, disc, year, genre; a key left out stays, "" removes) — ffmpeg remuxes the file with
 every stream and tag copied (`-map 0 -c copy -map_metadata 0`, Ogg's comments on the stream: `-metadata:s:a:0`) into a
